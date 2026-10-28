@@ -104,7 +104,7 @@ describe('the guided tour', () => {
       expect(now.modal).toBe(true)
       expect(now.heading).toBe('See what this platform does')
       expect(now.focusedHeading).toBe(true)
-      expect(now.status).toBe('Step 1 of 7: See what this platform does')
+      expect(now.status).toBe('See what this platform does')
       expect(now.stageHidden).toBe(true)
 
       // Tab stays inside the dialog, whichever way it goes.
@@ -129,11 +129,11 @@ describe('the guided tour', () => {
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Ask across every collection',
+            'Ask a question',
         'the first scene',
       )
       now = await state()
-      expect(now.status).toBe('Step 2 of 7: Ask across every collection')
+      expect(now.status).toBe('Step 1 of 5: Ask a question')
       expect(now.focusedHeading).toBe(true)
       expect(now.tryIt?.startsWith('/t/grains/ask?ask=')).toBe(true)
       await page.keyboard.press('ArrowRight')
@@ -143,7 +143,7 @@ describe('the guided tour', () => {
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Connect an external research tool over MCP',
+            'Connect your research tools',
         'the MCP scene',
       )
       expect((await state()).tryIt).toBe('/t/grains/tools')
@@ -152,7 +152,7 @@ describe('the guided tour', () => {
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Open the PDF at the cited page',
+            'Go straight to the cited page',
         'the cited-page scene',
       )
 

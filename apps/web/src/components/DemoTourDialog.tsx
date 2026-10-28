@@ -31,14 +31,12 @@ type Step = { kind: 'welcome' } | { kind: 'scene'; scene: ResolvedScene; index: 
 export function DemoTourDialog({
   onClose,
   slug,
-  productName,
   heading,
   intro,
   scenes,
 }: {
   onClose: () => void
   slug: string
-  productName: string
   heading: string
   intro: string
   scenes: ResolvedScene[]
@@ -115,10 +113,12 @@ export function DemoTourDialog({
   const title = step.kind === 'welcome'
     ? heading
     : step.kind === 'finish'
-    ? ui('Start exploring')
+    ? ui('That is the tour')
     : step.scene.title
-  const total = steps.length
-  const position = ui('Step {n} of {total}', { n: at + 1, total })
+  // Only the scenes are counted, so the count agrees with the welcome's own words.
+  const position = step.kind === 'scene'
+    ? ui('Step {n} of {total}', { n: step.index + 1, total: scenes.length })
+    : null
 
   return createPortal(
     <dialog
@@ -137,11 +137,13 @@ export function DemoTourDialog({
       }}
       onKeyDown={onKeyDown}
     >
-      <p role='status' className='sr-only'>{position}: {title}</p>
+      <p role='status' className='sr-only'>{position ? `${position}: ${title}` : title}</p>
       <div className='rp-tour-body'>
         <div className='flex min-w-0 flex-col'>
           <div className='flex items-start justify-between gap-3'>
-            <p className='rp-eyebrow text-[var(--rp-brand-fg)]' aria-hidden='true'>{position}</p>
+            <p className='rp-eyebrow min-h-[1em] text-[var(--rp-brand-fg)]' aria-hidden='true'>
+              {position}
+            </p>
             <IconButton icon={X} label={ui('Close the tour')} onClick={() => close.current()} />
           </div>
           <h2
@@ -154,19 +156,9 @@ export function DemoTourDialog({
           </h2>
           <div id={`${id}-body`} className='mt-3 space-y-3 text-base leading-relaxed text-ink-2'>
             {step.kind === 'welcome'
-              ? (
-                <>
-                  <p>{intro}</p>
-                  <p>
-                    {ui('{count} short scenes, each with one click into {product}.', {
-                      count: scenes.length,
-                      product: productName,
-                    })}
-                  </p>
-                </>
-              )
+              ? <p>{intro}</p>
               : step.kind === 'finish'
-              ? <p>{ui('Those were the scenes. Pick a place to begin, or close the tour.')}</p>
+              ? <p>{ui('Pick a place to start, or close this to stay on the home page.')}</p>
               : <p>{step.scene.body}</p>}
           </div>
           {step.kind === 'scene'
@@ -177,7 +169,7 @@ export function DemoTourDialog({
               <div className='mt-5 flex flex-wrap gap-2'>
                 {[
                   { href: '/ask', label: ui('Ask a question') },
-                  { href: '/library', label: ui('Browse the library') },
+                  { href: '/library', label: ui('Browse the Library') },
                   { href: '/graph', label: ui('Explore the graph') },
                 ].map((link) => (
                   <Link
@@ -210,7 +202,7 @@ export function DemoTourDialog({
                       {ui('Explore on my own')}
                     </Button>
                     <Button trailingIcon={ArrowRight} onClick={next}>
-                      {ui('Show me around')}
+                      {ui('Start')}
                     </Button>
                   </>
                 )
@@ -236,6 +228,9 @@ export function DemoTourDialog({
           aria-hidden='true'
           ref={(element) => element?.setAttribute('inert', '')}
         >
+          {step.kind === 'scene'
+            ? <span className='rp-tour-example rp-badge rp-badge-quiet'>{ui('Example')}</span>
+            : null}
           <div key={`${at}-${step.kind}`} className='rp-tour-reveal'>
             {step.kind === 'scene'
               ? <SceneIllustration id={step.scene.id} slug={slug} />

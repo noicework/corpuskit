@@ -1239,15 +1239,15 @@ hero's suggestions take.
 
 | Scene | What it shows | Built-in "Try it" |
 | --- | --- | --- |
-| `federated` | A question answered across every collection, every sentence cited | Ask, with the portal's first suggested question (the agent page, once it exists) |
-| `provenance` | The stages an answer passes through, then Sources and evidence and Journey through the context | Ask, with the portal's second suggested question |
-| `cited-page` | A citation opening its PDF at the page, with the matched passage marked | The collection's first PDF in the library; `/library` until there is one |
+| `federated` | A cited answer, with its confidence label (the agent page's composed answer, once it exists) | Ask, with the portal's first suggested question; Ask itself when the portal has none |
+| `provenance` | The stages an answer passes through, then Show retrieved sources and Journey through the context | Ask, with the portal's second suggested question |
+| `cited-page` | A citation opening its PDF at the page, with the matched passage highlighted | The collection's first PDF in the Library; the Library itself until there is one |
 | `mcp` | The MCP connector an external research tool uses | `/tools` |
-| `participation` | Which collections took part in a federated answer | `/agent` |
-| `gaps` | A question the collection cannot answer, declined honestly with the closest matches | Ask, with a question about last week's publications |
+| `participation` | Which collections an answer used | `/agent` |
+| `gaps` | A question the collection cannot answer, declined with the closest matches | Ask itself, unless the portal sets a question it knows the collection cannot answer |
 
 Without further configuration the tour shows every scene but `participation`, in that order,
-in the portal's language. `copy.demoTour`, set through the configuration import, replaces the
+in the portal's language, and every illustration is labelled as an example. `copy.demoTour`, set through the configuration import, replaces the
 heading and intro and says which scenes show, in what order and in what words:
 
 ```json

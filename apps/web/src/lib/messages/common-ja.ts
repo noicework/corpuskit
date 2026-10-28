@@ -2,76 +2,74 @@
 export const COMMON_JA: Readonly<Record<string, string>> = {
   // The guided tour on the home page.
   'See what this platform does': 'このプラットフォームでできること',
-  'A short guided tour: cited answers, how they are made, the page a citation came from, external research tools connected over MCP, and what happens when the collection cannot answer.':
-    '短いガイドツアーです。出典付きの回答、その作られ方、引用元のページ、MCPで接続した外部の研究ツール、そしてコレクションが答えられないときの動きを紹介します。',
+  'Short steps on asking questions here and checking where each answer came from. Each step has a button to try it.':
+    'ここで質問する方法と、各回答の出典を確かめる方法を短いステップで案内します。各ステップには試すためのボタンがあります。',
   'Take the tour': 'ツアーを見る',
-  '{count} short scenes, each with one click into {product}.':
-    '{count}つの短いシーンがあり、それぞれワンクリックで{product}の機能に進めます。',
-  'Show me around': '案内を見る',
+  'Start': '開始',
   'Explore on my own': '自分で見て回る',
-  'Start exploring': '探索を始める',
-  'Those were the scenes. Pick a place to begin, or close the tour.':
-    'シーンは以上です。始める場所を選ぶか、ツアーを閉じてください。',
+  'That is the tour': 'ツアーは以上です',
+  'Pick a place to start, or close this to stay on the home page.':
+    '始める場所を選ぶか、閉じてホームページに留まってください。',
   'Step {n} of {total}': 'ステップ {n} / {total}',
   'Close the tour': 'ツアーを閉じる',
   'Next': '次へ',
+  'Example': '例',
   'Ask this question': 'この質問をする',
   'Open Tools': 'ツールを開く',
   'Open the Library': 'ライブラリを開く',
+  'Browse the Library': 'ライブラリを見る',
   'Open the document': '資料を開く',
+  'Open a PDF': 'PDFを開く',
   'Open the answer': '回答を開く',
   'Open Ask': '質問ページを開く',
   'Open Manage': '管理を開く',
   'Open the page': 'ページを開く',
   'Open the link': 'リンクを開く',
-  'What are the main findings in this collection?': 'このコレクションの主な知見は何ですか？',
-  'Ask across every collection': 'すべてのコレクションに横断して質問する',
-  'One question, answered across several research collections at once. Each claim carries a numbered citation, and the answer names the collections it drew on.':
-    '一つの質問に複数の研究コレクションから同時に回答します。各主張に番号付きの出典が付き、参照したコレクションも示されます。',
-  'See how an answer was made': '回答がどのように作られたかを見る',
-  'The portal shows each stage of an answer as it works, then keeps the sources under it. Open the retrieved sources, then Journey through the context, to read the passages the answer was built from.':
-    'ポータルは回答の各段階を表示しながら作成し、出典を回答の下に残します。取得した出典を開き、「根拠資料をたどる」で回答の元になった箇所を読めます。',
-  'Open the PDF at the cited page': '引用されたページでPDFを開く',
-  'A citation takes you to the page it came from, with the matched passage marked, not to the top of a file.':
-    '引用をクリックすると、ファイルの先頭ではなく、該当箇所が示された元のページに移動します。',
-  'Connect an external research tool over MCP': 'MCPで外部の研究ツールを接続する',
-  'The MCP connector gives approved external research tools read-only access to this portal: they can search the collection, request a cited answer, retrieve a document and browse the catalogue. The connection details are on Tools.':
-    'MCPコネクタは、承認された外部の研究ツールにこのポータルへの読み取り専用アクセスを提供します。コレクションの検索、出典付き回答の取得、資料の取得、カタログの閲覧ができます。接続情報は「ツール」にあります。',
-  'See who took part': '参加したコレクションを見る',
-  'Each organisation decides whether its collection takes part in a federated answer. The answer shows which collections did.':
-    '横断回答に自分のコレクションを参加させるかどうかは各組織が決めます。回答には参加したコレクションが示されます。',
-  'Find the gaps': '知識の空白を見つける',
-  'Ask something the collection does not cover and the portal says so, with the closest matches, instead of guessing. Administrators see every gap in Manage, under Insights.':
-    'コレクションが扱っていないことを質問すると、ポータルは推測せずにその旨を答え、最も近い資料を示します。管理者は「管理」の「利用状況」で空白を確認できます。',
-  'What was published on this topic in the last week?':
-    'このテーマについて先週発表されたものは何ですか？',
+  'Ask in your own words. The numbers in the answer link to the source behind each point, and the confidence label says how well those sources support it.':
+    '自分の言葉で質問してください。回答の番号は各ポイントの出典へのリンクで、信頼度ラベルはそれらの出典が回答をどの程度裏付けているかを示します。',
+  'Read the passages it used': '使われた箇所を読む',
+  'Under each answer, select Show retrieved sources to read the passages it used. Journey through the context takes you through them one at a time.':
+    '各回答の下の「取得した出典を表示」を選ぶと、使われた箇所を読めます。「根拠資料をたどる」では一つずつ順に確認できます。',
+  'Go straight to the cited page': '引用されたページへ直接移動する',
+  'When a citation points to a PDF, it opens the PDF at that page with the matched passage highlighted.':
+    '引用がPDFを指している場合、そのページでPDFが開き、一致した箇所が強調表示されます。',
+  'Connect your research tools': '研究ツールを接続する',
+  'If your research tool supports MCP, you can connect it to search this collection and get cited answers. Access is read-only. Tools has the connection details and says whether you need a key.':
+    'お使いの研究ツールがMCPに対応していれば、接続してこのコレクションを検索し、出典付きの回答を得られます。アクセスは読み取り専用です。接続情報とキーの要否は「ツール」にあります。',
+  'See which collections were used': '使われたコレクションを見る',
+  'Each answer names the collections it used and any it could not reach.':
+    '各回答には、使われたコレクションと到達できなかったコレクションが示されます。',
+  'Ask something it cannot answer': '答えられないことを質問する',
+  'When the collection has no direct evidence for a question, the answer says so and lists the closest matches. A weak answer is marked low confidence, so check its sources.':
+    'コレクションに質問の直接の根拠がない場合、回答はその旨を伝え、最も近い資料を示します。弱い回答には低い信頼度が付くので、出典を確認してください。',
   '{count} sources · {cited} cited': '出典 {count} 件 · 引用 {cited} 件',
   'p. {page}': 'p. {page}',
   'Page {page}': '{page} ページ',
+  'From page {page}': '{page} ページより',
   'Read-only': '読み取り専用',
-  'Streamable HTTP': 'Streamable HTTP',
   'MCP connector': 'MCPコネクタ',
-  'Collections in this answer': 'この回答に参加したコレクション',
-  'Took part': '参加',
-  'Not taking part': '不参加',
-  'Nothing in the collection was published in the last week. The closest matches are listed below and were not used.':
-    'コレクションには先週発表されたものはありません。最も近い資料を以下に示しますが、回答には使用していません。',
+  'Collections used in this answer': 'この回答で使われたコレクション',
+  'Used': '使用',
+  'Not used': '不使用',
+  'The collection has no direct evidence about playground surfaces in snow. The closest matches are below. They were not used in an answer.':
+    'コレクションには雪の中の遊び場の表面に関する直接の根拠がありません。最も近い資料を以下に示します。回答には使用していません。',
   'Playground studies': '遊び場の研究',
   'Design guidance': '設計ガイド',
   'Archive, 1998 to 2004': 'アーカイブ（1998年から2004年）',
   // Manage > Behaviour: how the tour is offered.
   'Guided tour': 'ガイドツアー',
-  'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, the MCP connector and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.':
-    'ポータルでできることをホームページから案内する短いツアーです。出典付きの回答、その作られ方、引用元のページ、MCPコネクタ、コレクションが答えられないときの動きを紹介します。「初回に自動で開く」は、各ブラウザがホームページを初めて開いたときにだけ表示し、他のページの上には開きません。',
+  'Offers visitors a short tour from the home page. Each step shows one feature and links to it. With "Offered and opens on first visit", the tour opens by itself the first time a browser visits the home page; a browser that blocks site storage sees it on every visit. A link to the home page ending in ?tour=1 opens it on request.':
+    'ホームページから訪問者に短いツアーを提供します。各ステップは一つの機能を示し、その機能へのリンクがあります。「提供し、初回訪問時に開く」では、ブラウザが初めてホームページを開いたときにツアーが自動で開きます。サイトのストレージを拒否するブラウザでは毎回表示されます。?tour=1 で終わるホームページへのリンクで、求めに応じて開けます。',
   'Offer the tour': 'ツアーの提供',
   'Offered on the home page': 'ホームページで提供する',
-  'Offered, and opens once by itself': 'ホームページで提供し、初回に自動で開く',
-  'The scenes and their words can be set per portal through the configuration import.':
-    'シーンとその文言は、設定のインポートでポータルごとに指定できます。',
+  'Offered and opens on first visit': '提供し、初回訪問時に開く',
+  'The operator sets which steps show and what they say, through the configuration import.':
+    '表示するステップとその文言は、運用者が設定のインポートで指定します。',
   'Save guided tour setting': 'ガイドツアーの設定を保存',
   'Save the guided tour setting': 'ガイドツアーの設定を保存する',
   'Guided tour setting saved.': 'ガイドツアーの設定を保存しました。',
-  'Could not save the guided tour setting.': 'ガイドツアーの設定を保存できませんでした。',
+  'Could not save the guided tour setting. The previous setting still applies. Try again.':
+    'ガイドツアーの設定を保存できませんでした。以前の設定がそのまま有効です。もう一度お試しください。',
   'Agentic': 'エージェント調査',
   'Research Portal': '研究ポータル',
   'Open {name}': '{name}を開く',

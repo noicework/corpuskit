@@ -422,7 +422,7 @@ function DemoTourSetting({ slug }: { slug: string }) {
   const choices: { value: DemoTourMode; label: string }[] = [
     { value: 'off', label: ui('Off') },
     { value: 'request', label: ui('Offered on the home page') },
-    { value: 'auto', label: ui('Offered, and opens once by itself') },
+    { value: 'auto', label: ui('Offered and opens on first visit') },
   ]
 
   const onSave = async () => {
@@ -444,7 +444,11 @@ function DemoTourSetting({ slug }: { slug: string }) {
         messageFor(
           'error',
           ({ error: localError }) =>
-            errorMessage(err, 'Could not save the guided tour setting.', localError),
+            errorMessage(
+              err,
+              'Could not save the guided tour setting. The previous setting still applies. Try again.',
+              localError,
+            ),
         ),
       )
     } finally {
@@ -458,7 +462,7 @@ function DemoTourSetting({ slug }: { slug: string }) {
         className='rp-admin-section-head'
         title={ui('Guided tour')}
         description={ui(
-          'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, the MCP connector and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.',
+          'Offers visitors a short tour from the home page. Each step shows one feature and links to it. With "Offered and opens on first visit", the tour opens by itself the first time a browser visits the home page; a browser that blocks site storage sees it on every visit. A link to the home page ending in ?tour=1 opens it on request.',
         )}
       />
       <label className='mt-4 block text-sm text-ink-2'>
@@ -475,7 +479,9 @@ function DemoTourSetting({ slug }: { slug: string }) {
         </select>
       </label>
       <p className='mt-1 text-xs text-ink-3'>
-        {ui('The scenes and their words can be set per portal through the configuration import.')}
+        {ui(
+          'The operator sets which steps show and what they say, through the configuration import.',
+        )}
       </p>
       <div className='mt-3 flex items-center gap-3'>
         <Button data-behaviour-demo-tour-save disabled={busy} onClick={() => void onSave()}>

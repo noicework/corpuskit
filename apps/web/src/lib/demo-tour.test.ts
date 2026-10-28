@@ -19,29 +19,32 @@ Deno.test('the built-in script shows every scene but participation, each with on
     '/ask?ask=What%20changed%20last%20year%3F',
     '/library/pdf-1',
     '/tools',
-    '/ask?ask=What%20was%20published%20on%20this%20topic%20in%20the%20last%20week%3F',
+    '/ask',
   ])
-  expect(scenes.map((scene) => scene.asks)).toEqual([true, true, false, false, true])
+  expect(scenes.map((scene) => scene.asks)).toEqual([true, true, false, false, false])
   expect(scenes.every((scene) => scene.title && scene.body)).toBe(true)
   // The button names what it does; a question is carried beside it.
   expect(scenes.map((scene) => scene.action)).toEqual([
     'Ask this question',
     'Ask this question',
-    'Open the document',
+    'Open a PDF',
     'Open Tools',
-    'Ask this question',
+    'Open Ask',
   ])
   expect(scenes[0]!.question).toBe('Which talks cover upgrades?')
   expect(scenes[3]!.question).toBeUndefined()
 })
 
-Deno.test('a collection without a PDF opens the library, and a portal without questions asks a stock one', () => {
-  expect(resolveScenes(config, null, english)[2]!.href).toBe('/library')
+Deno.test('a collection without a PDF opens the Library, and a portal without questions opens Ask empty', () => {
+  const noPdf = resolveScenes(config, null, english)[2]!
+  expect([noPdf.href, noPdf.action]).toEqual(['/library', 'Open the Library'])
   const bare = resolveScenes({ suggestedQuestions: [] }, null, english)
-  expect(bare[0]!.href).toBe(
-    '/ask?ask=What%20are%20the%20main%20findings%20in%20this%20collection%3F',
-  )
-  expect(bare[1]!.href).toBe(bare[0]!.href)
+  expect([bare[0]!.href, bare[0]!.action, bare[0]!.question]).toEqual([
+    '/ask',
+    'Open Ask',
+    undefined,
+  ])
+  expect(bare[1]!.href).toBe('/ask')
 })
 
 Deno.test("a portal's scene list, words and targets replace the built-in ones", () => {
@@ -65,9 +68,9 @@ Deno.test("a portal's scene list, words and targets replace the built-in ones", 
   )
   expect(scenes.map((scene) => [scene.id, scene.title, scene.href, scene.asks])).toEqual([
     ['gaps', 'Ask the unanswerable', '/ask?ask=What%20is%20on%20next%20year%3F', true],
-    ['participation', 'See who took part', '/agent', false],
-    ['cited-page', 'Open the PDF at the cited page', '/library/report-7?page=4', false],
-    ['mcp', 'Connect an external research tool over MCP', 'https://example.org/agents', false],
+    ['participation', 'See which collections were used', '/agent', false],
+    ['cited-page', 'Go straight to the cited page', '/library/report-7?page=4', false],
+    ['mcp', 'Connect your research tools', 'https://example.org/agents', false],
     ['federated', 'Federate', '/ask?ask=Which%20talks%20cover%20upgrades%3F', true],
   ])
   expect(scenes[3]!.body).toBe('Our own agent guide.')

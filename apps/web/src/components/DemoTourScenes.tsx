@@ -36,7 +36,7 @@ const SOURCES: ScoredResource[] = [
     citedCount: 1,
     matchedPage: 4,
     matchedPassage:
-      'Under tree canopy the rubber surface stayed 10 to 15 degrees cooler than in open sun on every afternoon measured.',
+      'Under tree canopy, the rubber surface stayed 10 to 15°C cooler than in open sun on each afternoon measured.',
   },
   {
     id: 'tour-cool-play-2019',
@@ -58,7 +58,8 @@ const CITATIONS: Citation[] = [
 
 const QUESTION = 'Does shade cover reduce heat stress in playgrounds?'
 const ANSWER =
-  'Shade cover lowers playground surface temperatures by 10 to 15 degrees on hot afternoons [1]. Tree canopy keeps that benefit through a season, where a shade sail loses it as the sun moves [2].'
+  'The sources measure surface temperature, not heat stress. Over one summer, rubber surfaces under tree canopy were 10 to 15°C cooler than in open sun [1]. A council design guide recommends canopy over shade sails for lasting shade [2].'
+const GAP_QUESTION = 'How do playground surfaces hold up in snow?'
 
 function prefersReducedMotion(): boolean {
   try {
@@ -149,6 +150,7 @@ function AskField({ question }: { question: string }) {
 }
 
 function AnswerCard({ slug, text }: { slug: string; text: string }) {
+  const { ui } = usePortalLocale()
   return (
     <div className='rp-card p-4'>
       <AnswerText
@@ -159,6 +161,9 @@ function AnswerCard({ slug, text }: { slug: string; text: string }) {
         streaming={false}
         bodyClassName='rp-prose text-sm text-ink-2'
       />
+      <p className='mt-3 border-t border-line pt-3'>
+        <span className='rp-badge rp-badge-quiet'>{ui('Moderate confidence')}</span>
+      </p>
     </div>
   )
 }
@@ -191,15 +196,13 @@ function FederatedScene({ slug }: { slug: string }) {
               <AnswerCard slug={slug} text={ANSWER} />
             </Reveal>
             <Reveal delay={220}>
-              <div className='grid gap-3 sm:grid-cols-2'>
-                {(['studies', 'guidance'] as const).map((collection, index) => (
-                  <div key={collection} className='rp-card min-w-0 p-3'>
-                    <p className='rp-eyebrow text-ink-3'>{ui(COLLECTIONS[collection])}</p>
-                    <ul className='mt-2 min-w-0 space-y-1.5'>
-                      <SourceRow source={SOURCES[index]!} />
-                    </ul>
-                  </div>
-                ))}
+              <div className='rp-card min-w-0 p-3'>
+                <p className='rp-eyebrow text-ink-3'>{ui('retrieved sources')}</p>
+                <ul className='mt-2 min-w-0 space-y-1.5'>
+                  {SOURCES.map((source) => (
+                    <SourceRow key={source.id} source={source} page={source.matchedPage} />
+                  ))}
+                </ul>
               </div>
             </Reveal>
           </>
@@ -253,7 +256,7 @@ function CitedPageScene({ slug }: { slug: string }) {
       <div className='rp-card p-4'>
         <span className={opened ? '' : 'rp-tour-glow rounded-[var(--rp-radius-chip)]'}>
           <AnswerText
-            text='Surface temperatures fell by 10 to 15 degrees under canopy [1].'
+            text='Surfaces under tree canopy were 10 to 15°C cooler than in open sun [1].'
             citations={CITATIONS}
             sources={SOURCES}
             slug={slug}
@@ -291,7 +294,7 @@ function CitedPageScene({ slug }: { slug: string }) {
                   &ldquo;{source.matchedPassage}&rdquo;
                 </blockquote>
                 <p className='mt-2 text-xs font-medium tabular-nums text-ink-3'>
-                  {ui('From page')} {source.matchedPage}
+                  {ui('From page {page}', { page: source.matchedPage ?? 1 })}
                 </p>
               </div>
             </div>
@@ -319,7 +322,6 @@ function McpScene({ slug }: { slug: string }) {
       </pre>
       <div className='mt-3 flex flex-wrap gap-2'>
         <span className='rp-badge rp-badge-quiet'>{ui('Read-only')}</span>
-        <span className='rp-badge rp-badge-quiet'>{ui('Streamable HTTP')}</span>
       </div>
     </div>
   )
@@ -334,7 +336,7 @@ function ParticipationScene() {
   ]
   return (
     <div className='rp-card p-4'>
-      <p className='rp-eyebrow text-ink-3'>{ui('Collections in this answer')}</p>
+      <p className='rp-eyebrow text-ink-3'>{ui('Collections used in this answer')}</p>
       <ul className='mt-3 divide-y divide-[var(--rp-line)]'>
         {rows.map((row, index) => (
           <li key={row.name} className='py-2'>
@@ -346,7 +348,7 @@ function ParticipationScene() {
                     row.takesPart ? 'rp-badge-ok' : 'rp-badge-quiet'
                   }`}
                 >
-                  {row.takesPart ? ui('Took part') : ui('Not taking part')}
+                  {row.takesPart ? ui('Used') : ui('Not used')}
                 </span>
               </div>
             </Reveal>
@@ -359,7 +361,7 @@ function ParticipationScene() {
 
 function GapsScene() {
   const { ui } = usePortalLocale()
-  const question = ui('What was published on this topic in the last week?')
+  const question = GAP_QUESTION
   const answered = useAfter(question.length * 28 + 400)
   return (
     <div className='space-y-4'>
@@ -371,7 +373,7 @@ function GapsScene() {
               <span className='rp-badge rp-badge-quiet'>{ui('No direct evidence found')}</span>
               <p className='rp-prose mt-3 text-sm text-ink-2'>
                 {ui(
-                  'Nothing in the collection was published in the last week. The closest matches are listed below and were not used.',
+                  'The collection has no direct evidence about playground surfaces in snow. The closest matches are below. They were not used in an answer.',
                 )}
               </p>
               <p className='rp-eyebrow mt-4 border-t border-line pt-3 text-ink-3'>

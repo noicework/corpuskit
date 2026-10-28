@@ -19,7 +19,12 @@ export const DEFAULT_SCENE_IDS: readonly DemoTourSceneId[] = [
   'gaps',
 ]
 
-type SceneTarget = { kind: 'ask'; question: string } | { kind: 'link'; href: string }
+type SceneTarget = { kind: 'ask'; question: string } | {
+  kind: 'link'
+  href: string
+  /** What the button says, where the page's name alone would not do ("Open a PDF"). */
+  label?: string
+}
 
 /** The portal path that asks `question` on arrival, the path the hero's suggestions take. */
 export function askHref(question: string): string {
@@ -27,8 +32,11 @@ export function askHref(question: string): string {
 }
 
 /**
- * A scene's built-in words and target. The federated answer tries Ask until the agent page
- * exists; when it lands, this scene's target becomes `/agent?q=<question>&run=1`.
+ * A scene's built-in words and target. The words promise only what the button then shows: a
+ * portal without a suggested question opens Ask empty rather than sending a question the
+ * reader never saw, and the gaps scene asks nothing unless the portal sets a question it
+ * knows the collection cannot answer. The first scene becomes the agent page's composed
+ * answer, through its copy, once that page exists.
  */
 function builtIn(
   id: DemoTourSceneId,
@@ -37,62 +45,60 @@ function builtIn(
   ui: (english: string) => string,
 ): { title: string; body: string; target: SceneTarget } {
   const suggested = config.suggestedQuestions.map((question) => question.text)
-  const first = suggested[0] ?? ui('What are the main findings in this collection?')
-  const second = suggested[1] ?? first
+  const ask = (text: string | undefined): SceneTarget =>
+    text ? { kind: 'ask', question: text } : { kind: 'link', href: '/ask' }
   switch (id) {
     case 'federated':
       return {
-        title: ui('Ask across every collection'),
+        title: ui('Ask a question'),
         body: ui(
-          'One question, answered across several research collections at once. Each claim carries a numbered citation, and the answer names the collections it drew on.',
+          'Ask in your own words. The numbers in the answer link to the source behind each point, and the confidence label says how well those sources support it.',
         ),
-        target: { kind: 'ask', question: first },
+        target: ask(suggested[0]),
       }
     case 'provenance':
       return {
-        title: ui('See how an answer was made'),
+        title: ui('Read the passages it used'),
         body: ui(
-          'The portal shows each stage of an answer as it works, then keeps the sources under it. Open the retrieved sources, then Journey through the context, to read the passages the answer was built from.',
+          'Under each answer, select Show retrieved sources to read the passages it used. Journey through the context takes you through them one at a time.',
         ),
-        target: { kind: 'ask', question: second },
+        target: ask(suggested[1] ?? suggested[0]),
       }
     case 'cited-page':
       return {
-        title: ui('Open the PDF at the cited page'),
+        title: ui('Go straight to the cited page'),
         body: ui(
-          'A citation takes you to the page it came from, with the matched passage marked, not to the top of a file.',
+          'When a citation points to a PDF, it opens the PDF at that page with the matched passage highlighted.',
         ),
-        target: {
-          kind: 'link',
-          href: firstPdfId ? `/library/${encodeURIComponent(firstPdfId)}` : '/library',
-        },
+        target: firstPdfId
+          ? {
+            kind: 'link',
+            href: `/library/${encodeURIComponent(firstPdfId)}`,
+            label: ui('Open a PDF'),
+          }
+          : { kind: 'link', href: '/library' },
       }
     case 'mcp':
       return {
-        title: ui('Connect an external research tool over MCP'),
+        title: ui('Connect your research tools'),
         body: ui(
-          'The MCP connector gives approved external research tools read-only access to this portal: they can search the collection, request a cited answer, retrieve a document and browse the catalogue. The connection details are on Tools.',
+          'If your research tool supports MCP, you can connect it to search this collection and get cited answers. Access is read-only. Tools has the connection details and says whether you need a key.',
         ),
         target: { kind: 'link', href: '/tools' },
       }
     case 'participation':
       return {
-        title: ui('See who took part'),
-        body: ui(
-          'Each organisation decides whether its collection takes part in a federated answer. The answer shows which collections did.',
-        ),
+        title: ui('See which collections were used'),
+        body: ui('Each answer names the collections it used and any it could not reach.'),
         target: { kind: 'link', href: '/agent' },
       }
     case 'gaps':
       return {
-        title: ui('Find the gaps'),
+        title: ui('Ask something it cannot answer'),
         body: ui(
-          'Ask something the collection does not cover and the portal says so, with the closest matches, instead of guessing. Administrators see every gap in Manage, under Insights.',
+          'When the collection has no direct evidence for a question, the answer says so and lists the closest matches. A weak answer is marked low confidence, so check its sources.',
         ),
-        target: {
-          kind: 'ask',
-          question: ui('What was published on this topic in the last week?'),
-        },
+        target: { kind: 'link', href: '/ask' },
       }
   }
 }
@@ -120,11 +126,12 @@ export function actionLabel(
   ui: (english: string) => string,
 ): string {
   if (target.kind === 'ask') return ui('Ask this question')
+  if (target.label) return target.label
   const path = target.href.split(/[?#]/)[0] ?? ''
   if (path === '/tools') return ui('Open Tools')
   if (path === '/library') return ui('Open the Library')
   if (path.startsWith('/library/')) return ui('Open the document')
-  if (path === '/agent' || path.startsWith('/agent?')) return ui('Open the answer')
+  if (path === '/agent') return ui('Open the answer')
   if (path === '/ask' || path.startsWith('/ask/')) return ui('Open Ask')
   if (path.startsWith('/manage')) return ui('Open Manage')
   return target.href.startsWith('/') ? ui('Open the page') : ui('Open the link')

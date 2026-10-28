@@ -63,7 +63,7 @@ export function DemoTour({ config }: { config: TenantConfig }) {
   const heading = copy?.heading ?? ui('See what this platform does')
   const intro = copy?.intro ??
     ui(
-      'A short guided tour: cited answers, how they are made, the page a citation came from, external research tools connected over MCP, and what happens when the collection cannot answer.',
+      'Short steps on asking questions here and checking where each answer came from. Each step has a button to try it.',
     )
 
   function closeTour() {
@@ -94,7 +94,6 @@ export function DemoTour({ config }: { config: TenantConfig }) {
           <DemoTourDialog
             onClose={closeTour}
             slug={slug}
-            productName={config.branding.productName}
             heading={heading}
             intro={intro}
             scenes={scenes}
