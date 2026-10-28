@@ -123,6 +123,7 @@ import {
   enrichmentJsonSchema,
   EnrichmentSchema,
   ExtractionRulesSchema,
+  type FederationPeer,
   FederationSettingsSchema,
   GenerateKindSchema,
   LAYOUT_IMAGE_NAME,
@@ -160,12 +161,13 @@ import {
   KnowledgeBoxNotConnectedError,
   looksLikeReferenceChunk,
   parseKbUrl,
+  PeerError,
   type RetrievalProvider,
+  searchPeer,
   type SourceContext,
 } from '@research-portal/retrieval'
 import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
 import { agentAnswer, type ComposeSource } from './agent-compose.ts'
-import { federationPeerSources } from './federation-peers.ts'
 import { federatedMcpTools } from './federated-mcp.ts'
 import {
   type NewTenantInput,
@@ -8455,15 +8457,73 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // portal has no agent, the portal's own answer composed across collections. Opt-in per portal;
   // a portal that has not opted in, or a provider that can do neither, answers exactly as a route
   // that does not exist.
-  const peerSources = (c: Context, host: TenantConfig): ComposeSource[] =>
-    federationPeerSources({
-      host,
-      bindings,
-      fetchImpl: opts.peerFetch,
-      audit: requiredAudit(),
-      context: requestContext(c.req.raw),
-      now: opts.now,
-    })
+  /**
+   * The host portal's federation peers as sources of a composed answer: none when the host does
+   * not take part in federation. Each call uses the peer's sealed key from the binding store, and
+   * is audited on the host with the peer and the time it took, never the key.
+   */
+  const peerSources = (c: Context, host: TenantConfig): ComposeSource[] => {
+    if (!participatesInFederation(host)) return []
+    const peers = (host.federation?.peers ?? []).filter((peer): peer is FederationPeer =>
+      Boolean(peer.zone && peer.kbId)
+    )
+    return peers.map((peer) => ({
+      source: {
+        id: `peer:${peer.id}`,
+        label: peer.label,
+        kind: 'peer' as const,
+        transport: peer.kind === 'arag-mcp' ? 'mcp' as const : 'kb' as const,
+      },
+      search: async (question, signal) => {
+        const started = Date.now()
+        const record = (failure?: 'timeout' | 'unauthorised' | 'error') => {
+          const context = requestContext(c.req.raw)
+          appendAudit(
+            requiredAudit(),
+            createAuditEvent({
+              requestId: context.requestId,
+              actor: context.actor ?? { kind: 'anonymous' },
+              action: 'federation.peer.call',
+              scope: { kind: 'portal', slug: host.slug },
+              target: { kind: 'request' },
+              outcome: failure ? 'failure' : 'success',
+              detail: {
+                peerId: peer.id,
+                peerKind: peer.kind,
+                durationMs: Math.max(0, Date.now() - started),
+                ...(failure ? { peerFailure: failure } : {}),
+              },
+            }, opts.now),
+          )
+        }
+        try {
+          const key = bindings.get(peerKeyName(host.slug, peer.id))
+          if (!key) throw new PeerError('unauthorised', 'No key is stored for this peer')
+          const passages = await searchPeer(peer, key.token, question, {
+            signal,
+            ...(opts.peerFetch ? { fetchImpl: opts.peerFetch } : {}),
+          })
+          record()
+          return passages.map((passage, index) => ({
+            id: `peer:${peer.id}/${passage.resourceId}/${index}`,
+            title: passage.title,
+            text: passage.text.slice(0, 1200),
+            // Off by default: a link would name the partner on a public portal.
+            ...(peer.linkOrigins && passage.originUrl ? { url: passage.originUrl } : {}),
+          }))
+        } catch (error) {
+          record(
+            signal.aborted && !(error instanceof PeerError)
+              ? 'timeout'
+              : error instanceof PeerError
+              ? error.failure
+              : 'error',
+          )
+          throw error
+        }
+      },
+    }))
+  }
 
   const agentAskStream = (
     c: Context,
