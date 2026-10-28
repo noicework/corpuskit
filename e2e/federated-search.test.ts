@@ -124,8 +124,10 @@ Deno.test('shared search switch, attribution, source filter and failure status w
   const server = await startAgentStub({ speed: 0 })
   const browser = await launch()
   try {
-    const page = await browser.newPage(`${server.url}${searchPath}`)
+    const page = await browser.newPage()
+    // Set the layout viewport before Search captures its initial facet-rail state.
     await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(`${server.url}${searchPath}`)
     await page.waitForSelector('button[role="switch"]')
     expect(
       await page.evaluate(() =>
@@ -189,7 +191,15 @@ Deno.test('shared search switch, attribution, source filter and failure status w
     expect(ax.nodes.map((node) => node.name?.value).filter((name) => name?.includes('Source')))
       .toContain('Source:')
     const searchesBefore = server.requests.filter((r) => r.path.includes('/search')).length
+    // Search chooses the facet rail's initial open state when it mounts.
+    expect(
+      await page.evaluate(() => ({
+        width: innerWidth,
+        sourceVisible: document.querySelector('#search-source')!.getClientRects().length > 0,
+      })),
+    ).toEqual({ width: 1440, sourceVisible: true })
     await page.evaluate(() => document.querySelector<HTMLSelectElement>('#search-source')!.focus())
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('search-source')
     await page.keyboard.type('Soil')
     await page.keyboard.press('Tab')
     await page.waitForFunction(() =>
