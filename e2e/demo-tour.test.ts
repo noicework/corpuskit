@@ -199,14 +199,14 @@ describe('the guided tour', () => {
         'the Graph scene',
       )
 
-      // Escape closes it and focus is back on the page, not lost to the document.
+      // Escape closes it and focus goes to the Help button, a tick after the dialog has gone.
       await page.keyboard.press('Escape')
       await settle(page, dialogGone, 'closing')
-      expect(
-        await page.evaluate(() =>
-          document.activeElement !== null && document.activeElement !== document.body
-        ),
-      ).toBe(true)
+      await settle(
+        page,
+        () => document.activeElement === document.querySelector('[data-help-trigger]'),
+        'focus returning',
+      )
     } finally {
       await page.evaluate(() => localStorage.removeItem('rp_demo_tour_done')).catch(() => {})
       await page.close()
