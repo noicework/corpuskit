@@ -293,6 +293,8 @@ export function applyAgentAskEvent(
         status: 'done',
         steps: closeOpenSteps(state.steps, 'completed', now),
         elapsedMs: event.elapsedMs,
+        // The citation-checked final text replaces the provisional deltas when the server sends it.
+        ...(event.text !== undefined ? { text: event.text } : {}),
       }
     case 'error':
       return {
