@@ -889,6 +889,16 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
             text: 'Private comment',
             ts: new Date(now).toISOString(),
           }],
+          'siteFeedback.save': [slug, {
+            id: '00000000-0000-4000-8000-000000000001',
+            slug,
+            createdAt: new Date(now).toISOString(),
+            category: 'general',
+            message: 'Private message',
+            email: 'reader@example.org',
+            pageUrl: 'https://portal.example.org/t/marine',
+            delivery: 'pending',
+          }],
           'routing.record': [slug, {
             ts: new Date(now).toISOString(),
             questionHash: 'abcd',
