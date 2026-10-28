@@ -1,21 +1,21 @@
 /**
- * Splits the browser E2E suite across CI runners so its files run at the same time instead of
- * one after another.
+ * Splits a test suite across CI runners so its files run at the same time instead of one after
+ * another: the browser E2E suite (`e2e`) and the unit tests (`packages apps`).
  *
- *   deno run --allow-read=e2e e2e/support/shard.ts ignore <shard> <shards>
+ *   deno run --allow-read=e2e e2e/support/shard.ts ignore <shard> <shards> e2e
+ *   deno run --allow-read=packages,apps e2e/support/shard.ts ignore <shard> <shards> packages apps
  *
- * prints the files the OTHER shards own, comma separated, for `deno task test:e2e --ignore=...`.
- * Every shard still runs `deno test e2e/`, so Deno itself finds the test files: a file this
- * script does not know about is ignored by no shard and runs on every shard, never on none.
- * Files are balanced by the seconds each took in CI (`shard-weights.json`), heaviest first; a
- * file with no weight yet counts as the median.
+ * prints the files under those directories that the OTHER shards own, comma separated, for
+ * `deno task test:e2e --ignore=...` or `deno task test --ignore=...`. Every shard still runs the
+ * whole task, so Deno itself finds the test files: a file this script does not know about is
+ * ignored by no shard and runs on every shard, never on none. Files are balanced by the seconds
+ * each took in CI (`shard-weights.json`), heaviest first; a file with no weight yet counts as the
+ * median of its suite.
  *
  *   gh run view <run id> --log | deno run e2e/support/shard.ts weights > e2e/support/shard-weights.json
  *
  * remeasures the weights from a green CI run when the shards drift out of balance.
  */
-import recorded from './shard-weights.json' with { type: 'json' }
-
 export interface Shard {
   files: string[]
   seconds: number
@@ -25,8 +25,8 @@ export interface Shard {
 const TEST_FILE = /(^|[._])test\.(ts|tsx|mts|js|mjs|jsx)$/
 const SCRIPT_FILE = /\.(ts|tsx|mts|js|mjs|jsx)$/
 
-/** The test files `deno test <root>/` runs, sorted: test names, and any script under `__tests__`. */
-export function testFiles(root = 'e2e'): string[] {
+/** The test files `deno test <roots>` runs, sorted: test names, and any script under `__tests__`. */
+export function testFiles(roots: string[]): string[] {
   const found: string[] = []
   const visit = (directory: string, underTests: boolean) => {
     for (const entry of Deno.readDirSync(directory)) {
@@ -37,7 +37,7 @@ export function testFiles(root = 'e2e'): string[] {
       }
     }
   }
-  visit(root, false)
+  for (const root of roots) visit(root.replace(/\/+$/, ''), false)
   return found.sort()
 }
 
@@ -66,13 +66,16 @@ export function assign(files: string[], weights: Record<string, number>, count: 
   }
   const unowned = files.filter((file) => owners.get(file) !== 1)
   if (unowned.length > 0) throw new Error(`Not in exactly one shard: ${unowned.join(', ')}`)
-  for (const shard of shards) shard.files.sort()
+  for (const shard of shards) {
+    shard.files.sort()
+    shard.seconds = Math.round(shard.seconds)
+  }
   return shards
 }
 
 /**
- * Seconds per e2e test file from `gh run view --log` of a CI run: from each file's "running N
- * tests from" line to the next one, or to the summary line, within the same job step.
+ * Seconds per test file, to a tenth, from `gh run view --log` of a CI run: from each file's
+ * "running N tests from" line to the next one, or to the summary line, within the same job step.
  */
 export function measure(log: string): Record<string, number> {
   const seconds: Record<string, number> = {}
@@ -88,23 +91,25 @@ export function measure(log: string): Record<string, number> {
     const at = Date.parse(line[1]!)
     const key = `${job}\t${step}`
     const previous = open.get(key)
-    if (previous) seconds[previous.file] = Math.round((at - previous.at) / 1000)
+    if (previous) seconds[previous.file] = Math.round((at - previous.at) / 100) / 10
     open.delete(key)
-    const file = running?.[1]
-    if (file?.startsWith('e2e/')) open.set(key, { file, at })
+    if (running) open.set(key, { file: running[1]!, at })
   }
   return Object.fromEntries(Object.entries(seconds).sort(([a], [b]) => a < b ? -1 : 1))
 }
 
 if (import.meta.main) {
-  const [operation, shardArg, countArg] = Deno.args
+  const [operation, shardArg, countArg, ...roots] = Deno.args
   if (operation === 'ignore') {
     const shard = Number(shardArg)
     const count = Number(countArg)
-    if (!Number.isInteger(shard) || shard < 1 || shard > count) {
-      throw new Error('Expected ignore <shard> <shards>, with shard from 1 to shards')
+    if (!Number.isInteger(shard) || shard < 1 || shard > count || roots.length === 0) {
+      throw new Error('Expected ignore <shard> <shards> <directory>..., shard from 1 to shards')
     }
-    const files = testFiles()
+    // Imported here, not at the top, so `weights > shard-weights.json` can rewrite the file.
+    const recorded: Record<string, number> =
+      (await import('./shard-weights.json', { with: { type: 'json' } })).default
+    const files = testFiles(roots)
     const comma = files.find((file) => file.includes(','))
     if (comma) throw new Error(`The comma in ${comma} would split the --ignore list`)
     const shards = assign(files, recorded, count)
@@ -119,6 +124,6 @@ if (import.meta.main) {
   } else if (operation === 'weights') {
     console.log(JSON.stringify(measure(await new Response(Deno.stdin.readable).text()), null, 2))
   } else {
-    throw new Error('Expected ignore <shard> <shards>, or weights with a CI log on stdin')
+    throw new Error('Expected ignore <shard> <shards> <directory>..., or weights with a CI log')
   }
 }

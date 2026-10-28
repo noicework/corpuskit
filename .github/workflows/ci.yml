@@ -1,15 +1,17 @@
 name: CI
 
 # The quality gate for this repository: typecheck, lint, format, tests and the
-# web build, on every pull request. A push to main runs the identical gate job
-# inside deploy.yml before anything deploys, so it is not repeated here - two
+# web build, on every pull request. A push to main runs the identical gate jobs
+# inside deploy.yml before anything deploys, so they are not repeated here - two
 # copies of the same gate on every merge doubled the runner time and the
 # failure noise. Deployment stays in deploy.yml, deliberately separate: CI must
 # be able to go green before any deploy credentials exist.
 #
-# The browser E2E suite runs beside the gate in parallel shards, one runner
-# each, rather than after it: run serially it took about 16 of CI's 21 minutes.
-# deploy.yml has the same two jobs; change them together.
+# The gate is three jobs that run at the same time: typecheck, lint, format and
+# the build; the unit tests in parallel shards; and the browser E2E suite in
+# parallel shards. Together they are `deno task check` (check:static, then
+# test) plus `deno task test:e2e`. Run one after another they took 21 minutes.
+# deploy.yml has the same three jobs; change them together.
 on:
   pull_request:
   workflow_dispatch:
@@ -20,7 +22,7 @@ concurrency:
 
 jobs:
   gate:
-    name: Typecheck, lint, format, tests, build
+    name: Typecheck, lint, format, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,8 +70,43 @@ jobs:
       - name: Validate the Worker deployment package
         run: npx -y wrangler@4.127.1 deploy --config wrangler.jsonc --dry-run
 
-      - name: Gate
-        run: deno task check
+      - name: Typecheck, lint and format
+        run: deno task check:static
+
+  unit:
+    name: Unit tests (${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # Let every shard finish, so a red run names every failing file.
+      fail-fast: false
+      matrix:
+        # The only matrix dimension, so strategy.job-total is the shard count.
+        # e2e/support/shard.ts balances the files over however many are listed.
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Cache Deno modules
+        # The same lock-verified module cache as the gate job.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
+
+      - name: Unit tests
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        # The whole of `deno task test`, ignoring the files the other shards
+        # run, the same way as the E2E shards. Each shard runs its files one
+        # after another in one process, as the single job did.
+        run: |
+          ignore=$(deno run --allow-read=packages,apps e2e/support/shard.ts ignore "$SHARD" "$SHARDS" packages apps)
+          deno task test "--ignore=$ignore"
 
   e2e:
     name: Browser E2E persona journeys (${{ matrix.shard }}/${{ strategy.job-total }})
@@ -81,7 +118,7 @@ jobs:
       matrix:
         # The only matrix dimension, so strategy.job-total is the shard count.
         # e2e/support/shard.ts balances the files over however many are listed.
-        shard: [1, 2, 3, 4, 5]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
@@ -134,5 +171,5 @@ jobs:
         # still finds the test files itself, so a file the shard plan does not
         # know about runs on every shard rather than on none.
         run: |
-          ignore=$(deno run --allow-read=e2e e2e/support/shard.ts ignore "$SHARD" "$SHARDS")
+          ignore=$(deno run --allow-read=e2e e2e/support/shard.ts ignore "$SHARD" "$SHARDS" e2e)
           deno task test:e2e "--ignore=$ignore"
