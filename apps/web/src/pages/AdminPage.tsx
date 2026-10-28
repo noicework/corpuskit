@@ -224,7 +224,7 @@ export function PlatformAdminShell(
           {links.length > 0 && (
             <nav
               ref={navigation}
-              className='rp-admin-platform-tabs mb-6 flex min-w-0 gap-2 overflow-x-auto pb-2 lg:mb-0 lg:flex-col lg:overflow-visible lg:pb-0'
+              className='rp-admin-platform-tabs mb-6 flex min-w-0 gap-2 overflow-x-auto pb-2 lg:mb-0 lg:flex-col lg:self-start lg:overflow-visible lg:pb-0'
               aria-label={ui('Platform administration')}
             >
               {links.map((link) => (
