@@ -47,6 +47,10 @@ million UTF-16 code units of encoded events; overflow withholds the answer as a 
 This trades time to first answer text for preventing rejected text from flashing on screen.
 With those checks disabled, normal streaming is retained.
 
+The streaming composer receives the same portal preferences within its existing prompt budget.
+The policy checks both generated chunks and the final citation-checked text, and replaces the
+terminal event's text too when an answer is withheld.
+
 The same policy guards direct portal/estate MCP answers and separately streamed estate answers.
 For composed answers, the host policy governs the resulting answer; sources are searched under
 their existing access and federation rules. Help documentation answers are outside the portal
