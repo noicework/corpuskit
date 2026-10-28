@@ -2549,6 +2549,13 @@ dialog.rp-card::backdrop {
   background: var(--rp-wash);
 }
 
+/* The question a scene's button will send, quoted beside it. */
+.rp-tour-question {
+  margin: 0;
+  padding-inline-start: 0.875rem;
+  border-inline-start: 3px solid var(--rp-accent-line);
+}
+
 /* The citation about to be followed. */
 .rp-tour-glow {
   display: block;

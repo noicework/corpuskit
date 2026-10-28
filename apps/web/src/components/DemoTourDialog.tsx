@@ -11,8 +11,9 @@ import { ArrowLeft, ArrowRight, X } from './icons.tsx'
 
 /**
  * The guided tour: one dialog, a welcome, a scene per step and a finish. Each scene puts its
- * words and its "Try it" beside an illustration drawn with the portal's own components, so the
- * reader sees the feature before they are sent to it.
+ * words and its one button beside an illustration drawn with the portal's own components, so
+ * the reader sees the feature before they are sent to it. Every control in the dialog is the
+ * same size: one button family, one footer rhythm.
  *
  * Accessibility: a native modal dialog, so the page behind is inert and Escape closes it
  * through `onCancel`; Tab stays inside; the step heading takes focus on every step so a
@@ -182,11 +183,11 @@ export function DemoTourDialog({
                   <Link
                     key={link.href}
                     to={`/t/${encodeURIComponent(slug)}${link.href}`}
-                    className='rp-btn rp-btn-outline rp-btn-sm'
+                    className='rp-btn rp-btn-outline'
                     onClick={() => close.current()}
                   >
                     {link.label}
-                    <ArrowRight size='sm' />
+                    <ArrowRight />
                   </Link>
                 ))}
               </div>
@@ -205,23 +206,23 @@ export function DemoTourDialog({
               {step.kind === 'welcome'
                 ? (
                   <>
-                    <Button variant='ghost' size='sm' onClick={() => close.current()}>
+                    <Button variant='ghost' onClick={() => close.current()}>
                       {ui('Explore on my own')}
                     </Button>
-                    <Button size='sm' trailingIcon={ArrowRight} onClick={next}>
+                    <Button trailingIcon={ArrowRight} onClick={next}>
                       {ui('Show me around')}
                     </Button>
                   </>
                 )
                 : (
                   <>
-                    <Button variant='ghost' size='sm' leadingIcon={ArrowLeft} onClick={back}>
+                    <Button variant='ghost' leadingIcon={ArrowLeft} onClick={back}>
                       {ui('Back')}
                     </Button>
                     {step.kind === 'finish'
-                      ? <Button size='sm' onClick={() => close.current()}>{ui('Done')}</Button>
+                      ? <Button onClick={() => close.current()}>{ui('Done')}</Button>
                       : (
-                        <Button size='sm' trailingIcon={ArrowRight} onClick={next}>
+                        <Button trailingIcon={ArrowRight} onClick={next}>
                           {ui('Next')}
                         </Button>
                       )}
@@ -247,26 +248,34 @@ export function DemoTourDialog({
   )
 }
 
-/** The scene's one click into the real feature: a question sent, or a page opened. */
+/**
+ * The scene's one click into the real feature: a question sent, or a page opened. A question
+ * is shown beside its button, so the reader knows what they are about to ask.
+ */
 function TryIt({ scene, slug, onGo }: { scene: ResolvedScene; slug: string; onGo: () => void }) {
-  const { ui } = usePortalLocale()
   const target = layoutHrefTarget(scene.href, slug)
   if (!target) return null
-  const label = scene.asks ? ui('Ask it') : ui('Try it')
   return (
-    <div className='mt-5'>
+    <div className='mt-5 space-y-3'>
+      {scene.question
+        ? (
+          <blockquote className='rp-tour-question text-base leading-relaxed text-ink'>
+            {scene.question}
+          </blockquote>
+        )
+        : null}
       {target.external
         ? (
           <a href={target.url} rel='noopener' className='rp-btn rp-btn-primary' onClick={onGo}>
-            {label}
-            <ArrowRight size='sm' />
+            {scene.action}
+            <ArrowRight />
             <ExternalMark />
           </a>
         )
         : (
           <Link to={target.to} className='rp-btn rp-btn-primary' onClick={onGo}>
-            {label}
-            <ArrowRight size='sm' />
+            {scene.action}
+            <ArrowRight />
           </Link>
         )}
     </div>

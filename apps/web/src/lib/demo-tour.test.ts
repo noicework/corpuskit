@@ -23,6 +23,16 @@ Deno.test('the built-in script shows every scene but participation, each with on
   ])
   expect(scenes.map((scene) => scene.asks)).toEqual([true, true, false, false, true])
   expect(scenes.every((scene) => scene.title && scene.body)).toBe(true)
+  // The button names what it does; a question is carried beside it.
+  expect(scenes.map((scene) => scene.action)).toEqual([
+    'Ask this question',
+    'Ask this question',
+    'Open the document',
+    'Open Tools',
+    'Ask this question',
+  ])
+  expect(scenes[0]!.question).toBe('Which talks cover upgrades?')
+  expect(scenes[3]!.question).toBeUndefined()
 })
 
 Deno.test('a collection without a PDF opens the library, and a portal without questions asks a stock one', () => {
@@ -61,6 +71,13 @@ Deno.test("a portal's scene list, words and targets replace the built-in ones", 
     ['federated', 'Federate', '/ask?ask=Which%20talks%20cover%20upgrades%3F', true],
   ])
   expect(scenes[3]!.body).toBe('Our own agent guide.')
+  expect(scenes.map((scene) => scene.action)).toEqual([
+    'Ask this question',
+    'Open the answer',
+    'Open the document',
+    'Open the link',
+    'Ask this question',
+  ])
 })
 
 Deno.test('the first PDF is looked up only for a cited-page scene without its own link', () => {

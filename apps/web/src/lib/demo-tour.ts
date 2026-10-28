@@ -6,7 +6,7 @@ import {
 } from '@research-portal/core'
 
 /**
- * The guided tour's script: which scenes a portal shows, what each says and where its "Try it"
+ * The guided tour's script: which scenes a portal shows, what each says and where its button
  * goes. Pure functions, so the dialog and its tests share one reading of `copy.demoTour`.
  */
 
@@ -101,10 +101,33 @@ export type ResolvedScene = {
   id: DemoTourSceneId
   title: string
   body: string
-  /** Where "Try it" goes: a portal path, or an `https://` address. */
+  /** Where the scene's button goes: a portal path, or an `https://` address. */
   href: string
-  /** Whether "Try it" asks a question (as against opening a page). */
+  /** Whether the button asks a question (as against opening a page). */
   asks: boolean
+  /** The question the button sends, shown beside it so the reader knows what they are asking. */
+  question?: string
+  /** What the button says: the action and its object, never a bare "it". */
+  action: string
+}
+
+/**
+ * The button's words name what it does and where: "Ask this question", "Open Tools". A portal
+ * path the tour knows gets its page's name; any other link is simply opened.
+ */
+export function actionLabel(
+  target: SceneTarget,
+  ui: (english: string) => string,
+): string {
+  if (target.kind === 'ask') return ui('Ask this question')
+  const path = target.href.split(/[?#]/)[0] ?? ''
+  if (path === '/tools') return ui('Open Tools')
+  if (path === '/library') return ui('Open the Library')
+  if (path.startsWith('/library/')) return ui('Open the document')
+  if (path === '/agent' || path.startsWith('/agent?')) return ui('Open the answer')
+  if (path === '/ask' || path.startsWith('/ask/')) return ui('Open Ask')
+  if (path.startsWith('/manage')) return ui('Open Manage')
+  return target.href.startsWith('/') ? ui('Open the page') : ui('Open the link')
 }
 
 /**
@@ -132,6 +155,8 @@ export function resolveScenes(
       body: scene.body ?? base.body,
       href: target.kind === 'ask' ? askHref(target.question) : target.href,
       asks: target.kind === 'ask',
+      ...(target.kind === 'ask' ? { question: target.question } : {}),
+      action: actionLabel(target, ui),
     }
   })
 }
