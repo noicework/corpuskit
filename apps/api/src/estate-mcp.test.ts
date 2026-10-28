@@ -338,7 +338,7 @@ Deno.test('every estate call is audited per portal with the key, the tool and it
   }
 })
 
-Deno.test('estate keys are issued only within the creator reach and to portals that exist', async () => {
+Deno.test('estate keys are issued only for portals the creator administers and that exist', async () => {
   const { f } = estateFixture()
   try {
     // The creator holds no role on public-b, and an estate cannot repeat the key's own portal.
@@ -355,7 +355,8 @@ Deno.test('estate keys are issued only within the creator reach and to portals t
       actor: { kind: 'system' },
     })
     expect((await mint(f, { role: 'analyst' })).status).toBe(403)
-    expect((await mint(f, { role: 'viewer' })).status).toBe(201)
+    // Even a viewer key needs administration rights on every portal in its estate.
+    expect((await mint(f, { role: 'viewer' })).status).toBe(403)
     // A platform owner reaches every portal, so only an unknown portal is refused, as invalid.
     const owner = f.sessionFor('owner')
     const unknown = await f.requestAs(owner, '/api/t/a/mcp/keys', {
