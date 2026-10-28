@@ -164,6 +164,7 @@ Keys let MCP clients and scripts act on one portal.
   each the effective role is again `min(key role, creator's current role on that portal)`, so a
   portal drops out of the key's reach as soon as the creator loses access to it. The key is listed,
   revoked and expires on the portal it was minted on, and revoking it there ends it everywhere.
+  A revoked key keeps no estate.
 - Keys minted before this release (`ck_mcp_` prefix) keep working as fixed `viewer` keys on their
   portal. They cannot be raised, and the key list marks them as legacy.
 

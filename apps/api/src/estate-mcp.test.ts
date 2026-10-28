@@ -247,6 +247,10 @@ Deno.test('AT8: an issued key gets a cited answer; the same key once revoked, an
         method: 'DELETE',
       })
       expect(revoked.status).toBe(200)
+      // A revoked key keeps no estate, so its record is one an earlier release can read again.
+      const stored = f.stores.mcpKeys.list('a')
+      expect(stored.find((row) => row.id === credential.id)).not.toHaveProperty('estate')
+      expect(stored.find((row) => row.id === expiring.credential.id)?.estate).toEqual(['b'])
       f.advance(1000)
       for (const dead of [key, expiring.key]) {
         for (const init of [rpc('tools/list'), tool('answer_estate', { question: 'Abalone?' })]) {

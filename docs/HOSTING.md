@@ -875,7 +875,8 @@ A cross-portal ask counts once on each portal it reaches, and is admitted on eve
 portal or on none. The estate MCP `answer_estate` tool also counts once on each portal it
 reaches, but each portal is admitted on its own: a portal whose asks are spent is named in the
 call's `failed_sources` as `unavailable` and the others still answer (see
-[the estate MCP endpoint](RBAC.md#estate-mcp-endpoint)). An ask is counted when it is admitted, before its answer streams, so a
+[the estate MCP endpoint](RBAC.md#estate-mcp-endpoint)). `ESTATE_SOURCE_TIMEOUT_MS`, 25000 by
+default, is how long each portal may take in such a call before it is named there as `timeout`. An ask is counted when it is admitted, before its answer streams, so a
 refused ask costs nothing upstream. A request that is refused after it was counted, for
 example by the per-minute rate limit or because its input is invalid, is given its ask back.
 A refused MCP call returns the same body as a tool error.
