@@ -103,9 +103,9 @@ describe('the guided tour', () => {
       // The band already said what this is, so the tour opens on its first step.
       let now = await state()
       expect(now.modal).toBe(true)
-      expect(now.heading).toBe('Ask a question')
+      expect(now.heading).toBe('Get a cited answer')
       expect(now.focusedHeading).toBe(true)
-      expect(now.status).toBe('Step 1 of 5: Ask a question')
+      expect(now.status).toBe('Step 1 of 5: Get a cited answer')
       expect(now.stageHidden).toBe(true)
       expect(now.tryIt?.startsWith('/t/grains/ask?ask=')).toBe(true)
 
@@ -131,29 +131,32 @@ describe('the guided tour', () => {
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Read the passages it used',
+            'See where an answer came from',
         'the second scene',
       )
       now = await state()
-      expect(now.status).toBe('Step 2 of 5: Read the passages it used')
+      expect(now.status).toBe('Step 2 of 5: See where an answer came from')
       expect(now.focusedHeading).toBe(true)
+      await page.keyboard.press('ArrowRight')
       await page.keyboard.press('ArrowRight')
       await page.keyboard.press('ArrowRight')
       await settle(
         page,
         () =>
-          document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Connect your research tools',
+          document.querySelector('dialog[data-demo-tour] a.rp-btn-primary')?.getAttribute(
+            'href',
+          ) === '/t/grains/tools',
         'the MCP scene',
       )
-      expect((await state()).tryIt).toBe('/t/grains/tools')
+      expect((await state()).status).toBe(`Step 5 of 5: ${(await state()).heading}`)
       await page.keyboard.press('ArrowLeft')
       await settle(
         page,
         () =>
-          document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Go straight to the cited page',
-        'the cited-page scene',
+          document.querySelector('dialog[data-demo-tour] a.rp-btn-primary')?.getAttribute(
+            'href',
+          ) === '/t/grains/ask',
+        'the gaps scene',
       )
 
       // Escape closes it and focus goes back to the control that opened it.

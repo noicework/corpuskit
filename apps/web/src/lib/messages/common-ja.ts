@@ -2,14 +2,11 @@
 export const COMMON_JA: Readonly<Record<string, string>> = {
   // The guided tour on the home page.
   'See what this platform does': 'このプラットフォームでできること',
-  'Ask a question, check where the answer came from, and open the page it cites.':
-    '質問し、回答の出典を確かめ、引用されたページを開けます。',
+  'Answers here cite their sources and say when the research collection has no direct evidence.':
+    'ここでの回答は出典を示し、研究コレクションに直接の根拠がないときはその旨を伝えます。',
   'Take the tour': 'ツアーを見る',
-  'That is the tour': 'ツアーは以上です',
-  'Pick a place to start, or close this to stay on the home page.':
-    '始める場所を選ぶか、閉じてホームページに留まってください。',
+  'Choose where to start': '始める場所を選ぶ',
   'Step {n} of {total}': 'ステップ {n} / {total}',
-  'Close the tour': 'ツアーを閉じる',
   'Next': '次へ',
   'Example': '例',
   'Ask this question': 'この質問をする',
@@ -18,51 +15,52 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Browse the Library': 'ライブラリを見る',
   'Open the document': '資料を開く',
   'Open a PDF': 'PDFを開く',
-  'Open the answer': '回答を開く',
+  'Open the answer page': '回答ページを開く',
   'Open Ask': '質問ページを開く',
   'Open Manage': '管理を開く',
   'Open the page': 'ページを開く',
   'Open the link': 'リンクを開く',
-  'Ask in your own words. The numbers in the answer link to the source behind each point, and the confidence label says how well those sources support it.':
-    '自分の言葉で質問してください。回答の番号は各ポイントの出典へのリンクで、信頼度ラベルはそれらの出典が回答をどの程度裏付けているかを示します。',
-  'Read the passages it used': '使われた箇所を読む',
-  'Under each answer, select Show retrieved sources to read the passages it used. Journey through the context takes you through them one at a time.':
-    '各回答の下の「取得した出典を表示」を選ぶと、使われた箇所を読めます。「根拠資料をたどる」では一つずつ順に確認できます。',
-  'Go straight to the cited page': '引用されたページへ直接移動する',
-  'When a citation points to a PDF, it opens the PDF at that page with the matched passage highlighted.':
-    '引用がPDFを指している場合、そのページでPDFが開き、一致した箇所が強調表示されます。',
-  'Connect your research tools': '研究ツールを接続する',
-  'If your research tool supports MCP, you can connect it to search this collection and get cited answers. Access is read-only. Tools has the connection details and says whether you need a key.':
-    'お使いの研究ツールがMCPに対応していれば、接続してこのコレクションを検索し、出典付きの回答を得られます。アクセスは読み取り専用です。接続情報とキーの要否は「ツール」にあります。',
+  'Get a cited answer': '出典付きの回答を得る',
+  'Ask in your own words. Each numbered citation links to its source.':
+    '自分の言葉で質問してください。番号付きの各出典は元の資料にリンクしています。',
+  'See where an answer came from': '回答の出どころを見る',
+  'Under an answer, "Show retrieved sources" opens the sources that were found and the passages that matched. "Journey through the context" walks through those sources one at a time.':
+    '回答の下の「取得した出典を表示」で、見つかった資料と一致した箇所を開けます。「根拠資料をたどる」はそれらの資料を一つずつ順に案内します。',
+  'Check the page behind a citation': '引用元のページを確かめる',
+  'When a citation points to a page in a PDF, it opens the PDF at that page with the matched passage highlighted and quoted.':
+    '引用がPDFのページを指している場合、そのページでPDFが開き、一致した箇所が強調表示と引用で示されます。',
+  'Connect a research tool': '研究ツールを接続する',
+  'If your research tool supports MCP, it can search this collection and request cited answers. The Tools page has the connection details and says whether you need an access key.':
+    'お使いの研究ツールがMCPに対応していれば、このコレクションを検索し、出典付きの回答を求められます。接続情報とアクセスキーの要否は「ツール」ページにあります。',
   'See which collections were used': '使われたコレクションを見る',
-  'Each answer names the collections it used and any it could not reach.':
-    '各回答には、使われたコレクションと到達できなかったコレクションが示されます。',
-  'Ask something it cannot answer': '答えられないことを質問する',
-  'When the collection has no direct evidence for a question, the answer says so and lists the closest matches. A weak answer is marked low confidence, so check its sources.':
-    'コレクションに質問の直接の根拠がない場合、回答はその旨を伝え、最も近い資料を示します。弱い回答には低い信頼度が付くので、出典を確認してください。',
+  'An answer that draws on more than one collection also lists any it could not reach.':
+    '複数のコレクションを参照した回答には、到達できなかったコレクションも示されます。',
+  'Spot weak or missing evidence': '弱い根拠や根拠の欠如に気づく',
+  'If the research collection cannot support an answer, Ask shows "No direct evidence found" and lists the closest matches, which it did not use. Treat a low-confidence answer as a lead and check its sources.':
+    '研究コレクションが回答を裏付けられない場合、質問ページは「直接の根拠は見つかりませんでした」と表示し、使用しなかった最も近い資料を示します。信頼度の低い回答は手がかりとして扱い、出典を確認してください。',
   '{count} sources · {cited} cited': '出典 {count} 件 · 引用 {cited} 件',
   'p. {page}': 'p. {page}',
   'Page {page}': '{page} ページ',
   'From page {page}': '{page} ページより',
   'Read-only': '読み取り専用',
   'MCP connector': 'MCPコネクタ',
-  'Collections used in this answer': 'この回答で使われたコレクション',
+  'Collections for this answer': 'この回答のコレクション',
   'Used': '使用',
-  'Not used': '不使用',
-  'The collection has no direct evidence about playground surfaces in snow. The closest matches are below. They were not used in an answer.':
-    'コレクションには雪の中の遊び場の表面に関する直接の根拠がありません。最も近い資料を以下に示します。回答には使用していません。',
+  'Not reached': '到達できず',
+  'The collection has no direct evidence about playground surfaces in snow.':
+    'コレクションには雪の中の遊び場の表面に関する直接の根拠がありません。',
   'Playground studies': '遊び場の研究',
   'Design guidance': '設計ガイド',
   'Archive, 1998 to 2004': 'アーカイブ（1998年から2004年）',
   // Manage > Behaviour: how the tour is offered.
   'Guided tour': 'ガイドツアー',
-  'Offers visitors a short tour from the home page. Each step shows one feature and links to it. With "Offered and opens on first visit", the tour opens by itself the first time a browser visits the home page; a browser that blocks site storage sees it on every visit. A link to the home page ending in ?tour=1 opens it on request.':
-    'ホームページから訪問者に短いツアーを提供します。各ステップは一つの機能を示し、その機能へのリンクがあります。「提供し、初回訪問時に開く」では、ブラウザが初めてホームページを開いたときにツアーが自動で開きます。サイトのストレージを拒否するブラウザでは毎回表示されます。?tour=1 で終わるホームページへのリンクで、求めに応じて開けます。',
-  'Offer the tour': 'ツアーの提供',
+  'Offers visitors a short guided tour from the home page, one feature per step, each with a button that opens it. With "Offered and opens on first visit", it opens by itself the first time a browser visits the home page, or on every visit if the browser blocks site storage. Unless the setting is Off, a home page link ending in ?tour=1 opens it.':
+    'ホームページから訪問者に短いガイドツアーを提供します。各ステップは一つの機能を示し、その機能を開くボタンがあります。「提供し、初回訪問時に開く」では、ブラウザが初めてホームページを開いたときに自動で開きます。サイトのストレージを拒否するブラウザでは毎回開きます。設定がオフでない限り、?tour=1 で終わるホームページへのリンクで開けます。',
+  'Availability': '提供',
   'Offered on the home page': 'ホームページで提供する',
   'Offered and opens on first visit': '提供し、初回訪問時に開く',
-  'The operator sets which steps show and what they say, through the configuration import.':
-    '表示するステップとその文言は、運用者が設定のインポートで指定します。',
+  'In the configuration import, the operator sets which steps show and what they say.':
+    '設定のインポートで、運用者が表示するステップとその文言を指定します。',
   'Save guided tour setting': 'ガイドツアーの設定を保存',
   'Save the guided tour setting': 'ガイドツアーの設定を保存する',
   'Guided tour setting saved.': 'ガイドツアーの設定を保存しました。',

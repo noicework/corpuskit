@@ -62,7 +62,9 @@ export function DemoTour({ config }: { config: TenantConfig }) {
   const scenes = resolveScenes(config, firstPdfId, ui)
   const heading = copy?.heading ?? ui('See what this platform does')
   const intro = copy?.intro ??
-    ui('Ask a question, check where the answer came from, and open the page it cites.')
+    ui(
+      'Answers here cite their sources and say when the research collection has no direct evidence.',
+    )
 
   function closeTour() {
     markTourDone()

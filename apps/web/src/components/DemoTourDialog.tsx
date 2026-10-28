@@ -107,8 +107,8 @@ export function DemoTourDialog({
     }
   }
 
-  const title = step.kind === 'finish' ? ui('That is the tour') : step.scene.title
-  // Only the scenes are counted, so the count agrees with the welcome's own words.
+  const title = step.kind === 'finish' ? ui('Choose where to start') : step.scene.title
+  // Only the scenes are counted and dotted; the finish is the way out, not a step.
   const position = step.kind === 'scene'
     ? ui('Step {n} of {total}', { n: step.index + 1, total: scenes.length })
     : null
@@ -117,7 +117,7 @@ export function DemoTourDialog({
     <dialog
       ref={dialogRef}
       aria-labelledby={`${id}-title`}
-      aria-describedby={`${id}-body`}
+      aria-describedby={step.kind === 'scene' ? `${id}-body` : undefined}
       data-demo-tour
       className='rp-dialog rp-tour-dialog rp-anim-fade overscroll-contain text-ink'
       onCancel={(event) => {
@@ -137,7 +137,7 @@ export function DemoTourDialog({
             <p className='rp-eyebrow min-h-[1em] text-[var(--rp-brand-fg)]' aria-hidden='true'>
               {position}
             </p>
-            <IconButton icon={X} label={ui('Close the tour')} onClick={() => close.current()} />
+            <IconButton icon={X} label={ui('Close')} onClick={() => close.current()} />
           </div>
           <h2
             id={`${id}-title`}
@@ -147,11 +147,13 @@ export function DemoTourDialog({
           >
             {title}
           </h2>
-          <div id={`${id}-body`} className='mt-3 space-y-3 text-base leading-relaxed text-ink-2'>
-            {step.kind === 'finish'
-              ? <p>{ui('Pick a place to start, or close this to stay on the home page.')}</p>
-              : <p>{step.scene.body}</p>}
-          </div>
+          {step.kind === 'scene'
+            ? (
+              <p id={`${id}-body`} className='mt-3 text-base leading-relaxed text-ink-2'>
+                {step.scene.body}
+              </p>
+            )
+            : null}
           {step.kind === 'scene'
             ? <TryIt scene={step.scene} slug={slug} onGo={() => close.current()} />
             : null}
@@ -178,12 +180,14 @@ export function DemoTourDialog({
             : null}
           <div className='mt-auto flex flex-wrap items-center gap-x-3 gap-y-3 pt-6'>
             <div className='flex items-center gap-1.5' aria-hidden='true'>
-              {steps.map((_, index) => (
-                <span
-                  key={index}
-                  className={`rp-tour-dot${index === at ? ' rp-tour-dot-active' : ''}`}
-                />
-              ))}
+              {step.kind === 'scene'
+                ? scenes.map((scene, index) => (
+                  <span
+                    key={scene.id}
+                    className={`rp-tour-dot${index === at ? ' rp-tour-dot-active' : ''}`}
+                  />
+                ))
+                : null}
             </div>
             <div className='ml-auto flex shrink-0 items-center gap-2'>
               {at > 0

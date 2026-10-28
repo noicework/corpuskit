@@ -462,11 +462,11 @@ function DemoTourSetting({ slug }: { slug: string }) {
         className='rp-admin-section-head'
         title={ui('Guided tour')}
         description={ui(
-          'Offers visitors a short tour from the home page. Each step shows one feature and links to it. With "Offered and opens on first visit", the tour opens by itself the first time a browser visits the home page; a browser that blocks site storage sees it on every visit. A link to the home page ending in ?tour=1 opens it on request.',
+          'Offers visitors a short guided tour from the home page, one feature per step, each with a button that opens it. With "Offered and opens on first visit", it opens by itself the first time a browser visits the home page, or on every visit if the browser blocks site storage. Unless the setting is Off, a home page link ending in ?tour=1 opens it.',
         )}
       />
       <label className='mt-4 block text-sm text-ink-2'>
-        <span className='block font-medium text-ink'>{ui('Offer the tour')}</span>
+        <span className='block font-medium text-ink'>{ui('Availability')}</span>
         <select
           className='rp-input rp-select mt-1.5 w-full max-w-md'
           value={mode}
@@ -480,7 +480,7 @@ function DemoTourSetting({ slug }: { slug: string }) {
       </label>
       <p className='mt-1 text-xs text-ink-3'>
         {ui(
-          'The operator sets which steps show and what they say, through the configuration import.',
+          'In the configuration import, the operator sets which steps show and what they say.',
         )}
       </p>
       <div className='mt-3 flex items-center gap-3'>

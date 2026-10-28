@@ -10,13 +10,17 @@ import {
  * goes. Pure functions, so the dialog and its tests share one reading of `copy.demoTour`.
  */
 
-/** The scenes a portal gets when its copy lists none. Participation is off until it is built. */
+/**
+ * The scenes a portal gets when its copy lists none: the evidence arc first (an answer, its
+ * sources, the cited page, what happens without evidence), then the connector, whose audience
+ * is narrowest. Participation is off until it is built.
+ */
 export const DEFAULT_SCENE_IDS: readonly DemoTourSceneId[] = [
   'federated',
   'provenance',
   'cited-page',
-  'mcp',
   'gaps',
+  'mcp',
 ]
 
 type SceneTarget = { kind: 'ask'; question: string } | {
@@ -50,25 +54,23 @@ function builtIn(
   switch (id) {
     case 'federated':
       return {
-        title: ui('Ask a question'),
-        body: ui(
-          'Ask in your own words. The numbers in the answer link to the source behind each point, and the confidence label says how well those sources support it.',
-        ),
+        title: ui('Get a cited answer'),
+        body: ui('Ask in your own words. Each numbered citation links to its source.'),
         target: ask(suggested[0]),
       }
     case 'provenance':
       return {
-        title: ui('Read the passages it used'),
+        title: ui('See where an answer came from'),
         body: ui(
-          'Under each answer, select Show retrieved sources to read the passages it used. Journey through the context takes you through them one at a time.',
+          'Under an answer, "Show retrieved sources" opens the sources that were found and the passages that matched. "Journey through the context" walks through those sources one at a time.',
         ),
         target: ask(suggested[1] ?? suggested[0]),
       }
     case 'cited-page':
       return {
-        title: ui('Go straight to the cited page'),
+        title: ui('Check the page behind a citation'),
         body: ui(
-          'When a citation points to a PDF, it opens the PDF at that page with the matched passage highlighted.',
+          'When a citation points to a page in a PDF, it opens the PDF at that page with the matched passage highlighted and quoted.',
         ),
         target: firstPdfId
           ? {
@@ -80,23 +82,25 @@ function builtIn(
       }
     case 'mcp':
       return {
-        title: ui('Connect your research tools'),
+        title: ui('Connect a research tool'),
         body: ui(
-          'If your research tool supports MCP, you can connect it to search this collection and get cited answers. Access is read-only. Tools has the connection details and says whether you need a key.',
+          'If your research tool supports MCP, it can search this collection and request cited answers. The Tools page has the connection details and says whether you need an access key.',
         ),
         target: { kind: 'link', href: '/tools' },
       }
     case 'participation':
       return {
         title: ui('See which collections were used'),
-        body: ui('Each answer names the collections it used and any it could not reach.'),
-        target: { kind: 'link', href: '/agent' },
+        body: ui(
+          'An answer that draws on more than one collection also lists any it could not reach.',
+        ),
+        target: { kind: 'link', href: '/agent', label: ui('Open the answer page') },
       }
     case 'gaps':
       return {
-        title: ui('Ask something it cannot answer'),
+        title: ui('Spot weak or missing evidence'),
         body: ui(
-          'When the collection has no direct evidence for a question, the answer says so and lists the closest matches. A weak answer is marked low confidence, so check its sources.',
+          'If the research collection cannot support an answer, Ask shows "No direct evidence found" and lists the closest matches, which it did not use. Treat a low-confidence answer as a lead and check its sources.',
         ),
         target: { kind: 'link', href: '/ask' },
       }
@@ -131,7 +135,6 @@ export function actionLabel(
   if (path === '/tools') return ui('Open Tools')
   if (path === '/library') return ui('Open the Library')
   if (path.startsWith('/library/')) return ui('Open the document')
-  if (path === '/agent') return ui('Open the answer')
   if (path === '/ask' || path.startsWith('/ask/')) return ui('Open Ask')
   if (path.startsWith('/manage')) return ui('Open Manage')
   return target.href.startsWith('/') ? ui('Open the page') : ui('Open the link')

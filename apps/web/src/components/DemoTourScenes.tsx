@@ -36,7 +36,7 @@ const SOURCES: ScoredResource[] = [
     citedCount: 1,
     matchedPage: 4,
     matchedPassage:
-      'Under tree canopy, the rubber surface stayed 10 to 15°C cooler than in open sun on each afternoon measured.',
+      'On each afternoon measured, the rubber surface under tree canopy was 10 to 15°C cooler than in open sun.',
   },
   {
     id: 'tour-cool-play-2019',
@@ -56,9 +56,11 @@ const CITATIONS: Citation[] = [
   { index: 2, resourceId: 'tour-cool-play-2019', title: SOURCES[1]!.title },
 ]
 
-const QUESTION = 'Does shade cover reduce heat stress in playgrounds?'
+const QUESTION = 'Does shade cover keep playground surfaces cooler?'
 const ANSWER =
-  'The sources measure surface temperature, not heat stress. Over one summer, rubber surfaces under tree canopy were 10 to 15°C cooler than in open sun [1]. A council design guide recommends canopy over shade sails for lasting shade [2].'
+  'On the afternoons measured in one study, rubber surfaces under tree canopy were 10 to 15°C cooler than surfaces in open sun [1]. A design guide for councils recommends trees for long-term shade, with shade sails while the trees grow [2].'
+const CITED_LINE =
+  'On the afternoons measured in one study, rubber surfaces under tree canopy were 10 to 15°C cooler than surfaces in open sun [1].'
 const GAP_QUESTION = 'How do playground surfaces hold up in snow?'
 
 function prefersReducedMotion(): boolean {
@@ -256,7 +258,7 @@ function CitedPageScene({ slug }: { slug: string }) {
       <div className='rp-card p-4'>
         <span className={opened ? '' : 'rp-tour-glow rounded-[var(--rp-radius-chip)]'}>
           <AnswerText
-            text='Surfaces under tree canopy were 10 to 15°C cooler than in open sun [1].'
+            text={CITED_LINE}
             citations={CITATIONS}
             sources={SOURCES}
             slug={slug}
@@ -336,7 +338,7 @@ function ParticipationScene() {
   ]
   return (
     <div className='rp-card p-4'>
-      <p className='rp-eyebrow text-ink-3'>{ui('Collections used in this answer')}</p>
+      <p className='rp-eyebrow text-ink-3'>{ui('Collections for this answer')}</p>
       <ul className='mt-3 divide-y divide-[var(--rp-line)]'>
         {rows.map((row, index) => (
           <li key={row.name} className='py-2'>
@@ -348,7 +350,7 @@ function ParticipationScene() {
                     row.takesPart ? 'rp-badge-ok' : 'rp-badge-quiet'
                   }`}
                 >
-                  {row.takesPart ? ui('Used') : ui('Not used')}
+                  {row.takesPart ? ui('Used') : ui('Not reached')}
                 </span>
               </div>
             </Reveal>
@@ -372,9 +374,7 @@ function GapsScene() {
             <div className='rp-card p-4'>
               <span className='rp-badge rp-badge-quiet'>{ui('No direct evidence found')}</span>
               <p className='rp-prose mt-3 text-sm text-ink-2'>
-                {ui(
-                  'The collection has no direct evidence about playground surfaces in snow. The closest matches are below. They were not used in an answer.',
-                )}
+                {ui('The collection has no direct evidence about playground surfaces in snow.')}
               </p>
               <p className='rp-eyebrow mt-4 border-t border-line pt-3 text-ink-3'>
                 {ui('closest matches, not used')}

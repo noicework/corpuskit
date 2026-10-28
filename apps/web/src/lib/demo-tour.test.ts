@@ -18,8 +18,8 @@ Deno.test('the built-in script shows every scene but participation, each with on
     '/ask?ask=Which%20talks%20cover%20upgrades%3F',
     '/ask?ask=What%20changed%20last%20year%3F',
     '/library/pdf-1',
-    '/tools',
     '/ask',
+    '/tools',
   ])
   expect(scenes.map((scene) => scene.asks)).toEqual([true, true, false, false, false])
   expect(scenes.every((scene) => scene.title && scene.body)).toBe(true)
@@ -28,11 +28,11 @@ Deno.test('the built-in script shows every scene but participation, each with on
     'Ask this question',
     'Ask this question',
     'Open a PDF',
-    'Open Tools',
     'Open Ask',
+    'Open Tools',
   ])
   expect(scenes[0]!.question).toBe('Which talks cover upgrades?')
-  expect(scenes[3]!.question).toBeUndefined()
+  expect(scenes[4]!.question).toBeUndefined()
 })
 
 Deno.test('a collection without a PDF opens the Library, and a portal without questions opens Ask empty', () => {
@@ -69,14 +69,14 @@ Deno.test("a portal's scene list, words and targets replace the built-in ones", 
   expect(scenes.map((scene) => [scene.id, scene.title, scene.href, scene.asks])).toEqual([
     ['gaps', 'Ask the unanswerable', '/ask?ask=What%20is%20on%20next%20year%3F', true],
     ['participation', 'See which collections were used', '/agent', false],
-    ['cited-page', 'Go straight to the cited page', '/library/report-7?page=4', false],
-    ['mcp', 'Connect your research tools', 'https://example.org/agents', false],
+    ['cited-page', 'Check the page behind a citation', '/library/report-7?page=4', false],
+    ['mcp', 'Connect a research tool', 'https://example.org/agents', false],
     ['federated', 'Federate', '/ask?ask=Which%20talks%20cover%20upgrades%3F', true],
   ])
   expect(scenes[3]!.body).toBe('Our own agent guide.')
   expect(scenes.map((scene) => scene.action)).toEqual([
     'Ask this question',
-    'Open the answer',
+    'Open the answer page',
     'Open the document',
     'Open the link',
     'Ask this question',

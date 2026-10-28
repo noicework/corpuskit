@@ -1242,9 +1242,9 @@ hero's suggestions take.
 | `federated` | A cited answer, with its confidence label (the agent page's composed answer, once it exists) | Ask, with the portal's first suggested question; Ask itself when the portal has none |
 | `provenance` | The stages an answer passes through, then Show retrieved sources and Journey through the context | Ask, with the portal's second suggested question |
 | `cited-page` | A citation opening its PDF at the page, with the matched passage highlighted | The collection's first PDF in the Library; the Library itself until there is one |
+| `gaps` | A question the collection cannot answer, declined with the closest matches | Ask itself, unless the portal sets a question it knows the collection cannot answer |
 | `mcp` | The MCP connector an external research tool uses | `/tools` |
 | `participation` | Which collections an answer used | `/agent` |
-| `gaps` | A question the collection cannot answer, declined with the closest matches | Ask itself, unless the portal sets a question it knows the collection cannot answer |
 
 Without further configuration the tour shows every scene but `participation`, in that order,
 in the portal's language, and every illustration is labelled as an example. `copy.demoTour`, set through the configuration import, replaces the
