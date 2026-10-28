@@ -84,6 +84,9 @@ export function ResourceThumb({
   const requested = requestedSrc === src
   const loaded = loadedSrc === src
   const failed = failedSrc === src
+  // The shimmer runs only while the image is in flight: not before it is requested, and never
+  // under a loaded image or after a failed one.
+  const inFlight = requested && !loaded && !failed
   const TypeIcon = TYPE_ICONS[type] ?? File
   const label = labelOverride ?? ui(resourceThumbLabel(type))
 
@@ -117,7 +120,7 @@ export function ResourceThumb({
     >
       <div
         className={`rp-thumb-placeholder ${
-          failed ? 'rp-thumb-placeholder-static' : 'rp-thumb-placeholder-loading'
+          inFlight ? 'rp-thumb-placeholder-loading' : 'rp-thumb-placeholder-static'
         }`}
       >
         <div className='rp-thumb-placeholder-mark'>
