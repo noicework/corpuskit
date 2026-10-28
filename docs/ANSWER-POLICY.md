@@ -96,6 +96,15 @@ is reported as unanswered. Settings erase with `configuration`; action rows eras
 configuration history follows existing audit retention and portal erasure. There is no new erased
 record kind, store, secret or background job.
 
+## Upgrade and rollback
+
+No environment variable, dependency, database migration or new provider capability is required.
+Previously stored custom prompts become additional instructions; they no longer replace the
+built-in prompt. Older releases do not enforce the new guardrails, even if their configuration
+remains in storage, and an older settings editor can discard them on save. Keep the enforcing
+release available when planning a rollback. A native agent's upstream prompt remains outside the
+portal preferences editor.
+
 ## Local review
 
 `e2e/prompts-guardrails.test.ts` runs the real app against the DoubleProvider. It edits settings

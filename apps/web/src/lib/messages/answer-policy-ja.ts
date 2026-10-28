@@ -1,4 +1,8 @@
 export const ANSWER_POLICY_JA: Readonly<Record<string, string>> = {
+  'This portal cannot answer questions about that topic.':
+    'このポータルでは、その話題に関する質問には回答できません。',
+  'This answer has been withheld under the portal answer policy.':
+    'ポータルの回答方針に従い、この回答は非表示にしました。',
   'Additional answer instructions': '回答への追加指示',
   'Appended after built-in grounding instructions for Ask, search answers and composed agent answers on this portal. They cannot remove grounding or citation checks. Leave empty for the built-in instructions only.':
     'このポータルの質問、検索回答、エージェントの統合回答で、標準の根拠指示の後に追加されます。根拠や引用の確認は解除できません。空欄の場合は標準の指示のみを使用します。',
@@ -31,6 +35,15 @@ export const ANSWER_POLICY_JA: Readonly<Record<string, string>> = {
   'Save answer settings': '回答設定を保存',
   'Check the instruction, phrase, message and length limits before saving.':
     '保存する前に、指示、語句、メッセージ、回答文字数の制限を確認してください。',
+  'Additional answer instructions must be 2000 characters or fewer.':
+    '回答への追加指示は2000文字以内で入力してください。',
+  'Use no more than 50 phrases of 120 characters each.':
+    '語句は各120文字以内、最大50件で入力してください。',
+  'The contact line must be 240 characters or fewer.': '連絡先は240文字以内で入力してください。',
+  'Answer length must be a whole number from 100 to 20,000, or empty.':
+    '回答の文字数は100～20,000の整数で入力するか、空欄にしてください。',
+  'Refusal and withheld messages must contain 1 to 500 characters.':
+    '拒否と非表示のメッセージは1～500文字で入力してください。',
   'Questions refused by policy': '設定により拒否された質問',
   'Answers withheld for blocked terms': '禁止語句により非表示にした回答',
   'Answers withheld for length': '文字数により非表示にした回答',

@@ -56,11 +56,16 @@ function validRouting(value: Routing): Routing {
 }
 
 /**
- * Ask system prompt editor. Loads the current prompt (if any), lets the
- * librarian override it, and saves straight back through the admin API.
+ * Additional answer instructions and private guardrails. Built-in grounding remains
+ * server-owned; drafts apply only when the administrator saves through the admin API.
  */
 function AskPromptEditor({ slug }: { slug: string }) {
   const { ui } = usePortalLocale()
+  const defaultGuardrails = () =>
+    AnswerGuardrailsSchema.parse({
+      refusalMessage: ui('This portal cannot answer questions about that topic.'),
+      withheldMessage: ui('This answer has been withheld under the portal answer policy.'),
+    })
 
   const { runExplicit, sessionAccess, sessionAllowed } = usePermissionAdminAccess(
     'behaviour.write',
@@ -71,7 +76,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
   const assertCurrent = () => authority.controller.assertCurrent(context)
   const [value, setValue] = useState('')
   const [images, setImages] = useState(false)
-  const [guardrails, setGuardrails] = useState(() => AnswerGuardrailsSchema.parse({}))
+  const [guardrails, setGuardrails] = useState(defaultGuardrails)
   // D8-01: an answer no citation could be tied to is shown with its sources consulted unless
   // the portal refuses such answers.
   const [showUnlinked, setShowUnlinked] = useState(true)
@@ -90,7 +95,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
     if (data && !loaded) {
       setValue(data.ask ?? '')
       setImages(data.images ?? false)
-      setGuardrails(data.guardrails ?? AnswerGuardrailsSchema.parse({}))
+      setGuardrails(data.guardrails ?? defaultGuardrails())
       setShowUnlinked(data.uncitedAnswers !== 'refuse')
       setLoaded(true)
     }
@@ -108,7 +113,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
       if (result === undefined) return
       setValue(result.ask ?? '')
       setImages(result.images ?? false)
-      setGuardrails(result.guardrails ?? AnswerGuardrailsSchema.parse({}))
+      setGuardrails(result.guardrails ?? defaultGuardrails())
       setShowUnlinked(result.uncitedAnswers !== 'refuse')
       setLoaded(true)
     } catch (err) {
@@ -125,22 +130,43 @@ function AskPromptEditor({ slug }: { slug: string }) {
   }
 
   const onSave = async () => {
-    if (
-      !PortalPromptsSchema.safeParse({
-        ask: value,
-        guardrails: {
-          ...guardrails,
-          outOfScope: guardrails.outOfScope.map((s) => s.trim()).filter(Boolean),
-          blockedTerms: guardrails.blockedTerms.map((s) => s.trim()).filter(Boolean),
-        },
-      }).success
-    ) {
+    const checked = PortalPromptsSchema.safeParse({
+      ask: value,
+      guardrails: {
+        ...guardrails,
+        outOfScope: guardrails.outOfScope.map((s) => s.trim()).filter(Boolean),
+        blockedTerms: guardrails.blockedTerms.map((s) => s.trim()).filter(Boolean),
+      },
+    })
+    if (!checked.success) {
+      const field = checked.error.issues[0]?.path.filter((part) => typeof part === 'string').at(-1)
+      const explanation = field === 'ask'
+        ? 'Additional answer instructions must be 2000 characters or fewer.'
+        : field === 'outOfScope' || field === 'blockedTerms'
+        ? 'Use no more than 50 phrases of 120 characters each.'
+        : field === 'contactLine'
+        ? 'The contact line must be 240 characters or fewer.'
+        : field === 'maxAnswerLength'
+        ? 'Answer length must be a whole number from 100 to 20,000, or empty.'
+        : 'Refusal and withheld messages must contain 1 to 500 characters.'
       setMessage(
         messageFor(
           'error',
-          ({ ui }) => ui('Check the instruction, phrase, message and length limits before saving.'),
+          ({ ui }) => ui(explanation),
         ),
       )
+      const selector = field === 'ask'
+        ? '[data-behaviour-prompt]'
+        : field === 'refusalMessage'
+        ? '#policy-refusal'
+        : field === 'withheldMessage'
+        ? '#policy-withheld'
+        : field === 'contactLine'
+        ? '#policy-contact'
+        : field === 'maxAnswerLength'
+        ? '#policy-length'
+        : `#policy-${field}`
+      document.querySelector<HTMLElement>(selector)?.focus()
       return
     }
     setBusy(true)
@@ -277,7 +303,7 @@ function AskPromptEditor({ slug }: { slug: string }) {
         onChange={setGuardrails}
         disabled={busy || !loaded}
         onReset={() => {
-          setGuardrails(AnswerGuardrailsSchema.parse({}))
+          setGuardrails(defaultGuardrails())
           setMessage(messageFor('ok', ({ ui }) => ui('Default settings restored. Save to apply.')))
         }}
       />
@@ -466,7 +492,7 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
 }
 
 /**
- * Behaviour: the portal's grounded-answer system prompt and its search
+ * Behaviour: the portal's answer preferences, guardrails and its search
  * configurations. Both are platform-facing settings, not content.
  */
 function BehaviourPanelContent({ slug }: { slug: string }) {

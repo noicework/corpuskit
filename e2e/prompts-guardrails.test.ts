@@ -115,6 +115,16 @@ Deno.test('Manage answer settings, refused and withheld answers, isolation, Insi
     await fill(page, '#policy-refusal', 'Please ask about the research collection.')
     await fill(page, '#policy-withheld', 'The portal team has withheld this answer.')
     await fill(page, '#policy-contact', 'Contact: help@example.test')
+    await fill(page, '#policy-length', '99')
+    await page.evaluate(() =>
+      document.querySelector<HTMLButtonElement>('[data-behaviour-save]')!.click()
+    )
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('[role=alert]')].some((node) =>
+        node.textContent?.includes('Answer length must be a whole number')
+      )
+    )
+    expect(await page.evaluate(() => document.activeElement?.id)).toBe('policy-length')
     await fill(page, '#policy-length', '1000')
     await save(page)
     expect(server.tenants.promptsFor('marine').ask).toBe('Explain specialist terms.')
@@ -213,6 +223,38 @@ Deno.test('Manage answer settings, refused and withheld answers, isolation, Insi
     await save(page)
     expect(server.tenants.promptsFor('marine').ask).toBeUndefined()
     expect(server.tenants.promptsFor('marine').guardrails?.blockedTerms).toEqual([])
+    server.tenants.patch('marine', {
+      prompts: {},
+      languagePolicy: { defaultLanguage: 'ja', availableLanguages: ['ja', 'en'] },
+    })
+    await page.goto(`${server.url}/t/marine/manage?tab=behaviour`)
+    await page.waitForSelector('[data-behaviour-prompt]:not(:disabled)')
+    await page.waitForFunction(() => document.documentElement.lang === 'ja')
+    expect(
+      await page.evaluate(() =>
+        document.querySelector<HTMLTextAreaElement>('#policy-refusal')!.value
+      ),
+    )
+      .toBe('このポータルでは、その話題に関する質問には回答できません。')
+    expect(
+      await page.evaluate(() =>
+        document.querySelector<HTMLTextAreaElement>('#policy-withheld')!.value
+      ),
+    )
+      .toBe('ポータルの回答方針に従い、この回答は非表示にしました。')
+  } catch (error) {
+    console.log(
+      'Answer policy browser state',
+      await page.evaluate(() => ({
+        path: location.pathname,
+        language: document.documentElement.lang,
+        focus: document.activeElement?.id,
+        alerts: [...document.querySelectorAll('[role=alert]')].map((e) => e.textContent),
+        length: document.querySelector<HTMLInputElement>('#policy-length')?.value,
+        text: document.body.innerText.slice(-900),
+      })),
+    )
+    throw error
   } finally {
     await page.close()
     await browser.close()
