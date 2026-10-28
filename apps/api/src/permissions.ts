@@ -154,7 +154,11 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/export', 'audit.export', 'portal', {
+    operator: true,
     subActions: [{ action: 'portal.export.bundle', permission: 'audit.export', scope: 'portal' }],
+  }),
+  entry('http', 'POST', '/api/admin/t/:slug/import', 'portal.create', 'platform', {
+    operator: true,
   }),
   entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),
   entry('http', 'GET', '/api/admin/audit/export', 'audit.export', 'platform'),
@@ -211,6 +215,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['tenants', ['setAlias', 'removeAlias'], 'portal.create', 'platform'],
     ['tenants', ['remove'], 'portal.delete', 'platform'],
     // Erasure of a deleted portal's records; `erasure.erase` is the one atomic unit around them.
+    ['restore', ['apply'], 'portal.create', 'platform'],
     ['erasure', ['erase'], 'portal.create', 'platform'],
     ['lifecycle', ['erase'], 'portal.create', 'platform'],
     ['tenants', ['erase'], 'portal.create', 'platform'],

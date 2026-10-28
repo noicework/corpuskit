@@ -419,6 +419,17 @@ export class TenantStore {
     this.committed = structuredClone(this.snapshot())
   }
 
+  /** Refresh cached registry state after an atomic runtime restore. */
+  static reload(store: TenantStore): void {
+    const fresh = new TenantStore({ TENANTS_PATH: store.path })
+    store.custom = fresh.custom
+    store.overrides = fresh.overrides
+    store.disabled = fresh.disabled
+    store.retired = fresh.retired
+    store.aliasRecords = fresh.aliasRecords
+    store.committed = structuredClone(store.snapshot())
+  }
+
   /** The portal's configuration, with its primary alias as the canonical hostname. */
   get(slug: string): TenantConfig | undefined {
     const config = this.own(slug)

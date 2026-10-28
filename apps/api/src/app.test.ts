@@ -531,6 +531,7 @@ describe('independent admin route permission matrix', () => {
         ...ACCESS_ROUTE_CASES.map(({ method, path }) => `${method} ${path}`),
         ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
         'GET /api/admin/t/:slug/export',
+        'POST /api/admin/t/:slug/import',
         'PATCH /api/admin/t/:slug/access',
         // This family's full role and mutation matrix lives in enforcement.test.ts.
         'GET /api/admin/t/:slug/evaluations',

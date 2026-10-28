@@ -1,4 +1,10 @@
 import {
+  configurationRecord,
+  type PortalBackup,
+  type PortalBackupStore,
+  restoreCounts,
+} from './portal-backup.ts'
+import {
   LabelsetSchema,
   type ResourceSummary,
   ResourceSummarySchema,
@@ -25,6 +31,7 @@ export const PORTAL_EXPORT_MAX_AUDIT_EVENTS = 20_000
 export const PORTAL_EXPORT_MAX_ROUTING_RECORDS = 5_000
 
 interface ExportServices {
+  backup?: PortalBackupStore
   provider: RetrievalProvider
   tenants: TenantStoreApi
   insights: InsightsStoreApi
@@ -228,13 +235,85 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
               }
             })(),
           )
-          const evaluationNote =
-            'No persisted evaluation set or evaluation result store is available in this version. Routing decisions are supplied separately in routing.json.'
+          let evaluationSets: unknown[] = []
+          let evaluationResults: unknown[] = []
+          if (services.backup) {
+            const records = services.backup.capture(slug, includeFeedback)
+            records.push({
+              kind: 'lifecycle',
+              key: '',
+              value: { v: 1, lifecycle: services.lifecycle.get(slug), lastActivityAt: null },
+            })
+            records.unshift(
+              configurationRecord(
+                services.configuration(slug),
+                prompts,
+                services.tenants.isDisabled(slug),
+              ),
+            )
+            evaluationSets = records.filter((r) => r.kind === 'evaluationSets').map((r) =>
+              JSON.parse((r.value as { json: string }).json)
+            )
+            evaluationResults = records.filter((r) => r.kind === 'evaluationRuns').map((r) =>
+              JSON.parse((r.value as { json: string }).json)
+            )
+            counts.evaluationSets = evaluationSets.length
+            counts.evaluationResults = evaluationResults.length
+            const audit: AuditEvent[] = []
+            let cursor: { at: string; id: string } | undefined
+            for (;;) {
+              const rows = state.audit.read({
+                scope,
+                snapshotSequence: snapshot.watermark,
+                cursor,
+                limit: 500,
+              })
+              audit.push(...rows)
+              if (audit.length > PORTAL_EXPORT_MAX_AUDIT_EVENTS) throw new ExportLimitError()
+              if (rows.length < 500) break
+              const last = rows.at(-1)!
+              cursor = { at: last.at, id: last.id }
+            }
+            const backup: PortalBackup = {
+              version: 1,
+              portal: slug,
+              records: records.map((row) => ({ ...row, value: redactExport(row.value) })),
+              audit: audit.map((row, index) => ({
+                ...row,
+                id: redactExportText(row.id) === row.id ? row.id : `redacted-audit-${index}`,
+                request_id: redactExportText(row.request_id) === row.request_id
+                  ? row.request_id
+                  : 'redacted-request',
+                actor_id: row.actor_id && redactExportText(row.actor_id) !== row.actor_id
+                  ? null
+                  : row.actor_id,
+                actor_label:
+                  row.actor_label && redactExportText(row.actor_label) !== row.actor_label
+                    ? null
+                    : row.actor_label,
+                target_id: row.target_id && redactExportText(row.target_id) !== row.target_id
+                  ? null
+                  : row.target_id,
+                detail_json: JSON.stringify(redactExport(JSON.parse(row.detail_json))),
+              })),
+            }
+            await zip.add('portal-records.json', [JSON.stringify(backup) + '\n'])
+            Object.assign(counts, { restore: restoreCounts(backup) })
+          }
+          const evaluationNote = services.backup
+            ? 'Persisted evaluation definitions and retained runs are included. Schedules require fresh authorisation after restore.'
+            : 'No persisted evaluation set or evaluation result store is available in this embedded application. Routing decisions are supplied separately in routing.json.'
           await zip.add('evaluations.json', [
-            json({ status: 'unavailable', sets: [], results: [], note: evaluationNote }),
+            json({
+              status: services.backup ? 'available' : 'unavailable',
+              sets: evaluationSets,
+              results: evaluationResults,
+              note: evaluationNote,
+            }),
           ])
           await zip.add('manifest.json', [json({
             schemaVersion: 1,
+            ...(services.backup ? { restoreVersion: 1 } : {}),
             portal: slug,
             startedAt,
             completedAt: new Date().toISOString(),
@@ -252,7 +331,7 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
             notes: [
               evaluationNote,
               'File and branding links require portal access. Original binary files are not embedded.',
-              'Usage insights are the 90-day management summary, with the latest 25 asks and 30 gaps.',
+              'insights.json is a 90-day management summary. portal-records.json, when present, holds the retained local records for restore.',
               'Audit rows are fixed at the snapshot before resource retrieval; this export completion is recorded after bundle preparation.',
               'Provider pages and local stores are read during the export, not as one atomic cross-system snapshot.',
               ...(includeFeedback

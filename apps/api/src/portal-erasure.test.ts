@@ -73,6 +73,7 @@ const anonymous: ResearchOwner = { kind: 'anonymous', clientId: 'visitor-1' }
  * and the erasure tests below then prove that erasure removes whatever it wrote.
  */
 const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string) => unknown> = {
+  portalBackup: () => undefined, // Adapts existing stores; it retains no backup records.
   duplicates: (f, slug) => f.stores.duplicates.decide(slug, 'res-1~res-2', 'keep-both'),
   answerRecords: (f, slug) =>
     f.stores.answerRecords.record(slug, answerRecordFixture(slug, f.now())),

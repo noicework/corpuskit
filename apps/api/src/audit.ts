@@ -298,6 +298,12 @@ const fields = {
   peerId: (value: unknown): value is string =>
     typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,39}$/.test(value),
   peerKind: member(['arag-kb', 'arag-mcp']),
+  originalEventId: (value: unknown): value is string =>
+    typeof value === 'string' && identifier.test(value),
+  restoredFromPortal: (value: unknown): value is string =>
+    typeof value === 'string' && identifier.test(value),
+  restored: flag,
+  bundleId: (v: unknown): v is string => typeof v === 'string' && /^[a-f0-9]{64}$/.test(v),
   durationMs: count,
   peerFailure: member(['timeout', 'unauthorised', 'error']),
   // Whether the portal takes part in federated answers, after and before the change.
@@ -306,6 +312,7 @@ const fields = {
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
+  'portal.import.bundle': ['permission', 'bundleId', 'count', 'restored', 'code'],
   'portal.export.bundle': ['permission', 'includeFeedback', 'code'],
   'auth.external.denied': ['externalReason', 'count'],
   'portal.lifecycle.update': [
@@ -494,7 +501,15 @@ export function redactAuditDetail(
       throw new AuditWriteError()
     }
     const safe: Record<string, DetailValue> = {}
-    for (const field of actionFields[action]) {
+    for (
+      const field of [
+        ...actionFields[action],
+        'restored',
+        'bundleId',
+        'originalEventId',
+        'restoredFromPortal',
+      ] as Field[]
+    ) {
       const property = Object.getOwnPropertyDescriptor(detail, field)
       if (!property) continue
       if (!Object.hasOwn(property, 'value') || !fields[field](property.value)) {

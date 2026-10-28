@@ -45,7 +45,11 @@ export function redactExport(value: unknown, field = '', depth = 0): unknown {
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([key]) => !sensitiveField.test(key))
+        .filter(([key, item]) =>
+          !sensitiveField.test(key) ||
+          (/^(inputTokens|outputTokens|maxTokens)$/.test(key) &&
+            (item === null || typeof item === 'number'))
+        )
         .map(([key, item]) => [redactExportText(key), redactExport(item, key, depth + 1)]),
     )
   }

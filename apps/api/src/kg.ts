@@ -103,6 +103,10 @@ export class KgProposalStore {
     }
   }
 
+  static reload(store: KgProposalStore): void {
+    store.proposals = new KgProposalStore({ KG_PROPOSALS_PATH: store.path }).proposals
+  }
+
   get(slug: string): KgProposal | undefined {
     return this.proposals[slug]
   }

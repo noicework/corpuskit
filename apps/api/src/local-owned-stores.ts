@@ -1,3 +1,4 @@
+import { localPortalBackup } from './portal-backup-local.ts'
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { AnswerRecordStore, FileAnswerRecordState } from './answer-record-store.ts'
 import { EvaluationStore } from './evaluation-store.ts'
@@ -199,9 +200,11 @@ export function localOwnedStores(
   const files = (name: string, extension = 'json') => (args: unknown[]) => [
     join(dataDir, name, `${segment(args[0])}.${extension}`),
   ]
+  let sharedEnrichments: EnrichmentStore | undefined
   const attach = (
     shared: { bindings: BindingStore; sources: SourceStore; enrichments: EnrichmentStore },
   ) => {
+    sharedEnrichments = shared.enrichments
     shared.bindings.setMutationBoundary((change, path, write) => {
       if (change.operation === 'bindings.migrate') return write()
       guard()
@@ -251,7 +254,37 @@ export function localOwnedStores(
       return result
     },
   })
+  const tenantStore = tenantEnv ? wrap('tenants', new TenantStore(tenantEnv, boundary)) : undefined
+  const kgStore = wrap(
+    'kgProposals',
+    new KgProposalStore({
+      ...env,
+      KG_PROPOSALS_PATH: env.KG_PROPOSALS_PATH ?? join(dataDir, 'kg-proposals.json'),
+    }, boundary),
+  )
+  const backup = localPortalBackup(dataDir, database, env, () => {
+    if (tenantStore) TenantStore.reload(tenantStore)
+    if (sharedEnrichments) EnrichmentStore.invalidate(sharedEnrichments)
+    KgProposalStore.reload(kgStore)
+  })
   return {
+    portalBackup: {
+      capture: backup.capture,
+      restore: (
+        slug: string,
+        records: Parameters<typeof backup.restore>[1],
+        receipt: string,
+        complete: () => void,
+      ) =>
+        operations.run(
+          { name: 'restore.apply', args: [slug] },
+          () =>
+            backup.restore(slug, records, receipt, () => {
+              complete()
+              boundary.complete()
+            }),
+        ),
+    },
     localMutations,
     duplicates: wrap(
       'duplicates',
@@ -284,19 +317,13 @@ export function localOwnedStores(
     siteFeedback: wrap('siteFeedback', new SiteFeedbackStore(dataDir), files('site-feedback')),
     routing: wrap('routing', new RoutingLog(dataDir), files('routing', 'jsonl')),
     suggestions: wrap('suggestions', new SuggestionStore(dataDir), files('suggestions')),
-    kgProposals: wrap(
-      'kgProposals',
-      new KgProposalStore({
-        ...env,
-        KG_PROPOSALS_PATH: env.KG_PROPOSALS_PATH ?? join(dataDir, 'kg-proposals.json'),
-      }, boundary),
-    ),
+    kgProposals: kgStore,
     branding: wrap(
       'branding',
       new FileBrandingStore(env.BRANDING_PATH ?? join(dataDir, 'branding'), boundary),
     ),
     lifecycle: wrap('lifecycle', new FileLifecycleStore(dataDir, boundary)),
-    ...(tenantEnv ? { tenants: wrap('tenants', new TenantStore(tenantEnv, boundary)) } : {}),
+    ...(tenantStore ? { tenants: tenantStore } : {}),
     sessions: wrap('sessions', new SessionsStore(dataDir, boundary)),
     watches: wrap('watches', new WatchStore(dataDir, boundary)),
     investigations: wrap('investigations', new InvestigationStore(dataDir, boundary)),

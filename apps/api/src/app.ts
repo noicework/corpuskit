@@ -1,3 +1,5 @@
+import { registerPortalImport } from './portal-import.ts'
+import type { PortalBackupStore } from './portal-backup.ts'
 import {
   guardAgentAnswer,
   portalAnswerPolicy,
@@ -1158,6 +1160,7 @@ export interface BuildAppOptions {
    * Makes a portal erasure one atomic unit where the runtime can (the Durable Object's SQLite
    * transaction). Without it, file stores are erased first and the audit log last.
    */
+  portalBackup?: PortalBackupStore
   erasureTransaction?: ErasureTransaction
   /**
    * Days a portal must stay suspended before a platform administrator or the operator credential
@@ -2434,7 +2437,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
     },
   })
 
+  registerPortalImport(app, {
+    store: opts.portalBackup,
+    tenants,
+    state: () => {
+      if (!opts.rbac) throw new AuthorisationError(403)
+      return opts.rbac
+    },
+    context: (c) => {
+      const context = requestContext(c.req.raw)
+      return { requestId: context.requestId, actor: context.actor! }
+    },
+    invalidate: (slug) => opts.invalidate?.(slug),
+  })
+
   registerPortalExport(app, {
+    backup: opts.portalBackup,
     provider,
     tenants,
     insights,

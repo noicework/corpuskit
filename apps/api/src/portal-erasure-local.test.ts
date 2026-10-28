@@ -31,6 +31,9 @@ type Classification =
  * that holds portal records must name the erasure store that removes them.
  */
 const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
+  portalBackup: {
+    noPortalRecords: 'adapts existing stores; temporary recovery journal cleared at startup',
+  },
   duplicates: { erasedBy: 'duplicates' },
   evaluations: { erasedBy: 'evaluations' },
   lifecycle: { erasedBy: 'lifecycle' },

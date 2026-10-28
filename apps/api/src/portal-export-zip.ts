@@ -1,6 +1,6 @@
 /** Small, store-only ZIP writer. No Node APIs, compression library or temporary files. */
 const encoder = new TextEncoder()
-const crcTable = Array.from({ length: 256 }, (_, value) => {
+export const crcTable = Array.from({ length: 256 }, (_, value) => {
   for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0)
   return value >>> 0
 })
@@ -27,7 +27,7 @@ export class ExportZip {
   private directory: BlobPart[] = []
   private bytes = 0
   private directoryBytes = 0
-  readonly entries: { path: string; bytes: number }[] = []
+  readonly entries: { path: string; bytes: number; sha256: string }[] = []
 
   constructor(private readonly maxBytes: number, private readonly signal: AbortSignal) {}
 
@@ -84,7 +84,11 @@ export class ExportZip {
     )
     this.bytes += 30 + name.length + size
     this.directoryBytes += 46 + name.length
-    this.entries.push({ path, bytes: size })
+    this.entries.push({
+      path,
+      bytes: size,
+      sha256: await sha256(await new Blob(data).arrayBuffer()),
+    })
   }
 
   finish(): Blob {
@@ -101,4 +105,11 @@ export class ExportZip {
       ]),
     ], { type: 'application/zip' })
   }
+}
+
+export async function sha256(bytes: ArrayBuffer): Promise<string> {
+  return Array.from(
+    new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)),
+    (b) => b.toString(16).padStart(2, '0'),
+  ).join('')
 }

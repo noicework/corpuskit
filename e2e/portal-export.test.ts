@@ -132,7 +132,7 @@ Deno.test('admin downloads a complete portal ZIP from local adapters, validates 
     })
     expect(JSON.parse(files.get('insights.json')!).totalAsks).toBe(1)
     expect(JSON.parse(files.get('evaluations.json')!)).toMatchObject({
-      status: 'unavailable',
+      status: 'available',
       sets: [],
       results: [],
     })
