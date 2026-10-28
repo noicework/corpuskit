@@ -16,6 +16,7 @@ import {
   McpKeyStore,
   RoutingLog,
   SessionsStore,
+  SiteFeedbackStore,
   SourceStore,
   WatchStore,
 } from './stores.ts'
@@ -249,6 +250,7 @@ export function localOwnedStores(
     erasureTransaction: <T>(slug: string, work: () => T): T => erasure.erase(slug, work) as T,
     insights: wrap('insights', new InsightsStore(dataDir), files('insights', 'jsonl')),
     feedback: wrap('feedback', new FeedbackStore(dataDir), files('feedback')),
+    siteFeedback: wrap('siteFeedback', new SiteFeedbackStore(dataDir), files('site-feedback')),
     routing: wrap('routing', new RoutingLog(dataDir), files('routing', 'jsonl')),
     suggestions: wrap('suggestions', new SuggestionStore(dataDir), files('suggestions')),
     kgProposals: wrap(

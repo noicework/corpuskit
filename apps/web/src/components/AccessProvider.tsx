@@ -16,8 +16,10 @@ import {
   AuthorityController,
   FilePickerFocus,
   registerAuthorityController,
+  sameAuthority,
 } from '../api/access-lifecycle.ts'
 import type { AuthSession } from '../api/auth.ts'
+import { focusAnchor, restoreFocus } from './return-focus.ts'
 
 interface AccessValue {
   state: { status: 'loading' | 'ready' | 'unavailable'; session: AuthSession | null }
@@ -83,16 +85,33 @@ export function AccessProvider(
       }
     }
     const blurred = () => picker.blurred(Date.now())
+    let restoring: (() => void) | undefined
     const revalidate = () => {
-      const check = picker.focused() === 'picker'
-        ? controller.revalidate(slug ?? undefined)
-        : refresh()
-      void check.catch(() => {})
+      if (picker.focused() === 'picker') {
+        void controller.revalidate(slug ?? undefined).catch(() => {})
+        return
+      }
+      // The withdrawal remounts the page. A check that confirms the same authority gives the
+      // person their place back; any other outcome leaves focus to the access gate.
+      restoring?.()
+      const before = controller.status === 'ready' ? controller.session : null
+      const anchor = before ? focusAnchor(document) : null
+      void refresh().then(() => {
+        const after = controller.session
+        if (!anchor || !before || !after || !sameAuthority(before, after)) return
+        const context = controller.context
+        restoring = restoreFocus(
+          document,
+          anchor,
+          () => controller.status === 'ready' && controller.context === context,
+        )
+      }, () => {})
     }
     document.addEventListener('click', activated, true)
     globalThis.addEventListener('blur', blurred)
     globalThis.addEventListener('focus', revalidate)
     return () => {
+      restoring?.()
       document.removeEventListener('click', activated, true)
       globalThis.removeEventListener('blur', blurred)
       globalThis.removeEventListener('focus', revalidate)
