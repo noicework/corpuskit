@@ -55,21 +55,6 @@ export function PassageCard(
       data-cited={numbers.length > 0 ? 'true' : undefined}
     >
       <div className='flex min-w-0 items-start gap-1.5'>
-        {numbers.length > 0
-          ? (
-            <span className='mt-0.5 flex shrink-0 items-center gap-1'>
-              {numbers.map((n) => (
-                <span
-                  key={n}
-                  className='inline-flex min-h-[1.25rem] min-w-[1.25rem] items-center justify-center rounded-full px-1 text-2xs font-semibold text-[var(--rp-on-accent)]'
-                  style={{ backgroundColor: 'var(--rp-accent)' }}
-                >
-                  {n}
-                </span>
-              ))}
-            </span>
-          )
-          : null}
         <FileText size='sm' className='mt-0.5 shrink-0 text-ink-3' />
         {href && internal
           ? (
@@ -89,6 +74,22 @@ export function PassageCard(
               <span className='rp-clamp-2'>{title}</span>
             </span>
           )}
+        {/* After the title, so the title holds still as citations land. */}
+        {numbers.length > 0
+          ? (
+            <span className='mt-0.5 flex shrink-0 items-center gap-1'>
+              {numbers.map((n) => (
+                <span
+                  key={n}
+                  className='inline-flex min-h-[1.25rem] min-w-[1.25rem] items-center justify-center rounded-full px-1 text-2xs font-semibold text-[var(--rp-on-accent)]'
+                  style={{ backgroundColor: 'var(--rp-accent)' }}
+                >
+                  {n}
+                </span>
+              ))}
+            </span>
+          )
+          : null}
       </div>
       {chunk.text.trim()
         ? <p className='rp-clamp-3 mt-1.5 text-xs leading-relaxed text-ink-2'>{chunk.text}</p>

@@ -269,7 +269,12 @@ describe('agent ask page', () => {
           ),
         ).filter((el) => el.getClientRects().length > 0)
         const small = controls
-          .filter((el) => el.tagName !== 'A' || !el.closest('sup'))
+          // Inline links are exempt: a marker in the prose, and a passage title whose
+          // open line below it is the comfortable target for the same document.
+          .filter((el) =>
+            el.tagName !== 'A' ||
+            (!el.closest('sup') && !el.classList.contains('rp-answer-source-title'))
+          )
           .map((el) => ({
             text: (el.textContent ?? '').trim().slice(0, 30),
             height: el.getBoundingClientRect().height,

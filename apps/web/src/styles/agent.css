@@ -85,14 +85,8 @@
   padding-left: 0.875rem;
 }
 
-/* The passage title and its open line are each a comfortable row to tap. The
- * title keeps to the top of its row so a one-line title sits beside the
- * document cue and the citation number rather than dropping below them. */
-.rp-agent-passage .rp-answer-source-title {
-  min-height: 2.75rem;
-  align-items: flex-start;
-}
-
+/* The passage's open line is the comfortable (44px) target for its document;
+ * the title above it is a text link to the same place, so it keeps text height. */
 .rp-agent-passage .rp-answer-source-link {
   min-height: 2.75rem;
   align-items: center;
