@@ -967,7 +967,23 @@ export class KnowledgeMapEngine {
     // background-tab rAF throttling. Live physics then only animates drags.
     this.sim.tick(300)
 
-    this.clearScene()
+    // Geometry can rebuild after a locale changes the surrounding chrome's
+    // height, or when an expansion refreshes the same nodes. Retain the DOM
+    // labels by identity, without detaching or reordering surviving elements.
+    const nodeLabels = new Map<string, HTMLDivElement>()
+    for (const node of data.nodes) {
+      const label = this.nodeVisuals.get(node.id)?.label
+      if (label) nodeLabels.set(node.id, label)
+    }
+    const captions = new Map<string, HTMLDivElement>()
+    if (data.layout === 'grouped' && ordered.size > 1) {
+      for (const territory of this.territories) {
+        if (ordered.has(territory.group) && data.groupStyles.has(territory.group)) {
+          captions.set(territory.group, territory.caption)
+        }
+      }
+    }
+    this.clearScene(new Set([...nodeLabels.values(), ...captions.values()]))
 
     data.nodes.forEach((node, index) => {
       const sim = this.sim?.byId(node.id)
@@ -999,11 +1015,11 @@ export class KnowledgeMapEngine {
       shell.scale.setScalar(hollow ? 1.22 : 1.14)
       this.nodeGroup.add(mesh)
 
-      const label = document.createElement('div')
+      const label = nodeLabels.get(node.id) ?? document.createElement('div')
       label.className = 'rp-map3d-label'
       label.textContent = shortLabel(node.label)
       label.style.display = 'none'
-      this.labelLayer.appendChild(label)
+      if (!label.parentNode) this.labelLayer.appendChild(label)
 
       const visual: NodeVisual = {
         node,
@@ -1102,14 +1118,14 @@ export class KnowledgeMapEngine {
         mesh.raycast = () => undefined
         mesh.renderOrder = -2
         this.territoryGroup.add(mesh)
-        const caption = document.createElement('div')
+        const caption = captions.get(group) ?? document.createElement('div')
         caption.className = 'rp-map3d-territory'
         caption.style.color = 'var(--rp-ink)'
         const captionShort = graphGroupLabel(group, this.ui)
         const captionFull = `${captionShort} · ${count}`
         caption.textContent = captionFull
         caption.style.display = 'none'
-        this.labelLayer.appendChild(caption)
+        if (!caption.parentNode) this.labelLayer.appendChild(caption)
         const territory: TerritoryVisual = {
           group,
           style,
@@ -1380,11 +1396,11 @@ export class KnowledgeMapEngine {
     }
   }
 
-  private clearScene() {
+  private clearScene(retainedLabels?: ReadonlySet<HTMLElement>) {
     for (const visual of this.nodeVisuals.values()) {
       visual.material.dispose()
       visual.shellMaterial.dispose()
-      visual.label.remove()
+      if (!retainedLabels?.has(visual.label)) visual.label.remove()
     }
     for (const visual of [...this.edgeVisuals, ...this.flowVisuals]) {
       visual.material.dispose()
@@ -1393,7 +1409,7 @@ export class KnowledgeMapEngine {
     }
     for (const territory of this.territories) {
       territory.material.dispose()
-      territory.caption.remove()
+      if (!retainedLabels?.has(territory.caption)) territory.caption.remove()
       const hub = territory.hub
       if (hub) {
         hub.material.dispose()
