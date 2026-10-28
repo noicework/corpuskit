@@ -240,7 +240,7 @@ describe('agent ask page', () => {
           ' ',
         ).trim(),
       }))
-      expect(seen.label).toBe('Ask the agent')
+      expect(seen.label).toBe('Ask')
       expect(seen.focused).toBe(true)
       expect(seen.steps).toBeGreaterThanOrEqual(1)
       expect(seen.notice).toContain('Stopped')
