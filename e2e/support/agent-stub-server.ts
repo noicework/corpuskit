@@ -11,6 +11,7 @@
 //   deno task dev:stub --port=8795     first port to try (8791 by default)
 // ---------------------------------------------------------------------------
 import type { ResourceSummary, SearchResults, TenantConfig } from '@research-portal/core'
+import type { AgentAskOptions, ComposePassage } from '@research-portal/retrieval'
 import { peerKeyName } from '../../apps/api/src/bindings.ts'
 import { agentFixturePassages, agentScenarioFor, pause } from './agent-replay.ts'
 import { aragPeerFetch, type PeerBox } from './arag-peer-double.ts'
@@ -68,6 +69,25 @@ export class AgentStubProvider extends DoubleProvider {
         matchedPassage: passage.text,
       })),
       relatedQuestions: [],
+    }
+  }
+
+  /** Same six-second generation schedule as compose, with the first delta after one second. */
+  async *composeStream(
+    host: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts: Pick<AgentAskOptions, 'context' | 'signal'> = {},
+  ): AsyncIterable<string> {
+    const answer = await super.compose(host, question, passages)
+    const deltas = answer.match(/[\s\S]{1,48}/g) ?? []
+    const speed = agentScenarioFor(question).fast ? 0 : this.agentReplaySpeed
+    const started = performance.now()
+    for (let i = 0; i < deltas.length; i++) {
+      const at = 1000 + i * 5000 / Math.max(1, deltas.length - 1)
+      if (speed > 0) await pause(at / speed - (performance.now() - started), opts.signal)
+      opts.signal?.throwIfAborted()
+      yield deltas[i]!
     }
   }
 

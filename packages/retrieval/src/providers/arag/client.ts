@@ -176,12 +176,14 @@ export class KbClient {
     path: string,
     body: unknown,
     extra?: Record<string, string>,
+    options: { signal?: AbortSignal } = {},
   ): Promise<T> {
     const url = this.url(path)
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.headers(extra),
       body: JSON.stringify(this.inferenceBody(path, body)),
+      signal: options.signal,
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return (await res.json()) as T
@@ -261,12 +263,18 @@ export class KbClient {
   }
 
   /** POST returning the raw streaming response (NDJSON body). */
-  async postStream(path: string, body: unknown, extra?: Record<string, string>): Promise<Response> {
+  async postStream(
+    path: string,
+    body: unknown,
+    extra?: Record<string, string>,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<Response> {
     const url = this.url(path)
     const res = await this.fetchImpl(url, {
       method: 'POST',
       headers: this.headers({ accept: 'application/x-ndjson', ...extra }),
       body: JSON.stringify(this.inferenceBody(path, body)),
+      signal: options.signal,
     })
     if (!res.ok) throw new AragApiError(res.status, url, await res.text())
     return res
@@ -279,30 +287,35 @@ export async function* ndjson(res: Response): AsyncGenerator<unknown> {
   if (!reader) return
   const decoder = new TextDecoder()
   let buffer = ''
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    let newline = buffer.indexOf('\n')
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).trim()
-      buffer = buffer.slice(newline + 1)
-      if (line) {
-        try {
-          yield JSON.parse(line)
-        } catch {
-          // Partial or non-JSON line - skip rather than kill the stream.
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let newline = buffer.indexOf('\n')
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).trim()
+        buffer = buffer.slice(newline + 1)
+        if (line) {
+          try {
+            yield JSON.parse(line)
+          } catch {
+            // Partial or non-JSON line - skip rather than kill the stream.
+          }
         }
+        newline = buffer.indexOf('\n')
       }
-      newline = buffer.indexOf('\n')
     }
-  }
-  const tail = buffer.trim()
-  if (tail) {
-    try {
-      yield JSON.parse(tail)
-    } catch {
-      // ignore trailing partial line
+    const tail = buffer.trim()
+    if (tail) {
+      try {
+        yield JSON.parse(tail)
+      } catch {
+        // ignore trailing partial line
+      }
     }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
 }

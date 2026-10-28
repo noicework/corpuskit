@@ -98,7 +98,7 @@ export function applyAgentEvent(
       return { ...record, citations: [...record.citations, citation] }
     }
     case 'done':
-      return { ...record, status: 'done' }
+      return { ...record, text: event.text ?? record.text, status: 'done' }
     case 'error':
       return {
         ...record,
