@@ -7,6 +7,11 @@ import {
   type SyncSummary,
 } from './website-refresh.ts'
 import { type LinkHealthStoreApi, linkTargets, runLinkChecks } from './link-health.ts'
+import {
+  AnswerRecordStore,
+  type AnswerRecordStoreApi,
+  FileAnswerRecordState,
+} from './answer-record-store.ts'
 import type { EnrichmentRunEvent, ResourceSummary, TenantConfig } from '@research-portal/core'
 import { AragApiError, type AragProvider } from '@research-portal/retrieval'
 import {
@@ -73,6 +78,7 @@ export interface MaintenanceFailure {
     | 'job'
     | 'feedback'
     | 'site-feedback'
+    | 'answerRecords'
 }
 
 /**
@@ -325,6 +331,7 @@ interface MaintenanceStores {
   feedback?: Pick<FeedbackStoreApi, 'purgeExpired'>
   /** Readers' messages to the portal team, which the retention pass ages out too. */
   siteFeedback?: Pick<SiteFeedbackStoreApi, 'purgeExpired'>
+  answerRecords?: Pick<AnswerRecordStoreApi, 'purgeExpired'>
 }
 
 /**
@@ -368,6 +375,9 @@ export async function runSystemMaintenance(
   }
   if (retain && !purgeExpired(stores.siteFeedback, 'site feedback')) {
     failures.push({ job: 'retention', target: 'site-feedback' })
+  }
+  if (retain && !purgeExpired(stores.answerRecords, 'answer records')) {
+    failures.push({ job: 'retention', target: 'answerRecords' })
   }
   let halted = false
   for (const job of jobs) {
@@ -1063,6 +1073,7 @@ export function startScheduler(
     bindings,
     feedback: new FeedbackStore(dataDir),
     siteFeedback: new SiteFeedbackStore(dataDir),
+    answerRecords: new AnswerRecordStore(new FileAnswerRecordState(dataDir)),
   }
   return startMaintenanceTimers({
     dataDir,

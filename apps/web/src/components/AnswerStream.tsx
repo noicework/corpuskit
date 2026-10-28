@@ -1,4 +1,5 @@
 import { ResourceProvenanceLabel } from './ResourceProvenanceLabel.tsx'
+import { AnswerRecordLink } from './AnswerRecordLink.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
@@ -455,6 +456,7 @@ function PermittedAnswerStream(
   const canAsk = () =>
     access.controller.context === context &&
     access.controller.can('portal.ask', { kind: 'portal', slug })
+  const [answerRecordId, setAnswerRecordId] = useState<string | null>(null)
   const [status, setStatus] = useState<Status>('idle')
   const [text, setText] = useState('')
   const [sources, setSources] = useState<ScoredResource[]>([])
@@ -509,6 +511,7 @@ function PermittedAnswerStream(
       return
     }
 
+    setAnswerRecordId(null)
     const controller = new AbortController()
     abortRef.current = controller
     setStatus('streaming')
@@ -545,6 +548,9 @@ function PermittedAnswerStream(
           break
         case 'audit':
           setAudit(event)
+          break
+        case 'answer-record':
+          setAnswerRecordId(event.answerId)
           break
         case 'done':
           // The deterministically citation-bound text replaces the streamed
@@ -709,6 +715,7 @@ function PermittedAnswerStream(
           )
           : null}
       </div>
+      {status === 'done' && <AnswerRecordLink slug={slug} answerId={answerRecordId} />}
       {scopedToResource && status === 'done' && !refused
         ? <ScopedAuditBadge audit={audit} />
         : null}

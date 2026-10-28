@@ -1,5 +1,8 @@
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
+import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
+import { registerAnswerRecordRoutes } from './answer-record-routes.ts'
+import { type AnswerRecordStoreApi, transientAnswerRecordStore } from './answer-record-store.ts'
 import type { PublicHttpClient } from './public-http.ts'
 import { LinkHealthStore } from './link-health-store.ts'
 import type { LinkHealthStoreApi } from './link-health.ts'
@@ -1036,6 +1039,7 @@ export interface PortalRequestContext {
 
 export interface BuildAppOptions {
   duplicates?: DuplicateReviewStore
+  answerRecords?: AnswerRecordStoreApi
   lifecycle?: PortalLifecycleStore
   /** Internally supplied authoritative state, never sourced from a request. */
   rbac?: RbacState
@@ -1224,6 +1228,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const bindings = opts.bindings ?? new BindingStore({})
   const platformDomain = getPlatformDomain(opts.platformDomain ?? process.env.PLATFORM_DOMAIN)
   const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
+  const answerRecords = opts.answerRecords ?? transientAnswerRecordStore(opts.now)
   const insights = opts.insights ?? new InsightsStore()
   const feedback = opts.feedback ?? new FeedbackStore()
   const siteFeedback = opts.siteFeedback ?? new SiteFeedbackStore()
@@ -1814,9 +1819,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     query: string,
     options: Parameters<RetrievalProvider['ask']>[2],
     cancelled: () => boolean,
+    retrieval: RetrievalProvider = provider,
   ): AsyncIterable<AskEvent> {
     if (cancelled()) return
-    for await (const event of provider.ask(config, query, options)) {
+    for await (const event of retrieval.ask(config, query, options)) {
       if (cancelled()) return
       yield event
     }
@@ -2332,6 +2338,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
         { kind: 'portal', id: slug },
       ),
   })
+
+  registerAnswerRecordRoutes(app, { store: answerRecords, tenant, notFound: adminNotFound })
 
   registerAuditRoutes(app, {
     authorise: authoriseDeclared,
@@ -4165,14 +4173,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
         if (stream.aborted || c.req.raw.signal.aborted) return
         const record = { citations: 0, groundedness: null as number | null, failed: false }
         try {
-          for await (const event of provider.ask(config, parsed.data.query, {})) {
+          for await (
+            const event of recordComposedSource({
+              store: answerRecords,
+              config,
+              question: parsed.data.query,
+              buildId: opts.buildSha,
+              now: opts.now,
+            }, provider)
+          ) {
             if (stream.aborted || c.req.raw.signal.aborted) return
             if (event.type === 'citation') record.citations += 1
             if (event.type === 'quality') record.groundedness = event.groundedness
             if (event.type === 'error') record.failed = true
             if (
               event.type === 'delta' || event.type === 'done' || event.type === 'sources' ||
-              event.type === 'quality' || event.type === 'error'
+              event.type === 'quality' || event.type === 'error' || event.type === 'answer-record'
             ) {
               await write(config.slug, event)
             }
@@ -4913,6 +4929,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     insights,
     feedback,
     siteFeedback,
+    answerRecords,
     suggestions,
     enrichments,
     kgProposals,
@@ -6665,15 +6682,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? intents.find((i) => i.id === parsed.data.intent)
       : undefined
     if (parsed.data.intent && !intentDef) return c.json({ error: 'unknown_intent' }, 400)
+    const evidence = {
+      store: answerRecords,
+      config,
+      question: parsed.data.query,
+      resourceId: parsed.data.resourceId,
+      buildId: opts.buildSha,
+      now: opts.now,
+      provider: opts.provider,
+      cancelled: (stream: import('hono/streaming').SSEStreamingApi) =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true,
+    }
     // The finished response declares UTF-8 (the streaming helper sets its own
     // content type); a Latin-1-assuming API client otherwise sees mojibake.
-    return withUtf8EventStream(streamSSE(c, async (stream) => {
+    return withUtf8EventStream(recordSSE(c, evidence, async (stream, provider, write) => {
       const cancelled = () =>
         stream.aborted || c.req.raw.signal.aborted ||
         operationSignals.get(c.req.raw)?.aborted === true
       if (cancelled()) return
       const ask: RetrievalProvider['ask'] = (config, query, options) =>
-        activeAsk(config, query, options, cancelled)
+        activeAsk(config, query, options, cancelled, provider)
       const { query, route: routeMode, ...askOpts } = parsed.data
       const settings = tenants.promptsFor(config.slug)
       const lexicon = config.entityTerms ?? []
@@ -6695,7 +6724,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         if (learning?.type === 'learning' && typeof learning.id === 'string') {
           learningId = learning.id
         }
-        return stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'ask')) })
+        return write(publicSseEvent(event, 'ask'))
       }
       // A follow-up that asks for the earlier answers in another shape
       // ("put the three drugs in a table") is answered from the papers and
