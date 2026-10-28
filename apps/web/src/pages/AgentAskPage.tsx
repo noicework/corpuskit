@@ -54,8 +54,8 @@ export function AgentAskPage() {
 
   const messages = useMemo(() => ({
     timeout: ui('No answer arrived within five minutes, so the page stopped waiting.'),
-    unavailable: ui('The agent is unavailable - please try again.'),
-    notOffered: ui('This portal does not offer agent ask.'),
+    unavailable: ui('The portal could not start the answer. Try again in a moment.'),
+    notOffered: ui('Agent ask is not set up on this portal.'),
   }), [ui])
   const agent = useAgentAsk({ slug: config.slug, canAsk: canAskNow, messages })
   const { state, streaming } = agent
@@ -133,7 +133,7 @@ export function AgentAskPage() {
     () => citationNumbers(state.text, state.citations),
     [state.text, state.citations],
   )
-  const askLabel = streaming ? ui('Stop') : ui('Ask the agent')
+  const askLabel = streaming ? ui('Stop') : ui('Ask')
 
   return (
     <main
@@ -151,7 +151,7 @@ export function AgentAskPage() {
             </h1>
             <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
               {ui(
-                'One question, searched through every collection it may draw on. Watch each step, see what every collection returned, then read a cited answer. An answer takes one to two minutes.',
+                'Ask a question across every collection this portal can search. Each step, and what each collection returned, is shown while the answer is written. Answers take one to two minutes.',
               )}
             </p>
           </div>
@@ -269,11 +269,6 @@ export function AgentAskPage() {
                     </li>
                   ))}
                 </ul>
-                <p className='mt-3 max-w-prose text-sm leading-relaxed text-ink-2'>
-                  {ui(
-                    'The steps and the passages each collection returns appear beside the answer as it is made, so you can see where every claim came from.',
-                  )}
-                </p>
               </section>
             )}
         </div>

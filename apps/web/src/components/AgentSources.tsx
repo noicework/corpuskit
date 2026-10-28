@@ -101,9 +101,9 @@ export function PassageCard(
                 <Link
                   to={href}
                   className={openClass}
-                  aria-label={`${ui('Open in the library')}: ${title}`}
+                  aria-label={`${ui('Open in the Library')}: ${title}`}
                 >
-                  {ui('Open in the library')}
+                  {ui('Open in the Library')}
                   <ArrowRight size='sm' className='shrink-0' />
                 </Link>
               )
@@ -270,7 +270,9 @@ export function AgentSources(
   return (
     <section aria-labelledby='agent-sources-heading' data-agent-sources>
       <div className='flex items-baseline justify-between gap-3'>
-        <h2 id='agent-sources-heading' className='rp-eyebrow text-ink-3'>{ui('Collections')}</h2>
+        <h2 id='agent-sources-heading' className='rp-eyebrow text-ink-3'>
+          {ui('Collections searched')}
+        </h2>
         {sources.length > 0
           ? (
             <span className='text-xs tabular-nums text-ink-2'>
@@ -287,7 +289,7 @@ export function AgentSources(
         ? (
           <p className='mt-2 text-sm leading-relaxed text-ink-2'>
             {status === 'streaming'
-              ? ui('Waiting to hear which collections will be searched.')
+              ? ui('Waiting for the list of collections to search.')
               : ui('Each collection searched appears here with the passages it returned.')}
           </p>
         )

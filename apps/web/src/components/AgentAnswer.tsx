@@ -23,7 +23,7 @@ import { Button } from './ui.tsx'
 export function AgentModeBadge({ state }: { state: Pick<AgentAskState, 'mode' | 'sources'> }) {
   const { ui } = usePortalLocale()
   if (state.mode === 'agent') {
-    return <span className='rp-agent-tag' data-agent-mode='agent'>{ui('Retrieval agent')}</span>
+    return <span className='rp-agent-tag' data-agent-mode='agent'>{ui('Research agent')}</span>
   }
   if (state.mode === 'orchestrated') {
     const count = state.sources.length
@@ -218,7 +218,7 @@ export function AgentAnswer(
             style={{ backgroundColor: 'var(--rp-accent)' }}
             aria-hidden='true'
           />
-          <h2 id='agent-answer-heading' className='rp-eyebrow text-ink-3'>{ui('Answer')}</h2>
+          <h2 id='agent-answer-heading' className='rp-eyebrow text-ink-3'>{ui('Cited answer')}</h2>
         </span>
         <AgentModeBadge state={state} />
         <span className='ml-auto text-xs tabular-nums text-ink-2' data-agent-clock>
@@ -300,10 +300,10 @@ export function AgentAnswer(
           <div className='rp-agent-notice rp-agent-notice-warn mt-4' role='status'>
             <AlertTriangle size='sm' className='mt-0.5 shrink-0' />
             <div>
-              <p className='text-sm font-semibold'>{ui('The agent finished without an answer')}</p>
+              <p className='text-sm font-semibold'>{ui('No direct evidence found')}</p>
               <p className='mt-1 text-sm leading-relaxed'>
                 {ui(
-                  'Nothing it found supported an answer. Try a question closer to what the collections cover.',
+                  'The collections searched do not support an answer to this question. Try a question closer to what they cover.',
                 )}
               </p>
             </div>
@@ -320,13 +320,13 @@ export function AgentAnswer(
                 {state.error.code === 'timeout'
                   ? ui('No answer in time')
                   : state.error.code === 'not_configured'
-                  ? ui('This portal has no agent')
+                  ? ui('Agent ask is not set up on this portal')
                   : state.error.code === 'cancelled'
-                  ? ui('The agent stopped')
-                  : ui('The agent could not finish')}
+                  ? ui('The answer was stopped')
+                  : ui('The answer could not be finished')}
               </p>
               <p className='mt-1 text-sm leading-relaxed'>
-                {localError(state.error.message, 'The agent is unavailable.')}
+                {localError(state.error.message, 'The portal could not finish the answer.')}
               </p>
               {hasText
                 ? (

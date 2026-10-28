@@ -2,12 +2,11 @@
 export const AGENT_JA: Readonly<Record<string, string>> = {
   'Agent ask': 'エージェントに質問',
   'Ask across the collections': 'コレクションを横断して質問',
-  'One question, searched through every collection it may draw on. Watch each step, see what every collection returned, then read a cited answer. An answer takes one to two minutes.':
-    'ひとつの質問を、参照できるすべてのコレクションで検索します。各ステップと、各コレクションが返した結果を確認し、出典付きの回答を読めます。回答には1〜2分かかります。',
+  'Ask a question across every collection this portal can search. Each step, and what each collection returned, is shown while the answer is written. Answers take one to two minutes.':
+    'このポータルが検索できるすべてのコレクションに質問します。各ステップと、各コレクションが返した内容は、回答が書かれる間に表示されます。回答には1〜2分かかります。',
   'Ask one question across every collection': 'すべてのコレクションに対してひとつの質問をする',
   'Enter sends; Shift+Enter starts a new line. Up to 2,000 characters.':
     'Enterで送信、Shift+Enterで改行します。2,000文字まで。',
-  'Ask the agent': 'エージェントに質問する',
   'Collections to search': '検索するコレクション',
   'this portal': 'このポータル',
   "Each collection's owner decides whether it takes part. The answer lists which did.":
@@ -19,15 +18,9 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
     '生産地域間の移動規制は何をきっかけに発動されますか？',
   'Which management changes does the research recommend for hot seasons?':
     '暑い季節に向けて、研究はどのような管理の変更を推奨していますか？',
-  'The steps and the passages each collection returns appear beside the answer as it is made, so you can see where every claim came from.':
-    '回答が作られる間、各ステップと各コレクションが返した本文が回答の横に表示され、すべての記述の出どころを確認できます。',
   'How this answer is being made': 'この回答の作られ方',
   'No answer arrived within five minutes, so the page stopped waiting.':
     '5分以内に回答が届かなかったため、待機を終了しました。',
-  'The agent is unavailable - please try again.':
-    'エージェントを利用できません。もう一度お試しください。',
-  'This portal does not offer agent ask.':
-    'このポータルではエージェントへの質問を提供していません。',
   '{label} could not be searched; the answer comes from the rest.':
     '{label}を検索できませんでした。回答は残りのコレクションから作られます。',
   '{count} collections could not be searched; the answer comes from the rest.':
@@ -35,12 +28,16 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'Answer complete: {citations} citations across {collections} collections.':
     '回答が完成しました。{collections}件のコレクションから{citations}件を引用しています。',
   'Stopped. Everything that had arrived is kept.': '停止しました。届いた内容はそのまま残ります。',
+  'The portal could not start the answer. Try again in a moment.':
+    'ポータルは回答を開始できませんでした。しばらくしてからもう一度お試しください。',
+  'Agent ask is not set up on this portal.':
+    'このポータルではエージェントへの質問が設定されていません。',
   // The step timeline
+  'Each step appears here as the answer is made.':
+    '回答が作られるにつれて、各ステップがここに表示されます。',
   'Steps': 'ステップ',
   '{done} of {total} done': '{total}件中{done}件が完了',
   'Waiting for the first step.': '最初のステップを待っています。',
-  'Each step appears here as the agent works.':
-    'エージェントの作業に合わせて、各ステップがここに表示されます。',
   'Preparing': '準備',
   'Searching': '検索',
   'Summarising': '要約',
@@ -51,17 +48,16 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   '{seconds} s': '{seconds}秒',
   'min': '分',
   // The collections
-  'Collections': 'コレクション',
+  'Collections searched': '検索したコレクション',
+  'Waiting for the list of collections to search.': '検索するコレクションの一覧を待っています。',
+  'Open in the Library': 'ライブラリで開く',
   '{found} of {total} returned passages': '{total}件中{found}件が本文を返しました',
-  'Waiting to hear which collections will be searched.':
-    'どのコレクションを検索するかを待っています。',
   'Each collection searched appears here with the passages it returned.':
     '検索した各コレクションと、返された本文がここに表示されます。',
   'federated partner': '連携パートナー',
   'partner over MCP': 'MCP経由のパートナー',
   'Asked': '質問',
   'Untitled passage': '無題の本文',
-  'Open in the library': 'ライブラリで開く',
   'Open the document': '資料を開く',
   'Timed out': 'タイムアウト',
   'Not reached': '接続できません',
@@ -73,8 +69,14 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'This partner could not be reached.': 'このパートナーに接続できませんでした。',
   'Could not be searched.': '検索できませんでした。',
   // The answer card
-  'Answer': '回答',
-  'Retrieval agent': '検索エージェント',
+  'Cited answer': '出典付きの回答',
+  'Research agent': 'リサーチエージェント',
+  'The collections searched do not support an answer to this question. Try a question closer to what they cover.':
+    '検索したコレクションでは、この質問への回答を裏付けられません。コレクションの内容に近い質問をお試しください。',
+  'Agent ask is not set up on this portal':
+    'このポータルではエージェントへの質問が設定されていません',
+  'The answer was stopped': '回答が停止されました',
+  'The answer could not be finished': '回答を完了できませんでした',
   'Composed by CorpusKit from 1 collection': 'CorpusKitが1件のコレクションから構成',
   'Composed by CorpusKit across {count} collections':
     'CorpusKitが{count}件のコレクションを横断して構成',
@@ -88,13 +90,7 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'Citation arriving': '出典を受信中',
   'Source {index}': '資料{index}',
   'This partner does not link to its documents': 'このパートナーは資料へのリンクを提供していません',
-  'The agent finished without an answer': 'エージェントは回答を出さずに終了しました',
-  'Nothing it found supported an answer. Try a question closer to what the collections cover.':
-    '見つかった内容では回答を裏付けられませんでした。コレクションの内容に近い質問をお試しください。',
   'No answer in time': '時間内に回答がありません',
-  'This portal has no agent': 'このポータルにはエージェントがありません',
-  'The agent stopped': 'エージェントが停止しました',
-  'The agent could not finish': 'エージェントは完了できませんでした',
   'The text above is what arrived before it stopped; it may be incomplete.':
     '上の本文は停止前に届いた内容で、不完全な場合があります。',
   'Stopped': '停止しました',

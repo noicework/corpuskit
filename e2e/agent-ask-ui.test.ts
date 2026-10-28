@@ -92,7 +92,7 @@ describe('agent ask page', () => {
       })
       expect(seen.title).toBe('Agent ask | Southern Waters Research Portal')
       expect(seen.heading).toBe('Ask across the collections')
-      expect(seen.mode).toBe('Retrieval agent')
+      expect(seen.mode).toBe('Research agent')
       expect(seen.steps).toBe(12)
       expect(seen.stepStatuses).toBe(1)
       expect(seen.sources).toEqual([
@@ -190,7 +190,7 @@ describe('agent ask page', () => {
         )
           .map((li) => li.dataset.sourceState),
       }))
-      expect(seen.alert).toContain('The agent could not finish')
+      expect(seen.alert).toContain('The answer could not be finished')
       expect(seen.retry).toBe('Try again')
       expect(seen.failedSteps).toBe(2)
       // The passages the first collection returned before the failure are still there.

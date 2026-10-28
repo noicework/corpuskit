@@ -72,7 +72,7 @@ export function AgentSteps(
           <p className='mt-2 text-sm leading-relaxed text-ink-2'>
             {status === 'streaming'
               ? ui('Waiting for the first step.')
-              : ui('Each step appears here as the agent works.')}
+              : ui('Each step appears here as the answer is made.')}
           </p>
         )
         : runs.map((run, runIndex) => (
