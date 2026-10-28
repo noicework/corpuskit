@@ -20,6 +20,8 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion, target }: {
   const rootRef = useRef<HTMLDivElement>(null)
   const [panelHeight, setPanelHeight] = useState<number>()
   const [panelLeft, setPanelLeft] = useState(0)
+  const [rowControls, setRowControls] = useState(false)
+  const controlCount = rotate ? 11 : 7
   useLayoutEffect(() => {
     const root = rootRef.current
     const panel = document.getElementById(panelId)
@@ -37,23 +39,29 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion, target }: {
     return () => observer.disconnect()
   }, [target, open, panelId, ui])
   useEffect(() => {
-    if (target) return
     const root = rootRef.current
-    const stage = root?.offsetParent
+    const stage = target
+      ? target.closest('[data-graph-page]')?.querySelector('[data-graph-stage]')
+      : root?.offsetParent
     if (!root || !stage) return
-    const measure = () =>
+    const measure = () => {
+      const box = stage.getBoundingClientRect()
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+      // Three rem per target and gap, plus two rem of insets: 48n + 32 at 16px.
+      setRowControls(box.height < (controlCount * 3 + 2) * rem)
       setPanelHeight(
         Math.max(
           44,
-          stage.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom - 16,
+          box.bottom - root.getBoundingClientRect().bottom - 16,
         ),
       )
+    }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(root)
     observer.observe(stage)
     return () => observer.disconnect()
-  }, [target])
+  }, [target, controlCount])
   const directions = [
     { label: 'left', icon: ArrowLeft, x: 1, y: 0 },
     { label: 'right', icon: ArrowRight, x: -1, y: 0 },
@@ -105,6 +113,7 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion, target }: {
         ? (
           <div
             id={panelId}
+            data-row={rowControls ? '' : undefined}
             className='rp-map-camera-panel rp-card p-3'
             style={{
               maxHeight: target ? undefined : panelHeight,
@@ -160,7 +169,7 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion, target }: {
                 ))}
               </div>
             </div>
-            <div className='mt-2 flex flex-wrap gap-1'>
+            <div className='rp-map-camera-zoom mt-2 flex flex-wrap gap-1'>
               <IconButton
                 label={ui('Zoom in')}
                 icon={Plus}

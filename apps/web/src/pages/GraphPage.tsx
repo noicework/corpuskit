@@ -816,7 +816,16 @@ function NavigatorRail({
                       }}
                       aria-hidden='true'
                     />
-                    <span className='min-w-0 flex-1 truncate'>{node.label}</span>
+                    <span className='min-w-0 flex-1'>
+                      <span className='block truncate'>{node.label}</span>
+                      {groupStyles.size > 1
+                        ? (
+                          <span className='block text-xs text-ink-2 [overflow-wrap:anywhere]'>
+                            {graphGroupLabel(node.group, ui)}
+                          </span>
+                        )
+                        : null}
+                    </span>
                     <span className='shrink-0 tabular-nums text-xs text-ink-3'>{measure}</span>
                   </button>
                 </li>
@@ -1301,7 +1310,7 @@ export function GraphPage() {
           <HeroGround />
           {/* Keep Find beside the title so four lens/layout targets fit below it. */}
           <div className='rp-graph-mobile-chrome relative py-1'>
-            <div className='flex items-center justify-between gap-2'>
+            <div className='rp-graph-mobile-heading flex items-center justify-between gap-2'>
               <div className='min-w-0'>
                 <h1 className='rp-display min-w-0 break-words text-xl text-[var(--rp-on-primary)]'>
                   {ui('Knowledge map')}
@@ -1333,7 +1342,7 @@ export function GraphPage() {
                 )
                 : null}
             </div>
-            <div className='mt-1 flex flex-wrap items-center justify-end gap-2'>
+            <div className='rp-graph-mobile-views mt-1 flex flex-wrap items-center justify-end gap-2'>
               <ModeToggle mode={mode} onChange={switchMode} compact />
               {hasGraph && view === 'map'
                 ? <LayoutToggle layout={layout} onChange={setLayout} compact />
