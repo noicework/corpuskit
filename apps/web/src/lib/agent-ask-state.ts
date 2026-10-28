@@ -40,7 +40,7 @@ export interface AgentLookup {
   chunks: AgentChunk[]
 }
 
-export type SourceFailure = 'timeout' | 'error'
+export type SourceFailure = 'timeout' | 'unauthorised' | 'error'
 
 /** One source the answer can draw on, with everything it has returned so far. */
 export interface AgentSourceGroup {
@@ -172,9 +172,7 @@ export function applyAgentAskEvent(
   switch (event.type) {
     case 'agent-start': {
       const known = new Map(state.sources.map((group) => [group.source.id, group]))
-      const sources = event.sources.map((source) =>
-        known.get(source.id) ?? { source, lookups: [] }
-      )
+      const sources = event.sources.map((source) => known.get(source.id) ?? { source, lookups: [] })
       for (const group of state.sources) {
         if (!sources.some((item) => item.source.id === group.source.id)) sources.push(group)
       }
@@ -350,7 +348,10 @@ export function splitAnswerMarkers(text: string): AnswerSegment[] {
  * agent's `[block-AA]`, `[block-AB]` read as 1, 2. A marker whose citation has not arrived
  * yet still gets its number, so the numbering never shifts as citations land.
  */
-export function citationNumbers(text: string, citations: readonly AgentCitation[]): Map<string, number> {
+export function citationNumbers(
+  text: string,
+  citations: readonly AgentCitation[],
+): Map<string, number> {
   const numbers = new Map<string, number>()
   for (const match of text.matchAll(MARKER)) {
     const marker = match[1]!
@@ -363,7 +364,10 @@ export function citationNumbers(text: string, citations: readonly AgentCitation[
 }
 
 /** Where a passage lives: its own address, else the portal resource it came from. */
-export function chunkHref(source: AgentSource, chunk: Pick<AgentChunk, 'url' | 'resourceId'>): string | undefined {
+export function chunkHref(
+  source: AgentSource,
+  chunk: Pick<AgentChunk, 'url' | 'resourceId'>,
+): string | undefined {
   if (chunk.url) return chunk.url
   if (source.portal && chunk.resourceId) {
     return `/t/${encodeURIComponent(source.portal)}/library/${encodeURIComponent(chunk.resourceId)}`
@@ -416,10 +420,23 @@ export function sourceState(group: AgentSourceGroup, steps: readonly AgentStep[]
 
 /** Whether a lookup step is this source's: `source/<slug>` when composed, else its title names it. */
 function stepSearches(step: AgentStep, source: AgentSource): boolean {
-  if (step.id === `source/${source.id}` || (source.portal && step.id === `source/${source.portal}`)) {
+  if (
+    step.id === `source/${source.id}` || (source.portal && step.id === `source/${source.portal}`)
+  ) {
     return true
   }
   return step.title.toLowerCase().includes(source.label.toLowerCase())
+}
+
+/**
+ * How a source is introduced beside its name: a federated partner's collection is said to be
+ * one, and one reached over MCP says so; a portal of this deployment needs no introduction.
+ */
+export function sourceKindLabel(
+  source: Pick<AgentSource, 'kind' | 'transport'>,
+): 'federated partner' | 'partner over MCP' | undefined {
+  if (source.kind !== 'peer') return undefined
+  return source.transport === 'mcp' ? 'partner over MCP' : 'federated partner'
 }
 
 /** The passages a source has returned, across its lookups. */
@@ -433,7 +450,9 @@ export function contributingSources(state: Pick<AgentAskState, 'sources'>): Agen
 }
 
 /** The sources a finished answer cites, in the order the sources were announced. */
-export function citedSources(state: Pick<AgentAskState, 'sources' | 'citations'>): AgentSourceGroup[] {
+export function citedSources(
+  state: Pick<AgentAskState, 'sources' | 'citations'>,
+): AgentSourceGroup[] {
   const ids = new Set(state.citations.map((citation) => citation.sourceId))
   return state.sources.filter((group) => ids.has(group.source.id))
 }
@@ -455,7 +474,7 @@ export function durationLabel(
   words: { seconds: string; minutes: string } = { seconds: 's', minutes: 'min' },
 ): string {
   const clamped = Math.max(0, ms)
-  if (clamped < 10_000) return `${(clamped / 1000).toFixed(1)} ${words.seconds}`
+  if (clamped < 10_000) return `${(Math.round(clamped / 100) / 10).toFixed(1)} ${words.seconds}`
   const total = Math.round(clamped / 1000)
   if (total < 60) return `${total} ${words.seconds}`
   const minutes = Math.floor(total / 60)
