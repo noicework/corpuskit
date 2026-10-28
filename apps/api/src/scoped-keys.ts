@@ -8,6 +8,7 @@ import {
 import { constantTimeHashEqual } from './mcp.ts'
 import { validSessionFacts } from './principal.ts'
 import {
+  KeyEstateSchema,
   KeyPortalSlugSchema,
   KeyTimeSchema,
   type ScopedKeyRecord,
@@ -28,6 +29,15 @@ export interface VerifiedScopedKey {
   slug: string
   role: PortalRole
   actor: { kind: 'key'; id: string }
+  /**
+   * Set only at the estate MCP endpoint: every portal the key reaches there with its role on
+   * each, its own portal first. Without it the key reaches its own portal alone.
+   */
+  portals?: readonly KeyPortalGrant[]
+}
+export interface KeyPortalGrant {
+  slug: string
+  role: PortalRole
 }
 export type ScopedKeyStatus =
   | 'active'
@@ -58,7 +68,8 @@ const inputSchema = z.object({
   label: z.string().trim().min(1).max(80),
   role: PortalRoleSchema,
   expiresAt: KeyTimeSchema.optional(),
-}).strict()
+  estate: KeyEstateSchema.optional(),
+}).strict().refine((input) => !input.estate?.includes(input.slug))
 const tokenPattern = /^ck_[A-Za-z0-9_-]{43}$/
 const legacyPattern = /^ck_mcp_[A-Za-z0-9_-]{12}_[A-Za-z0-9_-]{43}$/
 const clock = (deps: ScopedKeyDependencies) => (deps.now ?? Date.now)()
@@ -117,7 +128,7 @@ export async function issueScopedKey(
       ? !deps.externalLoginEnabled || trustedSession.provenance !== 'external'
       : trustedSession.tenantId !== deps.configuredTenantId)
   ) throw new ScopedKeyError('forbidden')
-  const { slug, label, role, expiresAt } = parsed.data
+  const { slug, label, role, expiresAt, estate } = parsed.data
   const creator = { tenantId: trustedSession.tenantId, oid: trustedSession.oid }
   // Refuse stale preparations if authority changed while crypto or caller work was awaiting.
   const authoritySnapshot = () =>
@@ -138,6 +149,18 @@ export async function issueScopedKey(
     !authority.proven || !authority.role ||
     PORTAL_ROLES.indexOf(role) > PORTAL_ROLES.indexOf(authority.role)
   ) throw new ScopedKeyError('forbidden')
+  // An estate key needs the same proven ceiling on every other portal it names.
+  for (const portal of estate ?? []) {
+    const reach = await resolveCreatorAuthority(
+      { ...creator, slug: portal },
+      deps.creatorStores,
+      deps.configuredTenantId,
+      now,
+    )
+    if (
+      !reach.proven || !reach.role || PORTAL_ROLES.indexOf(role) > PORTAL_ROLES.indexOf(reach.role)
+    ) throw new ScopedKeyError('forbidden')
+  }
   const checkLimit = () => {
     if (deps.keys.list(slug).filter((record) => !record.revokedAt).length >= 20) {
       throw new ScopedKeyError('key_limit')
@@ -163,6 +186,7 @@ export async function issueScopedKey(
       expiresAt: expiresAt ?? null,
       creator,
       provenance: 'verified-session',
+      ...(estate ? { estate } : {}),
     })
     const collides = () =>
       deps.keys.list(slug).some((row) =>
@@ -203,6 +227,21 @@ export async function issueScopedKey(
   throw new ScopedKeyError('collision')
 }
 
+/** The active record a digest names in one portal's key list, with its current role there. */
+async function activeRecord(
+  hash: string,
+  slug: string,
+  deps: ScopedKeyDependencies,
+): Promise<{ record: ScopedKeyRecord; role: PortalRole } | null> {
+  const raw = deps.keys.findByHash(slug, hash)
+  const parsed = ScopedKeyRecordSchema.safeParse(raw)
+  const matches = constantTimeHashEqual(parsed.success ? parsed.data.hash : '0'.repeat(64), hash)
+  if (!parsed.success || !matches || parsed.data.tenant !== slug) return null
+  const current = await status(parsed.data, deps)
+  if (!current.effectiveRole || current.status !== 'active') return null
+  return { record: parsed.data, role: current.effectiveRole }
+}
+
 /** No public or session fallback. Legacy tokens need independently verified persisted provenance. */
 export async function verifyScopedKey(
   token: string,
@@ -213,21 +252,57 @@ export async function verifyScopedKey(
     !KeyPortalSlugSchema.safeParse(slug).success ||
     (!tokenPattern.test(token) && !legacyPattern.test(token))
   ) return null
-  const hash = await hashToken(token)
-  const raw = deps.keys.findByHash(slug, hash)
-  const parsed = ScopedKeyRecordSchema.safeParse(raw)
-  const matches = constantTimeHashEqual(parsed.success ? parsed.data.hash : '0'.repeat(64), hash)
-  if (!parsed.success || !matches || parsed.data.tenant !== slug) return null
-  const record = parsed.data
-  const current = await status(record, deps)
-  if (!current.effectiveRole || current.status !== 'active') return null
+  const active = await activeRecord(await hashToken(token), slug, deps)
+  if (!active) return null
   return {
     kind: 'key',
-    id: record.id,
+    id: active.record.id,
     slug,
-    role: current.effectiveRole,
-    actor: { kind: 'key', id: record.id },
+    role: active.role,
+    actor: { kind: 'key', id: active.record.id },
   }
+}
+
+/**
+ * The estate MCP endpoint names no portal, so a key is found by its digest among the `candidates`
+ * (the enabled portals) and must be in exactly one of their lists. It then reaches its own portal
+ * and each portal its estate names, at the lower of the key's role and its creator's current role
+ * there; a portal where the creator holds no role drops out. Revocation and expiry, like the
+ * creator's access to the key's own portal, decide for the whole key.
+ */
+export async function verifyEstateKey(
+  token: string,
+  candidates: readonly string[],
+  deps: ScopedKeyDependencies,
+): Promise<VerifiedScopedKey | null> {
+  if (!tokenPattern.test(token) && !legacyPattern.test(token)) return null
+  const hash = await hashToken(token)
+  const homes = candidates.filter((slug) => {
+    if (!KeyPortalSlugSchema.safeParse(slug).success) return false
+    try {
+      return deps.keys.findByHash(slug, hash) !== undefined
+    } catch {
+      // An unreadable key list cannot vouch for any key in it.
+      return false
+    }
+  })
+  if (homes.length !== 1) return null
+  const slug = homes[0]!
+  const active = await activeRecord(hash, slug, deps)
+  if (!active) return null
+  const { record, role } = active
+  const portals: KeyPortalGrant[] = [{ slug, role }]
+  for (const portal of record.estate ?? []) {
+    if (!record.creator) break
+    const reach = await resolveCreatorAuthority(
+      { ...record.creator, slug: portal },
+      deps.creatorStores,
+      deps.configuredTenantId,
+      clock(deps),
+    )
+    if (reach.role) portals.push({ slug: portal, role: boundedRole(record.role, reach.role) })
+  }
+  return { kind: 'key', id: record.id, slug, role, actor: { kind: 'key', id: record.id }, portals }
 }
 
 export async function inspectScopedKeys(

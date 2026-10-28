@@ -877,6 +877,8 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
         }
         owned.evaluations.schedule(slug, 'checks', schedule)
         const args: Record<string, unknown[]> = {
+          'duplicates.decide': [slug, 'res-1~res-2', 'keep-both'],
+          'duplicates.erase': [slug],
           'evaluations.put': [slug, 'checks', { ...evaluation, name: 'Updated bank' }],
           'evaluations.remove': [slug, 'checks'],
           'evaluations.start': [slug, evaluationRun],
@@ -929,6 +931,16 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
             good: true,
             text: 'Private comment',
             ts: new Date(now).toISOString(),
+          }],
+          'siteFeedback.save': [slug, {
+            id: '00000000-0000-4000-8000-000000000001',
+            slug,
+            createdAt: new Date(now).toISOString(),
+            category: 'general',
+            message: 'Private message',
+            email: 'reader@example.org',
+            pageUrl: 'https://portal.example.org/t/marine',
+            delivery: 'pending',
           }],
           'routing.record': [slug, {
             ts: new Date(now).toISOString(),

@@ -1,11 +1,17 @@
 name: CI
 
 # The quality gate for this repository: typecheck, lint, format, tests and the
-# web build, on every pull request. A push to main runs the identical gate job
-# inside deploy.yml before anything deploys, so it is not repeated here - two
+# web build, on every pull request. A push to main runs the identical gate jobs
+# inside deploy.yml before anything deploys, so they are not repeated here - two
 # copies of the same gate on every merge doubled the runner time and the
 # failure noise. Deployment stays in deploy.yml, deliberately separate: CI must
 # be able to go green before any deploy credentials exist.
+#
+# The gate is three jobs that run at the same time: typecheck, lint, format and
+# the build; the unit tests in parallel shards; and the browser E2E suite in
+# parallel shards. Together they are `deno task check` (check:static, then
+# test) plus `deno task test:e2e`. Run one after another they took 21 minutes.
+# deploy.yml has the same three jobs; change them together.
 on:
   pull_request:
   workflow_dispatch:
@@ -16,13 +22,24 @@ concurrency:
 
 jobs:
   gate:
-    name: Typecheck, lint, format, tests, build
+    name: Typecheck, lint, format, build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+
+      - name: Cache Deno modules
+        # The downloaded remote modules only, keyed on deno.lock. The lock still
+        # verifies them: Deno checks each cached module against its locked hash
+        # as it loads it, so a cache cannot change the code that runs. Type
+        # check, lint and format results are not cached; every run checks
+        # everything.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
 
       - name: Install build tooling
         # Pinned to match the Dockerfile (ESBUILD_VERSION / TAILWINDCSS_VERSION
@@ -53,8 +70,90 @@ jobs:
       - name: Validate the Worker deployment package
         run: npx -y wrangler@4.127.1 deploy --config wrangler.jsonc --dry-run
 
-      - name: Gate
-        run: deno task check
+      - name: Typecheck, lint and format
+        run: deno task check:static
+
+  unit:
+    name: Unit tests (${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # Let every shard finish, so a red run names every failing file.
+      fail-fast: false
+      matrix:
+        # The only matrix dimension, so strategy.job-total is the shard count.
+        # e2e/support/shard.ts balances the files over however many are listed.
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Cache Deno modules
+        # The same lock-verified module cache as the gate job.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
+
+      - name: Unit tests
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        # The whole of `deno task test`, ignoring the files the other shards
+        # run, the same way as the E2E shards. Each shard runs its files one
+        # after another in one process, as the single job did. The task takes
+        # its directories from deno.json's test.include: Deno applies --ignore
+        # only under the first of several directories named as arguments.
+        # A file that fails runs once more in the same job; the job passes only
+        # if that second run passes, and the job summary lists the file as
+        # flaky. More than three failing files fails at once.
+        run: deno run --allow-read --allow-write --allow-env --allow-run=deno e2e/support/shard.ts run test "$SHARD" "$SHARDS" packages apps
+
+  e2e:
+    name: Browser E2E persona journeys (${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # Let every shard finish, so a red run names every failing file.
+      fail-fast: false
+      matrix:
+        # The only matrix dimension, so strategy.job-total is the shard count.
+        # e2e/support/shard.ts balances the files over however many are listed.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Cache Deno modules
+        # The same lock-verified module cache as the gate job.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
+
+      - name: Install build tooling
+        # The same pinned binaries as the gate job, for build:web.
+        env:
+          ESBUILD_VERSION: 0.28.2
+          TAILWINDCSS_VERSION: 4.3.3
+        run: |
+          curl -fsSL --retry 3 --retry-all-errors \
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/v${TAILWINDCSS_VERSION}/tailwindcss-linux-x64" \
+            -o /usr/local/bin/tailwindcss
+          chmod +x /usr/local/bin/tailwindcss
+          { curl -fsSL --retry 3 --retry-all-errors \
+              "https://registry.npmjs.org/@esbuild/linux-x64/-/linux-x64-${ESBUILD_VERSION}.tgz" \
+              -o /tmp/esbuild.tgz \
+            && tar -xzf /tmp/esbuild.tgz -C /tmp \
+            && sudo mv /tmp/package/bin/esbuild /usr/local/bin/esbuild ; } \
+          || curl -fsSL --retry 3 --retry-all-errors \
+              "https://unpkg.com/@esbuild/linux-x64@${ESBUILD_VERSION}/bin/esbuild" \
+              -o /usr/local/bin/esbuild
+          sudo chmod +x /usr/local/bin/esbuild
 
       - name: Cache Chromium (astral/e2e)
         uses: actions/cache@v4
@@ -69,4 +168,10 @@ jobs:
           # GitHub-hosted runners do not expose Chromium's setuid sandbox.
           # Astral appends this to the browser process it launches in CI.
           ASTRAL_BIN_ARGS: --no-sandbox
-        run: deno task test:e2e
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        # The whole of test:e2e, ignoring the files the other shards run. Deno
+        # still finds the test files itself, so a file the shard plan does not
+        # know about runs on every shard rather than on none. A failing file
+        # runs once more, as in the unit shards.
+        run: deno run --allow-read --allow-write --allow-env --allow-run=deno e2e/support/shard.ts run test:e2e "$SHARD" "$SHARDS" e2e

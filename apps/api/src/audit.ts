@@ -248,16 +248,19 @@ const fields = {
   method: member(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']),
   // What kind of document a delete removed, and whether it was a draft; never its title.
   resourceKind: member(ResourceTypeSchema.options),
+  decision: member(['not-duplicate', 'keep-both']),
   draft: flag,
   // The knowledge box no longer held the document: only what the portal kept for it was cleared.
   cleanupOnly: flag,
   suspendedDays: count,
   operatorDeleteAfterDays: count,
   eraseRequested: flag,
+  includeFeedback: flag,
   // Records removed by a portal erasure, one field for each kind in `ERASED_RECORD_KINDS`.
   erasedConfiguration: count,
   erasedAliases: count,
   erasedBindings: count,
+  erasedDuplicates: count,
   erasedLifecycle: count,
   erasedEvaluations: count,
   erasedSessions: count,
@@ -266,6 +269,7 @@ const fields = {
   erasedSources: count,
   erasedInsights: count,
   erasedFeedback: count,
+  erasedSiteFeedback: count,
   erasedSuggestions: count,
   erasedEnrichments: count,
   erasedKgProposals: count,
@@ -277,6 +281,7 @@ const fields = {
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
+  'portal.export.bundle': ['permission', 'includeFeedback', 'code'],
   'auth.external.denied': ['externalReason', 'count'],
   'portal.lifecycle.update': [
     'permission',
@@ -297,6 +302,7 @@ const actionFields = {
     'erasedConfiguration',
     'erasedAliases',
     'erasedBindings',
+    'erasedDuplicates',
     'erasedLifecycle',
     'erasedEvaluations',
     'erasedSessions',
@@ -305,6 +311,7 @@ const actionFields = {
     'erasedSources',
     'erasedInsights',
     'erasedFeedback',
+    'erasedSiteFeedback',
     'erasedSuggestions',
     'erasedEnrichments',
     'erasedKgProposals',
@@ -356,6 +363,9 @@ const actionFields = {
     'suggestionId',
     'suggestionKind',
   ],
+  // One row for each portal an estate MCP tool call queried, in that portal's own log.
+  'estate.query': ['permission', 'operation', 'count', 'keyRole', 'code'],
+  'duplicate.review': ['permission', 'decision', 'sessionOid', 'sessionTenantId'],
   'resource.delete': [
     'code',
     'permission',

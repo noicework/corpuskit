@@ -8,7 +8,12 @@ import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError, type AdminRequestAccess } from '../../api/break-glass.ts'
 import { Button, SectionHeader, Skeleton } from '../../components/ui.tsx'
 import { EyeOff, RotateCw, Upload } from '../../components/icons.tsx'
-import { deletedNotice, DeleteDocumentButton } from '../../components/DeleteDocument.tsx'
+import {
+  deletedNotice,
+  DeleteDocumentButton,
+  refreshAfterDelete,
+} from '../../components/DeleteDocument.tsx'
+import { UpdateDocument } from './UpdateDocument.tsx'
 import { errorMessage } from './shared.ts'
 
 export async function readRecent(slug: string, access: AdminRequestAccess, limit?: number) {
@@ -124,6 +129,7 @@ function RecentListContent({ slug }: { slug: string }) {
   const [notice, setNotice] = useState<
     { title: string; outcome: Parameters<typeof deletedNotice>[1] } | null
   >(null)
+  const [updatedTitle, setUpdatedTitle] = useState<string | null>(null)
   const heading = useRef<HTMLSpanElement>(null)
   const queryClient = useQueryClient()
   const query = useQuery({
@@ -159,6 +165,7 @@ function RecentListContent({ slug }: { slug: string }) {
   const onDeleted =
     (resource: RecentResource) => (outcome: Parameters<typeof deletedNotice>[1]) => {
       setNotice({ title: resource.title, outcome })
+      setUpdatedTitle(null)
       // A snapshot taken with emergency access is not refetched: drop the row from it here.
       setSnapshot((rows) => rows?.filter((row) => row.id !== resource.id))
       // The row, and the control that had focus, go: focus the heading instead of the page body.
@@ -195,7 +202,13 @@ function RecentListContent({ slug }: { slug: string }) {
         </p>
       )}
       <p role='status' className='text-sm text-ink-2 [&:not(:empty)]:mt-2'>
-        {notice ? deletedNotice(notice.title, notice.outcome, ui) : ''}
+        {updatedTitle
+          ? ui('Updated “{title}” and requested indexing. Check its processing status below.', {
+            title: updatedTitle,
+          })
+          : notice
+          ? deletedNotice(notice.title, notice.outcome, ui)
+          : ''}
       </p>
 
       {isLoading && (
@@ -218,36 +231,49 @@ function RecentListContent({ slug }: { slug: string }) {
           {data.map((resource) => (
             <li
               key={resource.id}
-              className='flex flex-col gap-2 bg-surface px-2 py-3 sm:px-4 lg:flex-row lg:items-center lg:justify-between lg:gap-4'
+              className='flex min-w-0 flex-col gap-2 bg-surface px-2 py-3 sm:px-4'
             >
-              <div className='min-w-0 flex-1'>
-                <p className='break-words text-sm text-ink [overflow-wrap:anywhere]'>
-                  {resource.title}
-                </p>
-                <div className='mt-1 flex flex-wrap items-center gap-2'>
-                  {resource.created && (
-                    <span className='text-xs text-ink-3'>{date(resource.created)}</span>
-                  )}
-                  <StatusChip status={resource.status} stuck={resource.stuck} />
-                  {resource.hidden && (
-                    <span className='rp-badge rp-badge-quiet'>{ui('Draft')}</span>
-                  )}
+              <div className='flex min-w-0 flex-col gap-2 lg:flex-row lg:items-center lg:justify-between lg:gap-4'>
+                <div className='min-w-0 flex-1'>
+                  <p className='break-words text-sm text-ink [overflow-wrap:anywhere]'>
+                    {resource.title}
+                  </p>
+                  <div className='mt-1 flex flex-wrap items-center gap-2'>
+                    {resource.created && (
+                      <span className='text-xs text-ink-3'>{date(resource.created)}</span>
+                    )}
+                    <StatusChip status={resource.status} stuck={resource.stuck} />
+                    {resource.hidden && (
+                      <span className='rp-badge rp-badge-quiet'>{ui('Draft')}</span>
+                    )}
+                  </div>
+                </div>
+                <div className='flex shrink-0 items-center gap-2'>
+                  <VisibilityControl
+                    slug={slug}
+                    resource={resource}
+                    onChanged={onChanged}
+                  />
+                  <DeleteDocumentButton
+                    slug={slug}
+                    document={resource}
+                    onDeleted={onDeleted(resource)}
+                    icon
+                    className='rp-btn rp-btn-sm rp-btn-danger'
+                  />
                 </div>
               </div>
-              <div className='flex shrink-0 items-center gap-2'>
-                <VisibilityControl
-                  slug={slug}
-                  resource={resource}
-                  onChanged={onChanged}
-                />
-                <DeleteDocumentButton
-                  slug={slug}
-                  document={resource}
-                  onDeleted={onDeleted(resource)}
-                  icon
-                  className='rp-btn rp-btn-sm rp-btn-danger'
-                />
-              </div>
+              <UpdateDocument
+                slug={slug}
+                document={resource}
+                onUpdated={() => {
+                  setUpdatedTitle(resource.title)
+                  setNotice(null)
+                  setSnapshot((rows) => rows?.filter((row) => row.id !== resource.id))
+                  heading.current?.focus()
+                  void refreshAfterDelete(queryClient, slug, resource.id)
+                }}
+              />
             </li>
           ))}
         </ul>

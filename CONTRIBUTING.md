@@ -28,8 +28,9 @@ deno task check
 ```
 
 This runs, in order: `deno check` (typecheck) on the server, provisioning script and web entry
-point; `deno lint`; `deno fmt --check`; and the full test suite (`deno task test`). This is exactly
-what CI runs on every push and PR - if it does not pass locally, it will not pass in CI.
+point; `deno lint`; `deno fmt --check` (together `deno task check:static`); and the full test suite
+(`deno task test`). This is exactly what CI runs on every push and PR, split into jobs that run at
+the same time - if it does not pass locally, it will not pass in CI.
 
 Formatting and lint rules live in `deno.json` (`fmt` and `lint` keys). Run `deno fmt` to
 auto-format, and `deno lint` to see lint issues directly. `deno task fmt` only checks formatting; it

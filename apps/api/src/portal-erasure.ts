@@ -1,3 +1,4 @@
+import type { DuplicateReviewStore } from './duplicate-store.ts'
 import type { EvaluationStore } from './evaluation-store.ts'
 import { appendAudit, type AuditActor, type AuditStore, createAuditEvent } from './audit.ts'
 import type { BindingStoreApi } from './bindings.ts'
@@ -12,6 +13,7 @@ import type { SuggestionStoreApi } from './interrogate.ts'
 import type { KgProposalStoreApi } from './kg.ts'
 import type { PortalLifecycleStore } from './lifecycle-store.ts'
 import type { RbacState } from './rbac-state.ts'
+import type { SiteFeedbackStoreApi } from './site-feedback.ts'
 import type {
   FeedbackStoreApi,
   InsightsStoreApi,
@@ -32,6 +34,7 @@ export { ERASED_RECORD_KINDS, type ErasedCounts, type ErasedRecordKind }
  * inventory tests fail when a store keyed by slug is left out.
  */
 export interface PortalErasureStores {
+  duplicates: Pick<DuplicateReviewStore, 'erase'>
   evaluations?: Pick<EvaluationStore, 'erase'>
   tenants: Pick<TenantStoreApi, 'erase'>
   bindings: Pick<BindingStoreApi, 'status' | 'remove'>
@@ -42,6 +45,7 @@ export interface PortalErasureStores {
   sources: Pick<SourceStoreApi, 'erase'>
   insights: Pick<InsightsStoreApi, 'erase'>
   feedback: Pick<FeedbackStoreApi, 'erase'>
+  siteFeedback: Pick<SiteFeedbackStoreApi, 'erase'>
   suggestions: Pick<SuggestionStoreApi, 'erase'>
   enrichments: Pick<EnrichmentStoreApi, 'erase'>
   kgProposals: Pick<KgProposalStoreApi, 'erase'>
@@ -78,6 +82,7 @@ const AUDIT_FIELDS: Record<ErasedRecordKind, string> = {
   configuration: 'erasedConfiguration',
   aliases: 'erasedAliases',
   bindings: 'erasedBindings',
+  duplicates: 'erasedDuplicates',
   lifecycle: 'erasedLifecycle',
   evaluations: 'erasedEvaluations',
   sessions: 'erasedSessions',
@@ -86,6 +91,7 @@ const AUDIT_FIELDS: Record<ErasedRecordKind, string> = {
   sources: 'erasedSources',
   insights: 'erasedInsights',
   feedback: 'erasedFeedback',
+  siteFeedback: 'erasedSiteFeedback',
   suggestions: 'erasedSuggestions',
   enrichments: 'erasedEnrichments',
   kgProposals: 'erasedKgProposals',
@@ -130,6 +136,7 @@ export function erasePortal(
       stores.bindings.remove(slug)
       erased.bindings = 1
     }
+    erased.duplicates = stores.duplicates.erase(slug)
     erased.evaluations = stores.evaluations?.erase(slug) ?? 0
     erased.lifecycle = stores.lifecycle.erase(slug)
     erased.sessions = stores.sessions.erase(slug)
@@ -138,6 +145,7 @@ export function erasePortal(
     erased.sources = stores.sources.erase(slug)
     erased.insights = stores.insights.erase(slug)
     erased.feedback = stores.feedback.erase(slug)
+    erased.siteFeedback = stores.siteFeedback.erase(slug)
     erased.suggestions = stores.suggestions.erase(slug)
     erased.enrichments = stores.enrichments.erase(slug)
     erased.kgProposals = stores.kgProposals.erase(slug)

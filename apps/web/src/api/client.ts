@@ -201,6 +201,20 @@ export function getResources(slug: string): Promise<ResourceSummary[]> {
   return request<ResourceSummary[]>(`/api/t/${encodeURIComponent(slug)}/resources`)
 }
 
+/** One document in the title index the header search suggests from. */
+export interface TitleIndexItem {
+  id: string
+  title: string
+  type?: ResourceSummary['type']
+  topicIds?: string[]
+  kind?: string
+}
+
+/** Every document's display title, fetched once a session for the header search's suggestions. */
+export function getTitleIndex(slug: string): Promise<{ items: TitleIndexItem[] }> {
+  return request<{ items: TitleIndexItem[] }>(`/api/t/${encodeURIComponent(slug)}/titles`)
+}
+
 export function getResource(slug: string, id: string): Promise<ResourceSummary> {
   return request<ResourceSummary>(
     `/api/t/${encodeURIComponent(slug)}/resources/${encodeURIComponent(id)}`,
@@ -1196,6 +1210,45 @@ export function sendAnswerFeedback(
   })
 }
 
+// --- Reader feedback about the portal ------------------------------------------
+
+export type SiteFeedbackCategory = 'general' | 'answer' | 'problem' | 'suggestion'
+
+export type SiteFeedbackInput = {
+  message: string
+  email?: string
+  category: SiteFeedbackCategory
+  /** The page it is sent from: the path only, never its query or fragment. */
+  pagePath: string
+  /** The honeypot field; a person never fills it in. */
+  website?: string
+}
+
+/** Resolves only once the portal team was notified, never when the message was merely kept. */
+export async function sendSiteFeedback(
+  slug: string,
+  input: SiteFeedbackInput,
+): Promise<{ id: string }> {
+  const res = await transportFetch(`/api/t/${encodeURIComponent(slug)}/site-feedback`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
+    body: JSON.stringify(input),
+  })
+  const body: unknown = await res.json().catch(() => null)
+  assertResponseCurrent(res)
+  const id = body && typeof body === 'object' && 'id' in body ? body.id : undefined
+  if (res.status !== 201 || typeof id !== 'string' || !id) {
+    const error = new ApiError(
+      res.status,
+      friendlyError(body, 'The feedback could not be sent.'),
+      res.status === 429 ? retryAfterOf(res) : undefined,
+    )
+    error.code = errorCode(body)
+    throw error
+  }
+  return { id }
+}
+
 // --- Multi-document summaries ------------------------------------------------
 
 export function summarizeResources(
@@ -1598,6 +1651,8 @@ export type EvidenceVerdict = 'supports' | 'partial' | 'not-relevant' | 'contrad
 export interface EvidenceItem {
   id: string
   passage: string
+  /** The page (counted from one) the passage sits on in the stored file, when known. */
+  page?: number
   resourceId: string
   resourceTitle: string
   score: number | null
@@ -1683,6 +1738,8 @@ export function deleteInvestigation(slug: string, id: string): Promise<{ ok: boo
 
 export interface NewEvidence {
   passage: string
+  /** The page the passage sits on, so the saved item reopens the PDF there. */
+  page?: number
   resourceId: string
   resourceTitle: string
   score?: number | null

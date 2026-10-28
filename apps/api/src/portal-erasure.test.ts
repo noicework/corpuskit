@@ -72,6 +72,7 @@ const anonymous: ResearchOwner = { kind: 'anonymous', clientId: 'visitor-1' }
  * and the erasure tests below then prove that erasure removes whatever it wrote.
  */
 const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string) => unknown> = {
+  duplicates: (f, slug) => f.stores.duplicates.decide(slug, 'res-1~res-2', 'keep-both'),
   evaluations: (f, slug) => {
     const definition = f.stores.evaluations.put(slug, 'checks', {
       name: 'Evidence checks',
@@ -197,6 +198,19 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
       learningId: 'learning-probe',
       good: false,
       text: 'reader@first-customer.example says the year is wrong',
+    }),
+  siteFeedback: (f, slug) =>
+    // Messages age out on real time, whatever the fixture's clock says.
+    f.stores.siteFeedback.save(slug, {
+      id: '00000000-0000-4000-8000-000000000001',
+      slug,
+      createdAt: new Date().toISOString(),
+      category: 'problem',
+      message: 'The download link on this page is broken.',
+      email: 'reader@first-customer.example',
+      pageUrl: 'https://first-customer.example/t/erasure-probe/library',
+      delivery: 'sent',
+      notificationId: 'notification-probe',
     }),
   sessions: (f, slug) => {
     for (const owner of [researcher, anonymous]) {
@@ -837,6 +851,7 @@ Deno.test('OPERATOR_DELETE_AFTER_DAYS accepts whole days from 1 to 36500 and not
  * table fails this test until it is classified here and, when it holds portal records, erased.
  */
 const DURABLE_TABLES: Record<string, string> = {
+  duplicate_reviews: 'erased: DuplicateReviewStore.erase',
   evaluation_sets: 'erased: EvaluationStore.erase',
   evaluation_schedules: 'erased: EvaluationStore.erase',
   evaluation_runs: 'erased: EvaluationStore.erase',
@@ -845,6 +860,7 @@ const DURABLE_TABLES: Record<string, string> = {
   enrichment_records: 'erased: DurableEnrichmentStore.erase',
   routing_records: 'erased: DurableRoutingLog.erase',
   answer_feedback: 'erased: DurableFeedbackStore.erase',
+  site_feedback: 'erased: DurableSiteFeedbackStore.erase',
   audit_events: 'erased: RbacState.erasePortalRecords, keeping the erasure records',
   audit_event_order: 'erased: with the audit events it orders',
   audit_query_snapshots: 'erased: open paged queries of the portal',

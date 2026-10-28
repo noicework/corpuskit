@@ -1,3 +1,4 @@
+import { ResourceProvenanceLabel } from '../components/ResourceProvenanceLabel.tsx'
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom'
@@ -186,6 +187,7 @@ export function LibraryCard(
           ? 'flex min-w-0 flex-1 flex-col gap-1.5 p-3.5'
           : 'flex flex-1 flex-col gap-2 border-t border-line p-3.5'}
       >
+        <ResourceProvenanceLabel resourceId={item.id} />
         <h3 className='rp-clamp-2 text-sm font-semibold leading-snug text-ink'>
           {title}
         </h3>
@@ -323,8 +325,10 @@ export function LibraryBrowser(
   const view = viewProp ?? viewState
   const setView = onViewChange ?? setViewState
 
-  const [queryDraft, setQueryDraft] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [searchParams] = useSearchParams()
+  // Entity links from the graph open the library with the same search term.
+  const [queryDraft, setQueryDraft] = useState(() => searchParams.get('q') ?? '')
+  const [debouncedQuery, setDebouncedQuery] = useState(() => searchParams.get('q')?.trim() ?? '')
   const [sortState, setSortState] = useState<SortValue>(DEFAULT_SORT)
   const sort = sortProp ?? sortState
   const setSort = onSortChange ?? setSortState
@@ -332,7 +336,6 @@ export function LibraryBrowser(
   const [densityState, setDensityState] = useState(4)
   const density = densityProp ?? densityState
   const setDensity = onDensityChange ?? setDensityState
-  const [searchParams] = useSearchParams()
   const [selectedTopics, setSelectedTopics] = useState<string[]>(() =>
     facetsFromUrl(searchParams, 'topic', 'topics')
   )
