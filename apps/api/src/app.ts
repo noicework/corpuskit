@@ -3016,6 +3016,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
   })
 
+  // Every document's display title in one small list, for the header search's suggestions. The
+  // browser fetches it once a session and matches as the reader types, so a keystroke never
+  // reaches this server or the knowledge box. A reader's view of the cached catalogue: bounded.
+  app.get(declaredRoute('GET', '/api/t/:slug/titles'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const resources = await provider.listResources(config, { bounded: true })
+    return c.json({
+      items: merchandiseSummaries(enrichments, config.slug, resources).map((resource) => ({
+        id: resource.id,
+        title: resource.title,
+        type: resource.type,
+        topicIds: resource.topicIds,
+        ...(resource.kind ? { kind: resource.kind } : {}),
+      })),
+    })
+  })
+
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)

@@ -1,12 +1,55 @@
 /* Pages component styles. */
 
-/* An opaque hero ground keeps the chip ink legible over photographs and glows. */
+/* The hero's suggested questions: a light chip of the surface, nearly opaque so a hero gradient
+ * or photograph cannot muddy the ink, with a 1px edge in the hero field's own edge token. That
+ * token is the house field edge where the surface already stands out from the hero, and the
+ * hero's text colour where it does not, so the chip keeps a 3:1 outline on every palette. */
 .rp-pages-hero-chip {
-  background: var(--rp-hero-from);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--rp-hero-field-edge);
+  background: color-mix(in srgb, var(--rp-surface) 92%, transparent);
+  color: var(--rp-ink);
+  box-shadow: var(--rp-shadow-sm);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  transition:
+    background-color 150ms var(--rp-ease),
+    box-shadow 150ms var(--rp-ease),
+    transform 150ms var(--rp-ease);
+}
+
+.rp-pages-hero-chip-arrow {
+  color: var(--rp-ink-2);
+  transition: transform 150ms var(--rp-ease);
 }
 
 .rp-pages-hero-chip:hover {
-  border-color: var(--rp-on-hero);
+  background: var(--rp-surface);
+  box-shadow: var(--rp-shadow-md);
+  transform: translateY(-1px);
+}
+
+.rp-pages-hero-chip:hover .rp-pages-hero-chip-arrow {
+  transform: translateX(2px);
+}
+
+/* A hero drawn on the page's own surface: the chip needs the house field edge to show at all. */
+.rp-acmd-hero .rp-pages-hero-chip {
+  border-color: var(--rp-field);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rp-pages-hero-chip,
+  .rp-pages-hero-chip-arrow {
+    transition: none;
+  }
+
+  .rp-pages-hero-chip:hover,
+  .rp-pages-hero-chip:hover .rp-pages-hero-chip-arrow {
+    transform: none;
+  }
 }
 
 .rp-pages-entry-tile:focus-visible {

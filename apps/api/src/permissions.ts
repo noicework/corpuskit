@@ -246,6 +246,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/t/:slug/labelsets', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/suggest', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources', 'portal.read', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/titles', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id/questions', 'portal.read', 'portal', {
     subActions: [
