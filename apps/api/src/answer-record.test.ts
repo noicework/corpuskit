@@ -132,6 +132,9 @@ Deno.test('redaction omits identity fields, credentials, IP addresses and sessio
   ) expect(saved).not.toContain(secret)
   expect(saved).toContain('Personal research question')
   expect(saved).toContain('https://peer.example.test/mcp')
+  for (const suffix of ['-', '_', 'a']) {
+    expect(redactAnswerRecordText('ck_' + 'a'.repeat(42) + suffix)).toBe('[redacted credential]')
+  }
   expect(redactAnswerRecordText('::1')).toBe('[redacted address]')
   expect(redactAnswerRecordText('Ratios 1:2:3 at 12:30:00')).toBe('Ratios 1:2:3 at 12:30:00')
 })

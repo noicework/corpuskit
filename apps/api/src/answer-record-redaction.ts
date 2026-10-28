@@ -2,7 +2,7 @@
 export function redactAnswerRecordText(value: string): string {
   return value
     .replace(/\b(?:Bearer|Operator)\s+[A-Za-z0-9_.+/=-]+/gi, '[redacted credential]')
-    .replace(/\bck_[A-Za-z0-9_-]{43}\b/g, '[redacted credential]')
+    .replace(/\bck_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, '[redacted credential]')
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted credential]')
     .replace(
       /\b(?:token|password|secret|api[_ -]?key|session[_ -]?id)\s*[:=]\s*[^\s,;]+/gi,
