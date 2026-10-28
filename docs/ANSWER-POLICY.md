@@ -117,3 +117,6 @@ another portal's unaffected answer, then checks Insights and reset. Screenshots 
 `.review/prompts-guardrails/` for desktop/mobile light/dark, 200% text and 320px reflow. Unit tests
 cover prompt order, matching, split chunks, length limits, private storage, isolation, permissions,
 lifecycle restrictions and configuration-audit rollback.
+
+When changing this panel, also run `e2e/demo-tour.test.ts`: answer settings and guided tour settings
+share Manage > Behaviour.
