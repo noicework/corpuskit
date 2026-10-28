@@ -199,6 +199,18 @@ describe('the guided tour', () => {
         'the Graph scene',
       )
 
+      // The window regaining focus remounts the page; the tour comes back at the same step.
+      await page.evaluate(() => globalThis.dispatchEvent(new Event('focus')))
+      await settle(
+        page,
+        () =>
+          document.querySelector('dialog[data-demo-tour]')?.hasAttribute('open') === true &&
+          document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
+            'Visualise connections',
+        'the tour coming back after a remount',
+      )
+      expect((await state()).status).toBe('Step 3 of 4: Visualise connections')
+
       // Escape closes it and focus goes to the Help button, a tick after the dialog has gone.
       await page.keyboard.press('Escape')
       await settle(page, dialogGone, 'closing')
@@ -207,6 +219,10 @@ describe('the guided tour', () => {
         () => document.activeElement === document.querySelector('[data-help-trigger]'),
         'focus returning',
       )
+      // Closed, it stays closed through the next remount.
+      await page.evaluate(() => globalThis.dispatchEvent(new Event('focus')))
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(await page.evaluate(dialogGone)).toBe(true)
     } finally {
       await page.evaluate(() => localStorage.removeItem('rp_demo_tour_done')).catch(() => {})
       await page.close()
