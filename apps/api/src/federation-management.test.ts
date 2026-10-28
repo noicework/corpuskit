@@ -1,6 +1,6 @@
 import { expect } from '@std/expect'
 import type { AragProvider } from '@research-portal/retrieval'
-import type { TenantConfig } from '@research-portal/core'
+import { DEFAULT_RESEARCH_ENRICHMENT, type TenantConfig } from '@research-portal/core'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { peerKeyName } from './bindings.ts'
@@ -50,7 +50,14 @@ for (const runtime of ['local', 'durable'] as const) {
       const snapshot = JSON.parse(text)
       expect(snapshot.peers[0].keySet).toBe(true)
       expect(snapshot.supportedKinds).toContain('arag-kb')
-      expect((await f.requestAs(curator, path + '/documents')).status).toBe(200)
+      f.stores.enrichments.put('a', 'res-1', {
+        schemaId: DEFAULT_RESEARCH_ENRICHMENT.id,
+        generatedAt: '2026-10-28T00:00:00Z',
+        data: { title: 'Soil trial research report', summary: 'Soil research findings.' },
+      })
+      const documents = await f.requestAs(curator, path + '/documents')
+      expect(documents.status).toBe(200)
+      expect((await documents.json()).items[0].title).toBe('Soil trial research report')
       const exclusion = '/api/admin/t/a/resources/res-1/federation-exclusion'
       expect(
         (await f.requestAs(f.sessionFor('viewer', 'a'), exclusion, json({ excluded: true })))

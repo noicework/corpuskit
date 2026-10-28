@@ -35,6 +35,7 @@ const curatorTabs = [
   'enrichments',
   'taxonomy',
   'graph',
+  'federation',
   'extraction',
 ]
 const administratorTabs = [

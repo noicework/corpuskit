@@ -1,0 +1,19 @@
+/* Federation forms reflow within the Manage panel at large system text sizes. */
+.rp-federation-panel {
+  overflow-wrap: anywhere;
+}
+
+.rp-federation-panel .rp-btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rp-federation-panel .rp-input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.rp-federation-panel .rp-switch:not([data-on='true']) {
+  border-color: var(--rp-field);
+}

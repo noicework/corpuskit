@@ -8,6 +8,7 @@ import type { AragProvider, RetrievalProvider } from '@research-portal/retrieval
 import type { SealedBindingStore } from './bindings.ts'
 import { peerKeyName } from './bindings.ts'
 import { declaredRoute } from './permissions.ts'
+import { type EnrichmentStoreApi, merchandiseSummaries } from './enrichments.ts'
 
 const kindSamples = {
   'arag-kb': { zone: 'test-zone', kbId: 'fixture-box' },
@@ -32,6 +33,7 @@ export function registerFederationManagement(app: Hono, services: {
   tenant(slug: string): TenantConfig | undefined
   bindings: Pick<SealedBindingStore, 'get'>
   provider: RetrievalProvider
+  enrichments: EnrichmentStoreApi
   management?: Pick<AragProvider, 'setResourceFederationExcluded'>
 }) {
   app.get(declaredRoute('GET', '/api/admin/t/:slug/federation'), (c) => {
@@ -56,7 +58,9 @@ export function registerFederationManagement(app: Hono, services: {
       signal: c.req.raw.signal,
     })
     return c.json({
-      items: items.map(({ id, title, federationExcluded }) => ({
+      items: merchandiseSummaries(services.enrichments, config.slug, items).map((
+        { id, title, federationExcluded },
+      ) => ({
         id,
         title,
         excluded: federationExcluded === true,

@@ -5489,7 +5489,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     })
   })
 
-  registerFederationManagement(app, { tenant, bindings, provider, management })
+  registerFederationManagement(app, { tenant, bindings, provider, management, enrichments })
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/configuration'), (c) => {
     const config = tenant(c.req.param('slug'))

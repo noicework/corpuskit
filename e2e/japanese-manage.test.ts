@@ -33,6 +33,7 @@ const tabs = [
   'graph',
   'appearance',
   'evaluations',
+  'federation',
   'behaviour',
   'extraction',
   'details',
@@ -372,7 +373,9 @@ Deno.test('Japanese Manage covers every panel, retains source values and switche
             await preview.evaluate(() => {
               document.documentElement.style.fontSize = '22px'
             })
-            for (const tab of ['enrichments', 'appearance', 'content', 'access', 'audit']) {
+            for (
+              const tab of ['enrichments', 'appearance', 'content', 'federation', 'access', 'audit']
+            ) {
               await navigate(preview, tab)
               expect(await preview.evaluate(() => innerWidth)).toBe(width)
               expect(

@@ -532,6 +532,10 @@ describe('independent admin route permission matrix', () => {
         ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
         'GET /api/admin/t/:slug/export',
         'PATCH /api/admin/t/:slug/access',
+        // Federation's role and mutation matrix lives in enforcement.test.ts.
+        'GET /api/admin/t/:slug/federation',
+        'GET /api/admin/t/:slug/federation/documents',
+        'PUT /api/admin/t/:slug/resources/:id/federation-exclusion',
         // This family's full role and mutation matrix lives in enforcement.test.ts.
         'GET /api/admin/t/:slug/evaluations',
         'PUT /api/admin/t/:slug/evaluations/:id',
