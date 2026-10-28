@@ -39,8 +39,13 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-          # The lock-verified DENO_DIR cache described in ci.yml.
-          cache: true
+
+      - name: Cache Deno modules
+        # The lock-verified module cache described in ci.yml.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
 
       - name: Install build tooling
         env:
@@ -97,7 +102,13 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-          cache: true
+
+      - name: Cache Deno modules
+        # The lock-verified module cache described in ci.yml.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
 
       - name: Install build tooling
         env:

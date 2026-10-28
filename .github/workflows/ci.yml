@@ -27,11 +27,17 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-          # Restores DENO_DIR from the Actions cache, keyed on deno.lock, the job
-          # and the runner. deno.lock still verifies it: Deno checks each cached
-          # module against its locked hash when it loads it and downloads it
-          # again if they differ, so a cache cannot change the code that runs.
-          cache: true
+
+      - name: Cache Deno modules
+        # The downloaded remote modules only, keyed on deno.lock. The lock still
+        # verifies them: Deno checks each cached module against its locked hash
+        # as it loads it, so a cache cannot change the code that runs. Type
+        # check, lint and format results are not cached; every run checks
+        # everything.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
 
       - name: Install build tooling
         # Pinned to match the Dockerfile (ESBUILD_VERSION / TAILWINDCSS_VERSION
@@ -81,8 +87,13 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-          # The same lock-verified DENO_DIR cache as the gate job.
-          cache: true
+
+      - name: Cache Deno modules
+        # The same lock-verified module cache as the gate job.
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/deno/remote
+          key: deno-remote-${{ runner.os }}-${{ github.job }}-${{ hashFiles('deno.lock') }}
 
       - name: Install build tooling
         # The same pinned binaries as the gate job, for build:web.
