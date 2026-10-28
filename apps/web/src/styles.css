@@ -46,6 +46,7 @@
    * ground (lib/theme.ts accentMarkVars). */
   --rp-accent-line: #52525b;
   --rp-accent-on-primary: #52525b;
+  --rp-hero-field-edge: var(--rp-field);
 
   /* Typography hooks - TenantLayout overrides these from branding.typography.
    * The house faces (Manrope body, Inter headings) are the defaults, so
@@ -113,6 +114,9 @@ html {
   /* Tenant choices are written as custom properties rather than an inline
    * font-size so the desktop media query can compose with every choice. */
   font-size: var(--rp-text-scale, 100%);
+  /* The tenant header is sticky (TenantLayout writes its height): a control reached by Shift+Tab
+   * or a fragment link scrolls into view below it, not under it (WCAG 2.4.11). */
+  scroll-padding-top: calc(var(--rp-header-h, 0px) + 0.75rem);
 }
 
 @media (min-width: 1024px) {
@@ -1892,6 +1896,10 @@ label.rp-btn:has(input:focus-visible) {
 .rp-field.rp-hero-field:focus-within {
   box-shadow: var(--rp-ring-inverse);
 }
+/* Its edge, too, must show against the hero where its fill does not (WCAG 1.4.11). */
+.rp-field.rp-hero-field {
+  border-color: var(--rp-hero-field-edge);
+}
 
 .rp-tenant input:is([type='checkbox'], [type='radio'], [type='range']) {
   accent-color: var(--rp-accent-fg);
@@ -3133,6 +3141,9 @@ button:disabled,
   --rp-hero-from: #155da6;
   --rp-hero-to: #155da6;
   --rp-on-hero: #ffffff;
+  /* The ask field's edge reads on the blue where its fill does not (a dark field in the dark
+   * scheme); in the light scheme the white field itself stands out. */
+  --rp-hero-field-edge: #ffffff;
   --rp-on-hero-2: #dce8f4;
   --rp-on-primary: #ffffff;
   background: #155da6;

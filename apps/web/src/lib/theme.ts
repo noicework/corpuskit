@@ -347,8 +347,11 @@ export function secondaryInk(foreground: string, grounds: readonly string[]): st
  *   a relevance bar, a quote rule, a "new results" dot - at 3:1 on the surface, the app ground
  *   and the grey panels. The accent itself when it already reads, else stepped toward the ink.
  * - `--rp-accent-on-primary`: the current-page underline on the brand ground, at 3:1 there.
+ * - `--rp-hero-field-edge`: the hero ask field's border. The house field edge while the field's
+ *   fill or that edge stands out from both hero endpoints at 3:1; the hero's text colour when
+ *   neither does, as on a mid-tone hero where a white field and a grey edge blend into it.
  *
- * Colours this cannot measure (a seed may use any CSS colour) keep the accent.
+ * Colours this cannot measure (a seed may use any CSS colour) keep the accent and the house edge.
  */
 export function accentMarkVars(
   roles: Record<string, string>,
@@ -362,12 +365,24 @@ export function accentMarkVars(
   const vars: Record<string, string> = {
     '--rp-accent-line': roles['--rp-accent']!,
     '--rp-accent-on-primary': roles['--rp-accent']!,
+    // Set here, not only at :root, so the field edge resolves against this portal's own tokens.
+    '--rp-hero-field-edge': 'var(--rp-field)',
   }
   if (accent && measured.every((ground) => ground !== null)) {
     vars['--rp-accent-line'] = deepenForContrast(accent, measured as string[], 3, ink)
   }
   if (accent && primary && onPrimary) {
     vars['--rp-accent-on-primary'] = deepenForContrast(accent, [primary], 3, onPrimary)
+  }
+  const fill = measured[0]
+  const edge = normaliseHex(roles['--rp-field'] ?? '') ?? fieldBorder(HOUSE_LIGHT_SUITE)
+  const hero = [roles['--rp-hero-from'], roles['--rp-hero-to']].map((c) => normaliseHex(c ?? ''))
+  const onHero = normaliseHex(roles['--rp-on-hero'] ?? '')
+  if (fill && onHero && hero.every((ground) => ground !== null)) {
+    const shows = (hero as string[]).every((ground) =>
+      contrastRatio(fill, ground) >= 3 || contrastRatio(edge, ground) >= 3
+    )
+    if (!shows) vars['--rp-hero-field-edge'] = onHero
   }
   return vars
 }

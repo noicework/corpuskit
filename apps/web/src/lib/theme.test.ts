@@ -746,11 +746,43 @@ describe('accent marks', () => {
     }
   })
 
+  it('edges the hero ask field in the hero text colour where field and edge would blend in', () => {
+    // A white field with a grey edge on a mid-tone green hero: 2.84:1 and 1.2:1.
+    const green = paletteVars(branding({ colours: greenOnCharcoal, paletteId: 'default' }))
+    expect(green['--rp-hero-field-edge']).toBe(green['--rp-on-hero'])
+    // A dark hero shows the white field itself, so the house edge stays.
+    const navy = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
+    expect(navy['--rp-hero-field-edge']).toBe('var(--rp-field)')
+  })
+
+  it("gives every hero's ask field a fill or an edge at 3:1 on it, in either scheme", () => {
+    const channel = [0, 64, 128, 192, 255]
+    for (const r of channel) {
+      for (const g of channel) {
+        for (const b of channel) {
+          const hero = `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`
+          const colours = { ...greenOnCharcoal, heroFrom: hero, heroTo: hero }
+          for (const scheme of ['light', 'dark'] as const) {
+            const vars = paletteVars(branding({ colours, paletteId: 'default' }), scheme)
+            const fill = vars['--rp-surface'] ?? HOUSE_LIGHT_SUITE.surface
+            const value = vars['--rp-hero-field-edge']!
+            const edge = value === 'var(--rp-field)'
+              ? vars['--rp-field'] ?? fieldBorder(HOUSE_LIGHT_SUITE)
+              : value
+            const best = Math.max(contrastRatio(fill, hero), contrastRatio(edge, hero))
+            expect(best, `${hero} ${scheme}`).toBeGreaterThanOrEqual(3)
+          }
+        }
+      }
+    }
+  })
+
   it('uses the accent as it is when it cannot measure the colours', () => {
     expect(accentMarkVars({ '--rp-accent': 'rebeccapurple', '--rp-primary': 'navy' }, ['#ffffff']))
       .toEqual({
         '--rp-accent-line': 'rebeccapurple',
         '--rp-accent-on-primary': 'rebeccapurple',
+        '--rp-hero-field-edge': 'var(--rp-field)',
       })
   })
 
@@ -767,6 +799,7 @@ describe('accent marks', () => {
       'background: var(--rp-accent-on-primary);',
     )
     expect(rule(".rp-switch[data-on='true']")).toContain('border-color: var(--rp-accent-line);')
+    expect(rule('.rp-field.rp-hero-field')).toContain('border-color: var(--rp-hero-field-edge);')
     const explore = await Deno.readTextFile(new URL('../pages/ExplorePage.tsx', import.meta.url))
     expect(explore).toMatch(/'rp-field rp-hero-field /)
   })
@@ -798,6 +831,13 @@ describe('the house light suite', () => {
     expect(value('--rp-ink')).toBe('var(--rp-n-900)')
     expect(value('--rp-ink-2')).toBe('var(--rp-n-600)')
     expect(value('--rp-field')).toBe(fieldBorder(HOUSE_LIGHT_SUITE))
+  })
+})
+
+describe('focus not obscured', () => {
+  it('scrolls a focused control into view below the sticky tenant header', () => {
+    // TenantLayout writes the header's height to --rp-header-h on the root.
+    expect(rule('html')).toContain('scroll-padding-top: calc(var(--rp-header-h, 0px) + 0.75rem);')
   })
 })
 
