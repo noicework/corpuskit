@@ -1,3 +1,4 @@
+import type { PageFingerprint, SyncSummary } from './website-refresh.ts'
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
@@ -284,6 +285,13 @@ export interface AskInsight {
    * back to the question it answered. Absent on asks recorded before it was kept.
    */
   learningId?: string
+  /**
+   * Seconds from the portal server receiving the question to sending the first words of the
+   * answer, and to finishing it, as the portal server measured them. Null when no words were
+   * sent; absent on asks recorded before they were kept.
+   */
+  firstTokenSec?: number | null
+  answerSec?: number
 }
 
 /** The asks Insights lists: never with the answer ids feedback joins on. */
@@ -305,6 +313,20 @@ function questionsByLearningId(
     }
   }
   return found
+}
+
+/** A groundedness score at or below this, out of 5, is a weakly grounded answer: a knowledge gap. */
+export const WEAK_GROUNDEDNESS = 2
+
+/** A portal's asks over a period, and when its ask log's complete record begins. */
+export interface AskWindow {
+  /** The asks recorded in the period, oldest first. */
+  asks: AskInsight[]
+  /**
+   * When the log began dropping its oldest asks, as the time of the oldest it still holds; null
+   * while it holds every ask it was given.
+   */
+  keptSince: string | null
 }
 
 export interface InsightsSummary {
@@ -379,7 +401,9 @@ export class InsightsStore {
     }
     // Knowledge gaps: the corpus could not answer, or answered on thin ground.
     const gaps = all
-      .filter((i) => !i.answered || (i.groundedness !== null && i.groundedness <= 2))
+      .filter((i) =>
+        !i.answered || (i.groundedness !== null && i.groundedness <= WEAK_GROUNDEDNESS)
+      )
       .slice(-30)
       .reverse()
       .map((i) => ({
@@ -408,6 +432,19 @@ export class InsightsStore {
   ): Record<string, { question: string; ts: string }> {
     return learningIds.length === 0 ? {} : questionsByLearningId(this.readAll(slug), learningIds)
   }
+
+  /** The asks from `from` up to `to` (epoch milliseconds), for a usage report. Never trimmed. */
+  asksBetween(slug: string, from: number, to: number): AskWindow {
+    return { asks: asksIn(this.readAll(slug), from, to), keptSince: null }
+  }
+}
+
+/** The asks recorded from `from` up to, not including, `to`, oldest first. */
+export function asksIn(asks: readonly AskInsight[], from: number, to: number): AskInsight[] {
+  return asks.filter((ask) => {
+    const at = Date.parse(ask.ts)
+    return at >= from && at < to
+  })
 }
 
 // --- Answer feedback ----------------------------------------------------------
@@ -958,6 +995,9 @@ export interface Source {
   auto: boolean
   /** Urls already ingested from this source (dedupe across syncs). */
   synced?: string[]
+  pages?: Record<string, PageFingerprint>
+  refreshCursor?: number
+  lastSummary?: SyncSummary
   /**
    * Running total of pages ingested from this source. Kept as its own counter
    * rather than read off `synced.length`, because `synced` is trimmed to the
@@ -981,7 +1021,7 @@ export interface Source {
  * holds up to 5000 urls, which is pure weight on every poll of the sources
  * list, and the browser only ever needs the count.
  */
-export type SourceSummary = Omit<Source, 'synced'> & { itemCount: number }
+export type SourceSummary = Omit<Source, 'synced' | 'pages'> & { itemCount: number }
 
 export class SourceStore {
   constructor(private readonly dataDir = DATA_DIR) {}
@@ -1002,7 +1042,7 @@ export class SourceStore {
 
   /** The list as the admin API exposes it - no url ledger, count always present. */
   summaries(slug: string): SourceSummary[] {
-    return this.list(slug).map(({ synced, ...rest }) => ({
+    return this.list(slug).map(({ synced, pages: _pages, ...rest }) => ({
       ...rest,
       itemCount: rest.itemCount ?? synced?.length ?? 0,
     }))
@@ -1066,6 +1106,8 @@ export class SourceStore {
 export interface EvidenceItem {
   id: string
   passage: string
+  /** The page (counted from one) the passage sits on in the stored file, when known. */
+  page?: number
   resourceId: string
   resourceTitle: string
   /** Calibrated retrieval score at capture time, when known. */
@@ -1415,7 +1457,12 @@ export class McpKeyStore implements ScopedKeyStore {
     const all = this.list(slug)
     const found = all.find((record) => record.id === id)
     if (!found) return false
-    if (!found.revokedAt) found.revokedAt = revokedAt
+    if (!found.revokedAt) {
+      found.revokedAt = revokedAt
+      // A revoked key reaches nothing, so it keeps no estate, and releases before estates can
+      // read its record again.
+      delete found.estate
+    }
     ownedWrite(this.pathFor(slug), all, this.boundary)
     return true
   }

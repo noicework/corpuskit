@@ -1,6 +1,48 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
-import { tenantCopy } from './tenant-copy.ts'
+import { portalStarterQuestions, tenantCopy } from './tenant-copy.ts'
+import { localisePortalConfig } from './portal-locale.tsx'
+import { TenantConfigSchema } from '@research-portal/core'
+
+it('uses authored starter translations only for portals with custom interface copy', () => {
+  const config = TenantConfigSchema.parse({
+    slug: 'example',
+    branding: {
+      productName: 'Example',
+      organisation: 'Example',
+      tagline: 'Example records',
+      colours: { primary: '#123456', accent: '#123456', heroFrom: '#123456', heroTo: '#123456' },
+    },
+    searchPlaceholder: 'Search',
+    topics: [],
+    entityTypes: [],
+    relationTypes: [],
+    suggestedQuestions: [{ id: 'q1', text: '架空の記録では何が報告されていますか。' }],
+    languagePolicy: {
+      defaultLanguage: 'ja',
+      availableLanguages: ['ja', 'en'],
+      translations: {
+        en: { '架空の記録では何が報告されていますか。': 'What do the fictional records report?' },
+      },
+    },
+    copy: { interfaceMessages: { en: { Graph: 'Knowledge map' } } },
+  })
+  const suggestions = [...config.suggestedQuestions, {
+    id: 'generated',
+    text: 'An additional question',
+  }]
+  expect(portalStarterQuestions(localisePortalConfig(config, 'en'), suggestions)).toEqual([
+    { id: 'q1', text: 'What do the fictional records report?' },
+    suggestions[1],
+  ])
+  expect(portalStarterQuestions(localisePortalConfig(config, 'ja'), suggestions)).toEqual(
+    suggestions,
+  )
+  expect(
+    portalStarterQuestions({ ...localisePortalConfig(config, 'en'), copy: undefined }, suggestions),
+  )
+    .toBe(suggestions)
+})
 
 const neuro = {
   topics: [

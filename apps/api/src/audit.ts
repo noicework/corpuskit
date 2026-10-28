@@ -248,24 +248,30 @@ const fields = {
   method: member(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']),
   // What kind of document a delete removed, and whether it was a draft; never its title.
   resourceKind: member(ResourceTypeSchema.options),
+  decision: member(['not-duplicate', 'keep-both']),
   draft: flag,
   // The knowledge box no longer held the document: only what the portal kept for it was cleared.
   cleanupOnly: flag,
   suspendedDays: count,
   operatorDeleteAfterDays: count,
   eraseRequested: flag,
+  includeFeedback: flag,
   // Records removed by a portal erasure, one field for each kind in `ERASED_RECORD_KINDS`.
   erasedConfiguration: count,
   erasedAliases: count,
   erasedBindings: count,
+  erasedDuplicates: count,
   erasedLifecycle: count,
+  erasedEvaluations: count,
   erasedSessions: count,
   erasedInvestigations: count,
   erasedWatches: count,
   erasedSources: count,
+  erasedLinkHealth: count,
   erasedInsights: count,
   erasedFeedback: count,
   erasedSiteFeedback: count,
+  erasedAnswerRecords: count,
   erasedSuggestions: count,
   erasedEnrichments: count,
   erasedKgProposals: count,
@@ -274,9 +280,18 @@ const fields = {
   erasedMcpKeys: count,
   erasedAssignments: count,
   erasedAuditEvents: count,
+  peerId: (value: unknown): value is string =>
+    typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,39}$/.test(value),
+  peerKind: member(['arag-kb', 'arag-mcp']),
+  durationMs: count,
+  peerFailure: member(['timeout', 'unauthorised', 'error']),
+  // Whether the portal takes part in federated answers, after and before the change.
+  participates: flag,
+  previousParticipates: flag,
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
+  'portal.export.bundle': ['permission', 'includeFeedback', 'code'],
   'auth.external.denied': ['externalReason', 'count'],
   'portal.lifecycle.update': [
     'permission',
@@ -297,14 +312,18 @@ const actionFields = {
     'erasedConfiguration',
     'erasedAliases',
     'erasedBindings',
+    'erasedDuplicates',
     'erasedLifecycle',
+    'erasedEvaluations',
     'erasedSessions',
     'erasedInvestigations',
     'erasedWatches',
     'erasedSources',
+    'erasedLinkHealth',
     'erasedInsights',
     'erasedFeedback',
     'erasedSiteFeedback',
+    'erasedAnswerRecords',
     'erasedSuggestions',
     'erasedEnrichments',
     'erasedKgProposals',
@@ -356,6 +375,9 @@ const actionFields = {
     'suggestionId',
     'suggestionKind',
   ],
+  // One row for each portal an estate MCP tool call queried, in that portal's own log.
+  'estate.query': ['permission', 'operation', 'count', 'keyRole', 'code'],
+  'duplicate.review': ['permission', 'decision', 'sessionOid', 'sessionTenantId'],
   'resource.delete': [
     'code',
     'permission',
@@ -381,6 +403,8 @@ const actionFields = {
     'changedFields',
     'sessionOid',
     'sessionTenantId',
+    'participates',
+    'previousParticipates',
   ],
   'tenant.access.update': [
     'previousAccessMode',
@@ -422,10 +446,14 @@ const actionFields = {
   'break_glass.locked': ['code', 'count', 'lockedUntil', 'sessionOid', 'sessionTenantId'],
   'audit.retention': ['retentionDays', 'deletedCount', 'cutoff'],
   'maintenance.run': ['code', 'count'],
+  'maintenance.link.check': ['code', 'permission'],
   'maintenance.source.sync': ['code', 'permission'],
   'maintenance.watch.run': ['code', 'permission'],
+  'maintenance.evaluation.run': ['code', 'permission'],
   'maintenance.enrichment.run': ['code', 'permission'],
   'maintenance.questions.run': ['code', 'permission'],
+  // A composed answer's call to a federated peer: which peer, how long, and why it failed.
+  'federation.peer.call': ['peerId', 'peerKind', 'durationMs', 'peerFailure'],
 } as const satisfies Record<string, readonly Field[]>
 export type AuditAction = keyof typeof actionFields
 /**

@@ -1,4 +1,29 @@
-export type { ListResourcesOptions, RetrievalProvider, SourceContext } from './provider.ts'
+export type {
+  AgentAskOptions,
+  ComposePassage,
+  ExportResource,
+  ListResourcesOptions,
+  RetrievalProvider,
+  SourceContext,
+} from './provider.ts'
+export { AgentAskError } from './provider.ts'
+export {
+  PEER_MCP_METHODS,
+  PEER_MCP_TOOLS,
+  PEER_PASSAGES,
+  PEER_PATHS,
+  peerEndpoint,
+  PeerError,
+  type PeerFailure,
+  PeerMcpSession,
+  type PeerPassage,
+  searchPeer,
+} from './providers/arag/peers.ts'
+export {
+  AgentStreamNormaliser,
+  type AgentStreamOptions,
+  normaliseAgentStream,
+} from './providers/arag/agent-stream.ts'
 export { AragProvider, KnowledgeBoxNotConnectedError } from './providers/arag/index.ts'
 export type { AgentConfig } from './providers/arag/index.ts'
 export {

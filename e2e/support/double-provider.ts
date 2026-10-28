@@ -9,6 +9,7 @@
 // a resource so the AI Answer panel's citation marker click-through works.
 // ---------------------------------------------------------------------------
 import type {
+  AgentAskEvent,
   AskEvent,
   CatalogPage,
   FacetCounts,
@@ -18,7 +19,14 @@ import type {
   SearchResults,
   TenantConfig,
 } from '@research-portal/core'
-import type { RetrievalProvider } from '@research-portal/retrieval'
+import {
+  AgentAskError,
+  type AgentAskOptions,
+  type ComposePassage,
+  type ExportResource,
+  type RetrievalProvider,
+} from '@research-portal/retrieval'
+import { agentScenarioFor, replayAgentAsk } from './agent-replay.ts'
 
 export const RESOURCE_ONE: ResourceSummary = {
   id: 'res-1',
@@ -42,13 +50,21 @@ export const RESOURCE_TWO: ResourceSummary = {
   keyFacts: ['Heatwave events correlate with reduced catch rates.'],
 }
 
-const MATCHED_PASSAGE =
+/** The passage search matches and the answer cites in `RESOURCE_ONE`. */
+export const MATCHED_PASSAGE =
   'Surveys across the southern region recorded a sustained 12% decline in abalone ' +
   'populations since 2019, with marine heatwaves identified as the leading stressor.'
+
+/** The page (counted from one) a journey's PDF of `RESOURCE_ONE` carries the passage on. */
+export const CITED_PAGE = 3
 
 export class DoubleProvider implements RetrievalProvider {
   /** Protected so a journey that deletes a document can take it out of the collection. */
   protected resources: ResourceSummary[] = [RESOURCE_ONE, RESOURCE_TWO]
+  /** The pace agent asks replay their fixture at: 0 without waiting, 1 as recorded. */
+  agentReplaySpeed = 0
+  /** Agent asks still streaming: back to zero once a reader's abort has ended each one. */
+  agentAsksOpen = 0
 
   /**
    * A provider for portals whose collection is still empty. A factory, not a constructor
@@ -61,8 +77,51 @@ export class DoubleProvider implements RetrievalProvider {
     return provider
   }
 
+  /** Planted duplicates and a dated version, only for duplicate review journeys. */
+  static withDuplicates(): DoubleProvider {
+    const provider = new DoubleProvider()
+    provider.resources = [
+      {
+        ...RESOURCE_ONE,
+        originUrl: 'https://research.example.test/stock',
+        sourceName: 'stock-report.pdf',
+        published: '2023-06-01',
+      },
+      {
+        ...RESOURCE_ONE,
+        id: 'res-copy',
+        originUrl: 'https://research.example.test/stock?utm_source=catalogue',
+        sourceName: 'stock-report.pdf',
+      },
+      { ...RESOURCE_TWO, published: '2023-01-01' },
+      {
+        ...RESOURCE_TWO,
+        id: 'res-version',
+        title: RESOURCE_TWO.title + ' version 2',
+        published: '2024-01-01',
+      },
+    ]
+    return provider
+  }
+
   listResources(_tenant: TenantConfig): Promise<ResourceSummary[]> {
     return Promise.resolve(this.resources)
+  }
+
+  async *exportResources(
+    _tenant: TenantConfig,
+    signal: AbortSignal,
+  ): AsyncIterable<ExportResource> {
+    for (const resource of this.resources) {
+      signal.throwIfAborted()
+      yield {
+        resource: { ...resource, originUrl: `https://research.example.test/${resource.id}` },
+        metadata: { collection: 'Fisheries research' },
+        labels: resource.topicIds.map((label) => ({ labelset: 'topic', label })),
+        status: 'PROCESSED',
+        files: resource.type === 'pdf' ? [{ fieldId: 'file', contentType: 'application/pdf' }] : [],
+      }
+    }
   }
 
   resource(_tenant: TenantConfig, id: string): Promise<ResourceSummary | null> {
@@ -78,7 +137,7 @@ export class DoubleProvider implements RetrievalProvider {
           relevance: 0.91,
           citedCount: 0,
           matchedPassage: MATCHED_PASSAGE,
-          matchedPage: 3,
+          matchedPage: CITED_PAGE,
         },
         { ...RESOURCE_TWO, relevance: 0.58, citedCount: 0 },
       ],
@@ -132,6 +191,50 @@ export class DoubleProvider implements RetrievalProvider {
     return Promise.resolve([{ id: 'sq-1', text: 'What is known about abalone stock health?' }])
   }
 
+  /** A recorded agent session replayed (docs/AGENT-ASK.md): `#error`, `#slow`, `#fast` steer it. */
+  async *agentAsk(
+    _tenant: TenantConfig,
+    question: string,
+    opts: AgentAskOptions = {},
+  ): AsyncIterable<AgentAskEvent> {
+    const { scenario, fast, compose } = agentScenarioFor(question)
+    if (compose) throw new AgentAskError('not_configured', 'No agent in this replay')
+    this.agentAsksOpen++
+    try {
+      yield* replayAgentAsk(scenario, {
+        speed: fast ? 0 : this.agentReplaySpeed,
+        signal: opts.signal,
+      })
+    } finally {
+      this.agentAsksOpen--
+    }
+  }
+
+  /**
+   * A deterministic composition: the first sentence of each passage, cited, a paragraph per
+   * collection, after one opening line. Every sentence is its passage's own, so each citation
+   * passes the binding check.
+   */
+  compose(
+    _tenant: TenantConfig,
+    _question: string,
+    passages: readonly ComposePassage[],
+  ): Promise<string> {
+    const paragraphs = new Map<string, string[]>()
+    passages.forEach((passage, index) => {
+      const sentence = /^.*?[.!?](?=\s|$)/s.exec(passage.text.trim())?.[0] ?? passage.text.trim()
+      if (!sentence) return
+      const paragraph = paragraphs.get(passage.source) ?? []
+      paragraph.push(`${sentence} [${index + 1}]`)
+      paragraphs.set(passage.source, paragraph)
+    })
+    return Promise.resolve(
+      ['Here is what the collections hold on this question.', ...paragraphs.values()]
+        .map((paragraph) => typeof paragraph === 'string' ? paragraph : paragraph.join(' '))
+        .join('\n\n'),
+    )
+  }
+
   async *ask(_tenant: TenantConfig, query: string): AsyncIterable<AskEvent> {
     yield { type: 'stage', stage: 'preprocessing', status: 'started' }
     yield { type: 'stage', stage: 'preprocessing', status: 'completed' }
@@ -141,6 +244,7 @@ export class DoubleProvider implements RetrievalProvider {
       relevance: 0.91,
       citedCount: 1,
       matchedPassage: MATCHED_PASSAGE,
+      matchedPage: CITED_PAGE,
     }
     yield { type: 'sources', resources: [source] }
     yield { type: 'stage', stage: 'retrieval', status: 'completed' }
@@ -157,6 +261,7 @@ export class DoubleProvider implements RetrievalProvider {
         resourceId: RESOURCE_ONE.id,
         title: RESOURCE_ONE.title,
         passage: MATCHED_PASSAGE,
+        page: CITED_PAGE,
       },
     }
     yield { type: 'stage', stage: 'generating', status: 'completed' }

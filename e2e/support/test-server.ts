@@ -75,6 +75,7 @@ export function startTestServer(options: {
   apiOnly?: boolean
   management?: BuildAppOptions['management']
   sources?: BuildAppOptions['sources']
+  linkHttp?: BuildAppOptions['linkHttp']
   insights?: BuildAppOptions['insights']
   domainProvisioner?: BuildAppOptions['domainProvisioner']
   breakGlass?: boolean
@@ -88,6 +89,10 @@ export function startTestServer(options: {
   emptyCollection?: boolean
   /** The collection readers see, when a journey changes it; the DoubleProvider otherwise. */
   provider?: DoubleProvider
+  /** How long one collection's search may take in a composed agent ask. */
+  agentSourceTimeoutMs?: number
+  /** The fetch federation peers are called with (a stand-in for partners' boxes). */
+  peerFetch?: typeof fetch
   /** Where readers' feedback goes; without it no portal takes feedback. */
   siteFeedbackNotifier?: BuildAppOptions['siteFeedbackNotifier']
 } = {}): TestServer {
@@ -255,6 +260,7 @@ export function startTestServer(options: {
       ...stores,
       provider,
       management: options.management,
+      linkHttp: options.linkHttp,
       bindings,
       domainProvisioner: options.domainProvisioner ?? null,
       siteFeedbackNotifier: options.siteFeedbackNotifier,
@@ -277,6 +283,10 @@ export function startTestServer(options: {
       rateLimitAnonPortalAskPerMin: 0,
       rateLimitAnonAddressAskPerMin: 0,
       rateLimitEstatePerMin: 0,
+      ...(options.peerFetch ? { peerFetch: options.peerFetch } : {}),
+      ...(options.agentSourceTimeoutMs
+        ? { agentSourceTimeoutMs: options.agentSourceTimeoutMs }
+        : {}),
       ...(options.apiOnly ? {} : { webDistPath: WEB_DIST }),
     })
     if (!options.apiOnly) {

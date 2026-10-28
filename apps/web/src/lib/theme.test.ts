@@ -11,6 +11,7 @@ import {
   type TenantConfig,
 } from '@research-portal/core'
 import {
+  accentHeroEdge,
   accentMarkVars,
   customFontCss,
   DENSITY_DIALS,
@@ -18,6 +19,7 @@ import {
   DESKTOP_TEXT_SCALE_FACTOR,
   fontStack,
   googleFontsUrl,
+  heroVeilVars,
   PAIRING_IDS,
   paletteMode,
   paletteVars,
@@ -755,6 +757,27 @@ describe('accent marks', () => {
     expect(navy['--rp-hero-field-edge']).toBe('var(--rp-field)')
   })
 
+  it('edges the hero chips in the accent, deepened to 3:1, on a hero the accent tints', () => {
+    const ends = ['#00B14E', '#7FD8A6']
+    const tinted = paletteVars(branding({
+      colours: { primary: '#1C1C1C', accent: '#00B14E', heroFrom: ends[0]!, heroTo: ends[1]! },
+      paletteId: 'default',
+    }))
+    const edge = tinted['--rp-hero-chip-edge']!
+    for (const end of ends) expect(contrastRatio(edge, end)).toBeGreaterThanOrEqual(3)
+    // A dark green, not the hero's near-black text colour the ask field falls back to.
+    expect(edge).not.toBe(tinted['--rp-on-hero'])
+    const [r, g, b] = [1, 3, 5].map((at) => parseInt(edge.slice(at, at + 2), 16))
+    expect(g!).toBeGreaterThan(r!)
+    expect(g!).toBeGreaterThan(b!)
+    // Where the white fill already stands out, the chips keep the field's edge.
+    const navy = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
+    expect(navy['--rp-hero-chip-edge']).toBeUndefined()
+    // A grey hero is not tinted by the accent, and an accent no step of which reads keeps none.
+    expect(accentHeroEdge('#00B14E', ['#9a9a9a'], '#1a1815')).toBeNull()
+    expect(accentHeroEdge('#00B14E', ['#0b3d1f', '#9be3b8'], '#1a1815')).toBeNull()
+  })
+
   it("gives every hero's ask field a fill or an edge at 3:1 on it, in either scheme", () => {
     const channel = [0, 64, 128, 192, 255]
     for (const r of channel) {
@@ -802,6 +825,57 @@ describe('accent marks', () => {
     expect(rule('.rp-field.rp-hero-field')).toContain('border-color: var(--rp-hero-field-edge);')
     const explore = await Deno.readTextFile(new URL('../pages/ExplorePage.tsx', import.meta.url))
     expect(explore).toMatch(/'rp-field rp-hero-field /)
+  })
+})
+
+describe('hero over a photo', () => {
+  const share = (value: string) => Number.parseFloat(value) / 100
+
+  it('veils a photo enough that both hero text tiers read on any pixel of it', () => {
+    const portals = [
+      { primary: '#1C1C1C', accent: '#00B14E', heroFrom: '#00B14E', heroTo: '#7FD8A6' },
+      { ...DEFAULT_PORTAL_COLOURS },
+      { primary: '#143669', accent: '#00B8A5', heroFrom: '#0b2247', heroTo: '#0e5f6b' },
+    ]
+    for (const colours of portals) {
+      const vars = paletteVars(branding({ colours, paletteId: 'default' }))
+      for (
+        const [endpoint, veil] of [
+          [colours.heroFrom.toLowerCase(), vars['--rp-hero-veil-from']!],
+          [colours.heroTo.toLowerCase(), vars['--rp-hero-veil-to']!],
+        ] as const
+      ) {
+        for (const pixel of ['#ffffff', '#000000']) {
+          const ground = mixHex(endpoint, pixel, share(veil))
+          for (const ink of [vars['--rp-on-hero']!, vars['--rp-on-hero-2']!]) {
+            expect(contrastRatio(ink, ground), `${endpoint} ${veil} ${pixel} ${ink}`)
+              .toBeGreaterThanOrEqual(4.5)
+          }
+        }
+      }
+    }
+  })
+
+  it('keeps the drawn veil where it already holds and never thins it', () => {
+    const vars = heroVeilVars('#000000', '#000000', ['#ffffff', '#ffffff'])
+    expect(vars['--rp-hero-veil-from']).toBe('85%')
+    expect(vars['--rp-hero-veil-to']).toBe('60%')
+    // The default portal's light text over a white photo needed far more than 60% at the end.
+    const own = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
+    expect(share(own['--rp-hero-veil-to']!)).toBeGreaterThan(0.6)
+  })
+
+  it('lightens the foot of the photo under dark hero text and darkens it under light text', () => {
+    expect(heroVeilVars('#7fd8a6', '#7fd8a6', ['#000000'])['--rp-hero-scrim']).toBe('255 255 255')
+    expect(heroVeilVars('#141d2b', '#27364b', ['#ffffff'])['--rp-hero-scrim']).toBe('10 10 12')
+    expect(heroVeilVars('navy', '#27364b', ['#ffffff'])).toEqual({
+      '--rp-hero-veil-from': '85%',
+      '--rp-hero-veil-to': '60%',
+      '--rp-hero-scrim': '10 10 12',
+    })
+    expect(styles).toContain('var(--rp-hero-veil-from, 85%)')
+    expect(styles).toContain('var(--rp-hero-veil-to, 60%)')
+    expect(rule('.rp-scrim-bottom')).toContain('rgb(var(--rp-hero-scrim, 10 10 12) / 0.55)')
   })
 })
 

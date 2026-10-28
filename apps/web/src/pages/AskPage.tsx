@@ -1,8 +1,10 @@
+import { AnswerRecordLink } from '../components/AnswerRecordLink.tsx'
 import { portalError } from '../lib/locale-messages.ts'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { portalStarterQuestions } from '../lib/tenant-copy.ts'
 import {
   createResearchStorageContext,
   readResearchDraft,
@@ -42,7 +44,7 @@ import {
 } from '../api/client.ts'
 import { secondsUntilRetry } from '../lib/ask-budget.ts'
 import { answerHtml, escapeHtml, referenceListHtml } from '../lib/answer-export.ts'
-import { citationHref, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
+import { citationLink, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
 import { CompareConfigurations } from '../components/CompareConfigurations.tsx'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
 import { RouteChip } from '../components/RouteChip.tsx'
@@ -122,6 +124,7 @@ type ChatMessage = {
   /** No citation could be tied to a passage; the sources are the ones consulted (D8-01). */
   unlinked?: boolean
   /** Platform learning id for this answer - target for feedback. */
+  answerRecordId?: string
   learningId?: string
   feedbackGood?: boolean
   feedbackSubmitted?: boolean
@@ -211,6 +214,9 @@ function migrateMessage(raw: unknown): ChatMessage {
     pending: false,
     interpretedQuery: typeof message?.interpretedQuery === 'string'
       ? message.interpretedQuery
+      : undefined,
+    answerRecordId: typeof message?.answerRecordId === 'string'
+      ? message.answerRecordId
       : undefined,
     learningId: typeof message?.learningId === 'string' ? message.learningId : undefined,
     feedbackGood: typeof message?.feedbackGood === 'boolean' ? message.feedbackGood : undefined,
@@ -1402,7 +1408,10 @@ function AnswerCard({
                   : null}
               </div>
             </div>
-            <div className='mt-2'>{secondaryTools}</div>
+            <div className='mt-2 flex flex-wrap items-center gap-2'>
+              {secondaryTools}
+              <AnswerRecordLink slug={slug} answerId={message.answerRecordId} />
+            </div>
             <FeedbackStatusMessage status={feedbackStatus} />
             {canAsk
               ? (
@@ -1492,18 +1501,10 @@ function AnswerCard({
                           const source = message.sources.find((source) =>
                             source.id === citation.resourceId
                           )
-                          const matchedPassage = source?.matchedField === 'summary'
-                            ? undefined
-                            : source?.matchedPassage
                           return (
                             <Link
                               key={citation.index}
-                              to={citationHref(
-                                slug,
-                                citation.resourceId,
-                                matchedPassage,
-                                source?.matchedPage,
-                              )}
+                              to={citationLink(slug, citation, source)}
                               title={citation.headline
                                 ? `${citation.title} - ${citation.headline}`
                                 : citation.title}
@@ -1979,10 +1980,11 @@ export function AskPage() {
     }
   }, [])
 
-  const { data: suggestions } = useQuery({
+  const { data: storedSuggestions } = useQuery({
     queryKey: ['suggested-questions', config.slug],
     queryFn: () => getSuggestedQuestions(config.slug),
   })
+  const suggestions = storedSuggestions && portalStarterQuestions(config, storedSuggestions)
 
   /**
    * Fire-and-forget push of one session to the server, debounced so a burst
@@ -2406,6 +2408,9 @@ export function AskPage() {
             case 'audit':
               update((message) => applyAnswerEvent(message, event))
               break
+            case 'answer-record':
+              update((message) => ({ ...message, answerRecordId: event.answerId }))
+              break
             case 'learning':
               update((message) => ({ ...message, learningId: event.id }))
               break
@@ -2803,7 +2808,14 @@ export function AskPage() {
       ? (lastMessage.rateLimited
         ? ui('The portal is busy - retrying shortly')
         : ui('Answer unavailable'))
-      : ui('Answer complete')
+      // Said once, when the answer settles - never per streamed chunk - with what came back,
+      // so a screen reader hears the sources and citations that appear with it (WCAG 4.1.3).
+      : `${ui('Answer complete')} ${
+        ui('{retrieved} sources retrieved, {cited} cited.', {
+          retrieved: lastMessage.sources.length,
+          cited: lastMessage.citations.length,
+        })
+      }`
     : ''
 
   return (
@@ -2877,6 +2889,11 @@ export function AskPage() {
         <div
           ref={scrollWrapRef}
           className='rp-scroll flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain lg:overflow-visible'
+          // A control reached by Tab scrolls into view above the pinned composer, not under it
+          // (WCAG 2.4.11): at 200% zoom the bar takes about a third of the screen.
+          style={isCompact
+            ? { scrollPaddingBottom: composerHeight + keyboardInset + 12 }
+            : undefined}
         >
           {
             /* The title and Export bar. It lives INSIDE the scroll container
@@ -3182,6 +3199,7 @@ export function AskPage() {
               </label>
               <textarea
                 id='ask-composer'
+                aria-describedby='ask-composer-hint'
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleKeyDown}
@@ -3215,9 +3233,14 @@ export function AskPage() {
             {
               /* Physical-keyboard guidance. On a phone there is no Shift+Enter
               * to give, and the row would cost the thread its own height in a
-              * bar that is already pinned over it. */
+              * bar that is already pinned over it. A fine pointer keeps it at any
+              * width, so a desktop reader zoomed to 200% still sees it (WCAG
+              * 3.3.2); the field names it as its description either way. */
             }
-            <p className='mt-1.5 hidden px-1 text-xs text-ink-3 lg:block'>
+            <p
+              id='ask-composer-hint'
+              className='mt-1.5 hidden px-1 text-xs text-ink-3 lg:block pointer-fine:block'
+            >
               {ui('Enter to send · Shift+Enter for a new line')}
             </p>
           </form>
@@ -3236,8 +3259,8 @@ export function AskPage() {
             className='hidden min-h-0 w-80 min-w-0 max-w-[28%] shrink-0 flex-col xl:flex 2xl:w-96'
           >
             <div className='rp-scroll min-h-0 flex-1 overflow-y-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-3'>
-              <p className='rp-eyebrow text-ink-3'>{ui('Sources for the latest answer')}</p>
-              <div className='mt-3'>
+              {/* The table's own "Sources found" heading names the rail; the aside's label names the landmark. */}
+              <div>
                 <EvidenceTable
                   slug={config.slug}
                   question={railQuestion}

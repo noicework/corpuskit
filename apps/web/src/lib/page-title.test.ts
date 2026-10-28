@@ -22,6 +22,7 @@ describe('per-route page titles (D6-14)', () => {
     expect(surfaceName('/t/neuro/help')).toBe('Help')
     expect(surfaceName('/t/neuro/help/trust-and-citations')).toBe('Help')
     expect(surfaceName('/t/neuro/how-it-works')).toBe('How this works')
+    expect(surfaceName('/t/neuro/accessibility')).toBe('Accessibility')
     expect(surfaceName('/t/neuro/taxonomy')).toBe('Taxonomy')
   })
 
@@ -38,6 +39,19 @@ describe('per-route page titles (D6-14)', () => {
     expect(pageTitle('/t/neuro/nowhere', 'Neurology Research Portal')).toBe(
       'Neurology Research Portal',
     )
+  })
+
+  it("puts a page's own subject in front, so two documents or library views differ", () => {
+    expect(pageTitle('/t/neuro/library/doc-1', 'Neurology Research Portal', undefined, 'Kelp'))
+      .toBe('Kelp | Document | Neurology Research Portal')
+    expect(
+      pageTitle('/t/neuro/library', 'Neurology Research Portal', undefined, '“seizure”, Imaging'),
+    ).toBe('“seizure”, Imaging | Library | Neurology Research Portal')
+    // No subject, or a blank one, leaves the surface title as it was.
+    for (const subject of [undefined, null, '', '  ']) {
+      expect(pageTitle('/t/neuro/library', 'Neurology Research Portal', undefined, subject))
+        .toBe('Library | Neurology Research Portal')
+    }
   })
 
   it('localises only fixed surface labels and keeps authored known keys and braces verbatim', () => {
@@ -67,6 +81,7 @@ describe('per-route page titles (D6-14)', () => {
       'tools',
       'help',
       'how-it-works',
+      'accessibility',
       'taxonomy',
       'manage',
     ]

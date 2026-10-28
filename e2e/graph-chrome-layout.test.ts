@@ -36,6 +36,7 @@ async function geometry(page: Page) {
       header: { ...rect(header), position: getComputedStyle(header).position },
       measuredHeader: document.documentElement.style.getPropertyValue('--rp-header-h'),
       masthead: rect(masthead),
+      viewSwitch: rect(document.querySelector('[data-graph-view-switch]')!),
       stage: rect(stage),
       canvas: rect(canvas),
       scheme: document.querySelector('[data-colour-scheme]')?.getAttribute('data-colour-scheme'),
@@ -105,6 +106,11 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             maxTouchPoints: 5,
           })
           await page.goto(`${server.url}/t/marine/graph`)
+          // Reduced motion starts in the complete list; these journeys exercise the map.
+          await page.waitForSelector('[data-graph-view-choice=map]')
+          await page.evaluate(() =>
+            document.querySelector<HTMLButtonElement>('[data-graph-view-choice=map]')!.click()
+          )
           await page.waitForSelector('[data-graph-stage][aria-busy=false] canvas')
           await assertCurrentBuild(page)
           await page.evaluate(async () => {
@@ -133,7 +139,9 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             ).toBe(0)
             expect(before.header.position).toBe('sticky')
             expect(before.masthead.height).toBeLessThanOrEqual(8 * 22)
-            expect(before.stage.height).toBeGreaterThan(0.55 * before.viewport.height)
+            expect(before.stage.height).toBeGreaterThan(
+              0.55 * before.viewport.height - before.viewSwitch.height,
+            )
             expect(before.documentHeight).toBeLessThanOrEqual(before.viewport.height + 1)
             await page.evaluate(() => scrollTo(0, 300))
             const after = await geometry(page)
@@ -143,16 +151,22 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
           } else {
             expect(before.header.position).toBe('relative')
             expect(before.masthead.height).toBeLessThanOrEqual(7 * 22)
-            // Section 4.13 sizes the map to the remaining visible viewport,
-            // rather than adding a full viewport below the chrome.
-            expect(Math.abs(before.stage.top - before.masthead.bottom)).toBeLessThanOrEqual(1)
-            expect(Math.abs(before.stage.bottom - before.viewport.height)).toBeLessThanOrEqual(1)
+            // The map fills the remaining viewport, with a usable minimum
+            // when enlarged controls need document scrolling.
+            expect(Math.abs(before.stage.top - before.masthead.bottom - before.viewSwitch.height))
+              .toBeLessThanOrEqual(1)
+            const expectedHeight = Math.max(
+              20 * 22,
+              before.viewport.height - before.header.height - before.masthead.height -
+                before.viewSwitch.height,
+            )
             expect(Math.abs(
-              before.stage.height -
-                (before.viewport.height - before.header.height - before.masthead.height),
+              before.stage.height - expectedHeight,
             )).toBeLessThanOrEqual(1)
             expect(before.canvas.height).toBe(before.stage.height)
-            expect(before.documentHeight).toBeLessThanOrEqual(before.viewport.height + 1)
+            expect(before.documentHeight).toBeLessThanOrEqual(
+              Math.max(before.viewport.height, before.stage.bottom) + 1,
+            )
             expect(
               await page.evaluate(() => document.querySelectorAll('[data-graph-back-top]').length),
             ).toBe(0)
@@ -207,7 +221,9 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             const gesture = await page.evaluate(() => {
               const masthead = [...document.querySelectorAll('[data-graph-masthead]')]
                 .find((element) => element.getBoundingClientRect().height > 0)!
-              const bounds = masthead.getBoundingClientRect()
+              const viewSwitch = document.querySelector('[data-graph-view-switch]')!
+              const chrome = [masthead, viewSwitch]
+              const bounds = viewSwitch.getBoundingClientRect()
               const x = 10, y = bounds.bottom - 32
               const hit = document.elementFromPoint(x, y)!
               const actions: string[] = []
@@ -225,7 +241,7 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
                     type: event.type,
                     trusted: event.isTrusted,
                     tag: target.tagName,
-                    inMasthead: masthead.contains(target),
+                    inChrome: chrome.some((element) => element.contains(target)),
                     inStage: !!target.closest('[data-graph-stage]'),
                     scroll: scrollY,
                     cancelable: event.cancelable,
@@ -240,7 +256,7 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
                 x,
                 y,
                 scroll: scrollY,
-                inMasthead: masthead.contains(hit),
+                inChrome: chrome.some((element) => element.contains(hit)),
                 inStage: !!hit.closest('[data-graph-stage]'),
                 actions,
                 roots: [document.scrollingElement!, document.body].map((element) => ({
@@ -253,7 +269,7 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             })
             console.log(`[graph-chrome] ${scene} gesture-ready`, JSON.stringify(gesture))
             expect(gesture.scroll).toBe(0)
-            expect(gesture.inMasthead).toBe(true)
+            expect(gesture.inChrome).toBe(true)
             expect(gesture.inStage).toBe(false)
             expect(gesture.actions.every((action) => action === 'auto')).toBe(true)
             // Use the supported direct-touch driver. Chrome 125's experimental
@@ -290,15 +306,19 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
                 touches: await page.evaluate(() => Reflect.get(globalThis, '__graphChromeTouches')),
               }),
             )
-            await page.waitForFunction(() =>
-              document.querySelector('[data-graph-stage]')!.getBoundingClientRect().top <= 1
-            )
+            // Native fling distance varies with browser scheduling. It must
+            // clear the navigation chrome without showing the return control.
+            await page.waitForFunction(() => {
+              const masthead = [...document.querySelectorAll('[data-graph-masthead]')]
+                .find((element) => element.getBoundingClientRect().height > 0)!
+              return masthead.getBoundingClientRect().bottom <= 1
+            })
             const after = await geometry(page)
             const touches = await page.evaluate(() =>
               Reflect.get(globalThis, '__graphChromeTouches') as {
                 type: string
                 trusted: boolean
-                inMasthead: boolean
+                inChrome: boolean
                 inStage: boolean
               }[]
             )
@@ -309,7 +329,7 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             expect(protocolErrors).toEqual([])
             expect(
               touches.some((touch) =>
-                touch.type === 'touchstart' && touch.trusted && touch.inMasthead && !touch.inStage
+                touch.type === 'touchstart' && touch.trusted && touch.inChrome && !touch.inStage
               ),
             )
               .toBe(true)
@@ -317,7 +337,7 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             expect(after.scroll).toBeGreaterThan(before.header.height)
             expect(after.header.bottom).toBeLessThanOrEqual(0)
             expect(after.masthead.bottom).toBeLessThanOrEqual(1)
-            expect(Math.abs(after.stage.top)).toBeLessThanOrEqual(1)
+            expect(after.stage.top).toBeLessThanOrEqual(before.viewSwitch.height + 1)
             expect(after.stage.height).toBe(before.stage.height)
             expect(after.canvas.height).toBe(before.canvas.height)
             await Deno.writeFile(`${directory}/${scene}-scrolled.png`, await page.screenshot())
@@ -368,7 +388,7 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             const returned = await page.evaluate(() => {
               const home = document.querySelector('.rp-tenant > header a[href]')!
                 .getBoundingClientRect()
-              const menu = document.querySelector('[aria-controls=mobile-nav-sheet]')!
+              const menu = document.querySelector('button.rp-navtoggle')!
                 .getBoundingClientRect()
               return {
                 homeTop: home.top,
@@ -396,12 +416,13 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
               expect(await page.evaluate(() => document.body.style.overflow)).not.toBe('hidden')
               expect((await geometry(page)).header.position).toBe('sticky')
               await page.setViewportSize({ width, height: 844 })
-              await page.waitForFunction(() =>
-                Math.abs(
-                  document.querySelector('[data-graph-stage]')!
-                    .getBoundingClientRect().bottom - innerHeight,
-                ) <= 1
-              )
+              await page.waitForFunction(() => {
+                const stage = document.querySelector('[data-graph-stage]')!.getBoundingClientRect()
+                const minimum = 20 *
+                  Number.parseFloat(getComputedStyle(document.documentElement).fontSize)
+                return stage.width === innerWidth &&
+                  Math.abs(stage.height - Math.max(minimum, innerHeight - stage.top)) <= 1
+              })
             }
           }
           // Both language choices retain the compact controls. The existing

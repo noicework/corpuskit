@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { LayoutHrefSchema, PortalLayoutSchema } from './layout.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'
+import { FederationConfigSchema } from './agent-ask.ts'
 
 // ---------------------------------------------------------------------------
 // Tenant configuration - the single document that drives the whole portal UI.
@@ -461,6 +462,38 @@ export type DemoTourCopy = z.infer<typeof DemoTourCopySchema>
 export function demoTourMode(config: Pick<TenantConfig, 'demoTour'>): DemoTourMode {
   return config.demoTour ?? 'off'
 }
+/** An `https://` address a portal may point readers at; nothing else is a link. */
+const httpsUrl = z.string().url().refine((url) => url.startsWith('https://'), {
+  message: 'Must be an https:// address',
+})
+
+/**
+ * How readers reach the people who run a portal about an access problem. Every field is
+ * optional, and a portal that sets none has no contact section on its statement; the page never
+ * invents an address. The text renders as plain text, never markup.
+ */
+export const AccessibilityContactSchema = z.object({
+  /** Who answers: "the Example Research Portal team", "Example Alliance's digital team". */
+  name: z.string().min(1).max(120).optional(),
+  email: z.string().email().max(254).optional(),
+  /** As it should be dialled, "1800 000 000" or "+61 3 0000 0000". */
+  phone: z.string().min(3).max(40).optional(),
+  /** A contact form or accessibility page on the organisation's own site. */
+  url: httpsUrl.optional(),
+  /** A sentence after the contact details: when to expect a reply, or what to include. */
+  note: z.string().min(1).max(600).optional(),
+}).strict()
+export type AccessibilityContact = z.infer<typeof AccessibilityContactSchema>
+
+export const AccessibilityStatementSchema = z.object({
+  /** The portal's own statement, replacing the default sections: a heading and paragraphs each. */
+  sections: z.object({
+    heading: z.string().min(1).max(120),
+    paragraphs: z.string().min(1).max(2000).array().min(1).max(20),
+  }).strict().array().min(1).max(20).optional(),
+  contact: AccessibilityContactSchema.optional(),
+}).strict()
+export type AccessibilityStatement = z.infer<typeof AccessibilityStatementSchema>
 
 export const TenantConfigSchema = z.object({
   slug: z.string().min(1),
@@ -499,6 +532,18 @@ export const TenantConfigSchema = z.object({
    * to true, in its seed or through `PATCH /api/admin/tenants/:slug`.
    */
   regionalDiscovery: z.boolean().optional(),
+  /**
+   * Whether the portal offers agent ask: a retrieval agent's answer streamed step by step
+   * (docs/AGENT-ASK.md). Opt-in: only true offers it; absent or false and its route answers as
+   * if it did not exist. Set through `PATCH /api/admin/tenants/:slug`.
+   */
+  agentAsk: z.boolean().optional(),
+  /**
+   * Federation (docs/AGENT-ASK.md): the partner collections the portal's composed answers also
+   * search, and whether the portal takes part in federated answers. Set through
+   * `PATCH /api/admin/tenants/:slug`; peer keys go through their own operator route.
+   */
+  federation: FederationConfigSchema.optional(),
   /**
    * Whether readers can send the portal team feedback from the header. Opt-in: only true turns
    * it on, through `PATCH /api/admin/tenants/:slug`. The control shows, and the route answers,
@@ -542,6 +587,14 @@ export const TenantConfigSchema = z.object({
    * examples can leak into its pages.
    */
   copy: z.object({
+    /** Explicit provenance labels supplied by the collection owner, keyed by resource ID. */
+    resourceLabels: z.record(z.string(), z.string().min(1).max(200)).optional(),
+    defaultResourceLabel: z.string().min(1).max(200).optional(),
+    /** Optional interface wording by display language. Never applied to source documents. */
+    interfaceMessages: z.object({
+      en: z.record(z.string().max(1000), z.string().min(1).max(2000)).optional(),
+      ja: z.record(z.string().max(1000), z.string().min(1).max(2000)).optional(),
+    }).optional(),
     /** Placeholder for a new investigation's name, e.g. "Does X pay off in Y?". */
     investigationExample: z.string().optional(),
     /** Placeholder per Generate kind (comparison, briefing, timeline, proscons, faq, assessment). */
@@ -549,6 +602,13 @@ export const TenantConfigSchema = z.object({
     /** The guided tour's heading, intro and scenes, when `demoTour` is on. */
     demoTour: DemoTourCopySchema.optional(),
   }).optional(),
+  /**
+   * The portal's accessibility statement, at `/t/:slug/accessibility` and linked from the footer.
+   * Absent, the page carries the default statement (apps/web/src/pages/AccessibilityPage.tsx):
+   * what is tested and how, with no conformance claim, test date or tool name, and no way to
+   * report a problem. A portal supplies the contact, and may replace the sections with its own.
+   */
+  accessibility: AccessibilityStatementSchema.optional(),
   /** Extraction routing rules (docs/EXTRACTION-LAB.md). Absent = platform default for everything. */
   extraction: ExtractionRulesSchema.optional(),
 })
@@ -572,6 +632,7 @@ const portalConfigurationShape = TenantConfigSchema.pick({
   demoTour: true,
   timezone: true,
   copy: true,
+  accessibility: true,
 }).extend({
   timezone: z.string().refine((timezone) => {
     try {
@@ -777,6 +838,8 @@ export const ResourceSummarySchema = z.object({
    * a route that recreates the resource keeps it hidden.
    */
   hidden: z.literal(true).optional(),
+  /** Labelled `federation/exclude`: never leaves its portal in a federated answer. */
+  federationExcluded: z.literal(true).optional(),
 })
 
 // ---------------------------------------------------------------------------
@@ -1276,7 +1339,13 @@ export const CitationSchema = z.object({
   title: z.string().min(1),
   /** The generated headline, when it differs from the title - shown as a subtitle. */
   headline: z.string().optional(),
+  /** The text of the first paragraph the answer cited in this resource, when known. */
   passage: z.string().optional(),
+  /**
+   * The page (counted from one) that `passage` sits on in the stored file, when the platform
+   * reported one, so the citation opens the PDF there. Absent for a passage outside a paged file.
+   */
+  page: z.number().int().positive().optional(),
 })
 
 export const AskStageSchema = z.enum([
@@ -1288,6 +1357,7 @@ export const AskStageSchema = z.enum([
 ])
 
 export const AskEventSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('answer-record'), answerId: z.string().uuid() }),
   z.object({
     type: z.literal('stage'),
     stage: AskStageSchema,
@@ -1476,7 +1546,13 @@ export type AskEvent = z.infer<typeof AskEventSchema>
 // ---------------------------------------------------------------------------
 export * from './docs.ts'
 export * from './palettes.ts'
+export * from './usage-report.ts'
 export * from './study-design.ts'
 export * from './rbac.ts'
 export * from './lifecycle.ts'
 export * from './layout.ts'
+export * from './agent-ask.ts'
+export * from './duplicates.ts'
+
+export * from './answer-record.ts'
+export * from './evaluations.ts'

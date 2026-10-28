@@ -1,3 +1,4 @@
+import { AnswerRecordLink } from './AnswerRecordLink.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import { useEffect, useRef, useState } from 'react'
@@ -127,6 +128,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   const [seenStages, setSeenStages] = useState<Set<AskStage>>(() => new Set())
   const [collapsed, setCollapsed] = useState(false)
   const [retryToken, setRetryToken] = useState(0)
+  const [answerRecordId, setAnswerRecordId] = useState<string | null>(null)
   const [learningId, setLearningId] = useState<string | null>(null)
   const [rating, setRating] = useState<boolean | null>(null)
   const [ratingBusy, setRatingBusy] = useState(false)
@@ -163,6 +165,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
     setActiveStage(null)
     setSeenStages(new Set())
     setLearningId(null)
+    setAnswerRecordId(null)
     setRating(null)
     setRatingBusy(false)
     setRatingError(null)
@@ -186,6 +189,9 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
       if (controller.signal.aborted || abortRef.current !== controller || !canAsk()) return
       setAnswer((prev) => applyAnswerEvent(prev, event))
       switch (event.type) {
+        case 'answer-record':
+          setAnswerRecordId(event.answerId)
+          break
         case 'learning':
           setLearningId(event.id)
           break
@@ -279,7 +285,15 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   const liveMessage = status === 'streaming'
     ? (stageLabel ? ui(stageLabel) : ui('Answer in progress'))
     : status === 'done'
-    ? (refused ? ui('No direct evidence found') : ui('Answer complete'))
+    // Once, on completion, with the counts that appear beside it (WCAG 4.1.3).
+    ? (refused
+      ? ui('No direct evidence found')
+      : `${ui('Answer complete')} ${
+        ui('{retrieved} sources retrieved, {cited} cited.', {
+          retrieved: sources.length,
+          cited: citations.length,
+        })
+      }`)
     : status === 'error'
     ? ui('Answer unavailable')
     : status === 'deferred'
@@ -421,6 +435,7 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
                         >
                           <div className='rp-library-answer-confidence min-w-0 flex-auto'>
                             <ConfidenceIndicator quality={quality} audit={audit} />
+                            <AnswerRecordLink slug={slug} answerId={answerRecordId} />
                           </div>
                           <div className='ml-auto flex max-w-full shrink-0 items-center justify-end'>
                             <IconButton

@@ -1,3 +1,14 @@
+import { DuplicateReviewStore } from './duplicate-store.ts'
+import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
+import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
+import { registerAnswerRecordRoutes } from './answer-record-routes.ts'
+import { type AnswerRecordStoreApi, transientAnswerRecordStore } from './answer-record-store.ts'
+import { registerPortalEvaluations } from './evaluation-integration.ts'
+import type { EvaluationStore } from './evaluation-store.ts'
+import type { PublicHttpClient } from './public-http.ts'
+import { LinkHealthStore } from './link-health-store.ts'
+import type { LinkHealthStoreApi } from './link-health.ts'
+import { registerLinkHealthRoutes } from './link-health-routes.ts'
 import { PortalLifecycleStore } from './lifecycle-store.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import {
@@ -41,6 +52,7 @@ import {
   type Declaration,
   declaredRoute,
   declaredSubAction,
+  ESTATE_MCP_ROUTE,
   infrastructureHandler,
   isInfrastructurePreflight,
   isPrivileged,
@@ -78,6 +90,7 @@ import {
   authoriseSubActions as checkSubActions,
   type AuthorityDependencies,
   evaluateOperation,
+  keyPortalRoles,
   type RequestAuthority,
   researchOwner as resolveResearchOwner,
   selectRequestAuthority,
@@ -99,6 +112,7 @@ import { KeyPortalSlugSchema } from './scoped-key-record.ts'
 import { encodeStorageIdentifier, type ResearchOwner } from './research-owner.ts'
 import type { RbacState } from './rbac-state.ts'
 import {
+  AgentAskRequestSchema,
   canAssignPalette,
   ColourSchemeIdSchema,
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -110,13 +124,17 @@ import {
   enrichmentJsonSchema,
   EnrichmentSchema,
   ExtractionRulesSchema,
+  type FederationPeer,
+  FederationSettingsSchema,
   GenerateKindSchema,
   LAYOUT_IMAGE_NAME,
   type LayoutImage,
   layoutImageNames,
   mapLayoutImages,
   MAX_LAYOUT_IMAGES,
+  offersAgentAsk,
   PaletteChoiceSchema,
+  participatesInFederation,
   type PortalLayout,
   PortalLayoutSchema,
   ShapeIdSchema,
@@ -125,6 +143,7 @@ import {
   TypographyChoiceSchema,
 } from '@research-portal/core'
 import type {
+  AgentAskRequest,
   AskEvent,
   Citation,
   FacetCounts,
@@ -136,16 +155,20 @@ import type {
   TenantConfig,
 } from '@research-portal/core'
 import {
+  AgentAskError,
   AragApiError,
   type AragProvider,
   KbClient,
   KnowledgeBoxNotConnectedError,
   looksLikeReferenceChunk,
   parseKbUrl,
+  PeerError,
   type RetrievalProvider,
+  searchPeer,
   type SourceContext,
 } from '@research-portal/retrieval'
-import { publicErrorMessage, publicSseEvent } from './public-error.ts'
+import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
+import { agentAnswer, type ComposeSource } from './agent-compose.ts'
 import {
   type NewTenantInput,
   type TenantPatch,
@@ -155,7 +178,9 @@ import {
   withLayout,
 } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
-import { BindingStore, type BindingStoreApi } from './bindings.ts'
+import { buildUsageReport, usagePeriod, usageReportCsv } from './usage-report.ts'
+import { knowledgeGaps } from './knowledge-gaps.ts'
+import { BindingStore, type BindingStoreApi, peerKeyName } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { accountOpsAvailable, createKnowledgeBox, enableHiddenResources } from './arag-account.ts'
@@ -382,8 +407,10 @@ import {
   planLabelsetRebuild,
 } from './labelsets.ts'
 import { registerMcpAuthRateLimit, registerMcpRoutes } from './mcp.ts'
+import { DEFAULT_ESTATE_SOURCE_TIMEOUT_MS, registerEstateMcpRoutes } from './estate-mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
 import { registerAuditRoutes } from './audit-routes.ts'
+import { PORTAL_EXPORT_PATH, registerPortalExport } from './portal-export.ts'
 import {
   erasePortal,
   type ErasureTransaction,
@@ -644,6 +671,12 @@ const summarizeBodySchema = z.object({
   kind: z.enum(['simple', 'extended']).optional(),
 }).strict()
 const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) }).strict()
+/** A federation peer's service-account key, as the operator sets it. */
+const peerKeyBodySchema = z.object({ token: z.string().min(20).max(4096) }).strict()
+/** Agent ask across portals: the question, and the portals to ask, the host first. */
+const agentAskAcrossSchema = AgentAskRequestSchema.extend({
+  slugs: z.array(KeyPortalSlugSchema).min(1).max(12).optional(),
+}).strict()
 const estateAskSchema = z.object({
   query: z.string().min(1).max(2000),
   slugs: z.array(KeyPortalSlugSchema).max(100).optional(),
@@ -716,6 +749,7 @@ const SYNTHESIS_READS_AT_ONCE = 4
 const verdictEnum = z.enum(['supports', 'partial', 'not-relevant', 'contradicts'])
 const evidenceCreateSchema = z.object({
   passage: z.string().min(1).max(8000),
+  page: z.number().int().positive().max(100_000).optional(),
   resourceId: z.string().min(1).max(64),
   resourceTitle: z.string().min(1).max(300),
   score: z.number().min(0).max(1).nullable().optional(),
@@ -862,6 +896,10 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  /** Whether the portal offers agent ask (opt-in; see TenantConfigSchema). */
+  agentAsk: z.boolean().optional(),
+  /** Federation peers and participation, merged over the portal's current settings. */
+  federation: FederationSettingsSchema.optional(),
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback: z.boolean().optional(),
   /** The guided tour on the home page: off, request or auto (see TenantConfigSchema). */
@@ -877,8 +915,10 @@ const renameTenantSchema = z.object({
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
+  'agentAsk',
   'siteFeedback',
   'demoTour',
+  'federation',
 ])
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
@@ -1028,6 +1068,9 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  duplicates?: DuplicateReviewStore
+  answerRecords?: AnswerRecordStoreApi
+  evaluations?: EvaluationStore
   lifecycle?: PortalLifecycleStore
   /** Internally supplied authoritative state, never sourced from a request. */
   rbac?: RbacState
@@ -1058,6 +1101,8 @@ export interface BuildAppOptions {
   sessions?: SessionsStoreApi
   /** Source registry; shared with startScheduler in server.ts so a scheduled sync and a
    *  concurrent HTTP write don't clobber each other. A fresh store when omitted (tests). */
+  linkHttp?: PublicHttpClient
+  linkHealth?: LinkHealthStoreApi
   sources?: SourceStoreApi
   /** Watch registry; same sharing rationale as `sources`. */
   watches?: WatchStoreApi
@@ -1124,8 +1169,17 @@ export interface BuildAppOptions {
   /** Requests/min per address for POST /api/ask-estate, which fans one request across every
    *  tenant. Defaults to env RATE_LIMIT_ESTATE_PER_MIN, or 6. 0 disables. */
   rateLimitEstatePerMin?: number
+  /** How long one portal may take in an estate MCP call before it is named as a failed source.
+   *  Defaults to env ESTATE_SOURCE_TIMEOUT_MS, or 25 seconds. */
+  estateSourceTimeoutMs?: number
   /** Authentication attempts/min/IP at the MCP endpoint. Defaults to 60. 0 disables. */
   rateLimitMcpAuthPerMin?: number
+  /** How long one collection's search may take in a composed agent ask (20 s by default). */
+  agentSourceTimeoutMs?: number
+  /** How long composing an agent ask's answer may take (90 s by default). */
+  agentComposeTimeoutMs?: number
+  /** The fetch federation peers are called with; the platform's own by default (tests, stub). */
+  peerFetch?: typeof fetch
 }
 
 interface RequestAuthorisation {
@@ -1133,15 +1187,27 @@ interface RequestAuthorisation {
   subActions(names: readonly string[]): Promise<RequestAuthority>
   owner(): Promise<ResearchOwner>
   aggregateAuthority(): Promise<RequestAuthority>
-  /** The selected portals the caller may use, or without a selection their directory's. */
-  aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
+  /**
+   * The selected portals the caller may use, or without a selection their directory's. `include`
+   * leaves portals out before anything is admitted (a portal outside federation takes no ask).
+   */
+  aggregate(
+    slugs?: readonly string[],
+    include?: (config: TenantConfig) => boolean,
+  ): Promise<TenantConfig[]>
+  /**
+   * The portals one estate MCP tool call may reach on that tool's own permission, chosen as
+   * `aggregate` chooses them. Admission against the daily ask limit is left to each portal.
+   */
+  estatePortals(tool: Declaration, slugs?: readonly string[]): Promise<TenantConfig[]>
 }
 /**
  * Which portals belong in the caller's directory: the portal list, and the portals a cross-portal
  * ask reaches when it names none. Being able to read a portal is not enough, or every public
  * portal on a deployment would be listed to anyone. Platform authority lists every portal; anyone
  * else gets the portals they hold a role on, directly or through a group, and the portal whose
- * canonical hostname is the request's host. A listed portal must still be readable.
+ * canonical hostname is the request's host. A key's roles are the portals its scope reaches. A
+ * listed portal must still be readable.
  */
 function portalDirectory(
   authority: RequestAuthority,
@@ -1149,7 +1215,11 @@ function portalDirectory(
 ): (config: TenantConfig) => boolean {
   if (isPlatformAuthority(authority)) return () => true
   const host = normaliseHostname(requestHostname)
-  const roles = authority.kind === 'session' ? authority.effectiveRoles.portalRoles : []
+  const roles = authority.kind === 'session'
+    ? authority.effectiveRoles.portalRoles
+    : authority.kind === 'key'
+    ? keyPortalRoles(authority)
+    : []
   return (config) =>
     roles.some((grant) => grant.slug === config.slug) ||
     (config.hostname !== undefined && normaliseHostname(config.hostname) === host)
@@ -1178,6 +1248,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Hosting lifecycle (docs/HOSTING.md). Every management write passes the lifecycle guard,
   // which lets a write reach a suspended portal only while it runs for a request the route
   // guard admitted for a platform principal. Without a configured store the state is transient.
+  const duplicates = opts.duplicates ?? new DuplicateReviewStore()
   const lifecycle = opts.lifecycle ?? new PortalLifecycleStore(undefined, opts.now)
   const provisionalBytes = opts.linkProvisionalBytes ??
     linkProvisionalBytes(process.env.LINK_PROVISIONAL_BYTES)
@@ -1200,12 +1271,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const bindings = opts.bindings ?? new BindingStore({})
   const platformDomain = getPlatformDomain(opts.platformDomain ?? process.env.PLATFORM_DOMAIN)
   const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
+  const answerRecords = opts.answerRecords ?? transientAnswerRecordStore(opts.now)
   const insights = opts.insights ?? new InsightsStore()
   const feedback = opts.feedback ?? new FeedbackStore()
   const siteFeedback = opts.siteFeedback ?? new SiteFeedbackStore()
   const routing = opts.routing ?? new RoutingLog()
   const sessions = opts.sessions ?? new SessionsStore()
   const watches = opts.watches ?? new WatchStore()
+  const linkHealth = guardPortalWrites(
+    opts.linkHealth ?? new LinkHealthStore(),
+    lifecycle,
+    { platformRequests: true },
+  )
   const sources = opts.sources ?? new SourceStore()
   const investigations = opts.investigations ?? new InvestigationStore()
   const mcpKeys = opts.mcpKeys ?? new McpKeyStore()
@@ -1493,84 +1570,105 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return deny(scope)
       }
       // Selection rejects every aggregate bearer before any portal enumeration, including
-      // a key accompanied by an otherwise privileged ambient session.
+      // a key accompanied by an otherwise privileged ambient session. The estate MCP endpoint
+      // alone takes a key, which then reaches only the portals its own scope names.
       return await authority(scope)
+    }
+    /** The portals `declaration` may reach for this caller, as the cross-portal ask chooses them. */
+    const authorisedPortals = async (
+      declaration: Declaration,
+      slugs?: readonly string[],
+      include?: (config: TenantConfig) => boolean,
+    ) => {
+      const selected = await aggregateAuthority()
+      const requested = slugs ? new Set(slugs) : undefined
+      // Without a selection the caller gets their directory. A selection, such as the alias
+      // host's portal, is authorised as it stands.
+      const listed = requested ? undefined : portalDirectory(selected, new URL(c.req.url).hostname)
+      const targets: TenantConfig[] = []
+      tenants.list(false, (config) => {
+        const slug = config.slug
+        if (requested && !requested.has(slug)) return false
+        if (listed && !listed(config)) return false
+        if (include && !include(config)) return false
+        // The portal list still shows a suspended portal, with its status, so the picker
+        // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
+        // be read is left out on its own.
+        const hosting = readLifecycle(lifecycle, slug)
+        if (!hosting) return false
+        if (
+          declaration.path !== '/api/tenants' &&
+          hosting.status === 'suspended' && !isPlatformAuthority(selected)
+        ) return false
+        if (!AccessModeSchema.safeParse(config.accessMode).success) return false
+        const policy = {
+          slug,
+          accessMode: config.accessMode,
+          configuredTenantId: configuredTenantId,
+        }
+        // Candidate filtering is pure: a hidden portal must not latch a request denial.
+        const principal = selected.kind === 'break-glass'
+          ? normalisePrincipal({
+            kind: 'user',
+            tenantId: configuredTenantId,
+            oid: 'break-glass',
+          }, { platformRole: 'owner', portalRoles: [] })
+          : selected.kind === 'key'
+          ? normalisePrincipal({ kind: 'user', tenantId: configuredTenantId, oid: selected.id }, {
+            portalRoles: [...keyPortalRoles(selected)],
+          })
+          : normalisePrincipal(
+            selected.kind === 'session'
+              ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
+              : { kind: 'anonymous' },
+            selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
+            policy,
+          )
+        const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
+        if (allowed) targets.push(config)
+        return allowed
+      })
+      if (targets.length === 0) {
+        // The portal list shows what the caller may see, and seeing none is not a refusal: an
+        // empty list says nothing a refusal would not. A cross-portal ask with nowhere to ask
+        // is still refused.
+        if (declaration.path === '/api/tenants') return targets
+        return deny({ kind: 'platform' })
+      }
+      // Terminal guards run only after the complete candidate set is filtered.
+      if (selected) {
+        try {
+          for (const config of targets) {
+            authoriseOperation(selected, declaration.permission, {
+              kind: 'portal',
+              slug: config.slug,
+            }, {
+              slug: config.slug,
+              accessMode: config.accessMode,
+              configuredTenantId: configuredTenantId,
+            })
+          }
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+      }
+      return targets
     }
     return {
       aggregateAuthority,
-      aggregate: async (slugs) => {
-        const selected = await aggregateAuthority()
+      aggregate: async (slugs, include) => {
         const declaration = operation()
-        const requested = slugs ? new Set(slugs) : undefined
-        // Without a selection the caller gets their directory. A selection, such as the alias
-        // host's portal, is authorised as it stands.
-        const listed = requested
-          ? undefined
-          : portalDirectory(selected, new URL(c.req.url).hostname)
-        const targets: TenantConfig[] = []
-        tenants.list(false, (config) => {
-          const slug = config.slug
-          if (requested && !requested.has(slug)) return false
-          if (listed && !listed(config)) return false
-          // The portal list still shows a suspended portal, with its status, so the picker
-          // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
-          // be read is left out on its own.
-          const hosting = readLifecycle(lifecycle, slug)
-          if (!hosting) return false
-          if (
-            declaration.path !== '/api/tenants' &&
-            hosting.status === 'suspended' && !isPlatformAuthority(selected)
-          ) return false
-          if (!AccessModeSchema.safeParse(config.accessMode).success) return false
-          const policy = {
-            slug,
-            accessMode: config.accessMode,
-            configuredTenantId: configuredTenantId,
-          }
-          // Candidate filtering is pure: a hidden portal must not latch a request denial.
-          const principal = selected.kind === 'break-glass'
-            ? normalisePrincipal({
-              kind: 'user',
-              tenantId: configuredTenantId,
-              oid: 'break-glass',
-            }, { platformRole: 'owner', portalRoles: [] })
-            : normalisePrincipal(
-              selected.kind === 'session'
-                ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
-                : { kind: 'anonymous' },
-              selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
-              policy,
-            )
-          const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
-          if (allowed) targets.push(config)
-          return allowed
-        })
-        if (targets.length === 0) {
-          // The portal list shows what the caller may see, and seeing none is not a refusal: an
-          // empty list says nothing a refusal would not. A cross-portal ask with nowhere to ask
-          // is still refused.
-          if (declaration.path === '/api/tenants') return targets
-          return deny({ kind: 'platform' })
-        }
-        // Terminal guards run only after the complete candidate set is filtered.
-        if (selected) {
-          try {
-            for (const config of targets) {
-              authoriseOperation(selected, declaration.permission, {
-                kind: 'portal',
-                slug: config.slug,
-              }, {
-                slug: config.slug,
-                accessMode: config.accessMode,
-                configuredTenantId: configuredTenantId,
-              })
-            }
-          } finally {
-            if (context.denialAudited) markDenialAudited(c.req.raw)
-          }
-        }
+        const targets = await authorisedPortals(declaration, slugs, include)
         admitRequestAsks(c.req.raw, declaration, targets)
         return targets
+      },
+      estatePortals: async (tool, slugs) => {
+        if (
+          tool.kind !== 'mcp' || tool.aggregate !== 'authorised-portals' ||
+          operation().path !== ESTATE_MCP_ROUTE
+        ) return deny({ kind: 'platform' })
+        // A portal that does not take part in federated answers is not in the estate either.
+        return await authorisedPortals(tool, slugs, participatesInFederation)
       },
       declared: async () => {
         if (operation().aggregate) return aggregateAuthority()
@@ -1770,9 +1868,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     query: string,
     options: Parameters<RetrievalProvider['ask']>[2],
     cancelled: () => boolean,
+    retrieval: RetrievalProvider = provider,
   ): AsyncIterable<AskEvent> {
     if (cancelled()) return
-    for await (const event of provider.ask(config, query, options)) {
+    for await (const event of retrieval.ask(config, query, options)) {
       if (cancelled()) return
       yield event
     }
@@ -1832,7 +1931,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Portal modes and assignments are mutable, even for currently public bytes.
     if (
       c.req.path.startsWith('/api/t/') || c.req.path === '/api/tenants' ||
-      c.req.path === '/api/ask-estate'
+      c.req.path === '/api/ask-estate' || c.req.path === '/api/ask-agent' ||
+      c.req.path === ESTATE_MCP_ROUTE
     ) c.header('Cache-Control', 'private, no-store')
   })
   registerInfrastructure(app, '*', async (c, next) => {
@@ -1973,7 +2073,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // frame-ancestors only, not a full CSP - the app legitimately loads
   // modules from esm.sh and fonts from Google, so default-src/script-src is
   // a later work item once those origins are catalogued. A stored file keeps
-  // its own stricter policy, which forbids framing as well.
+  // its own stricter policy, which forbids framing as well; a stored PDF keeps
+  // the one exception, framing by the portal itself (STORED_PDF_FRAMING).
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
     // `includeSubDomains` only inside the platform domain: any other host may be a customer's apex.
@@ -1983,7 +2084,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
-    if (c.res.headers.get('Content-Security-Policy') !== STORED_FILE_POLICY) {
+    const policy = c.res.headers.get('Content-Security-Policy')
+    if (policy !== STORED_FILE_POLICY && policy !== STORED_PDF_FRAMING) {
       c.header('Content-Security-Policy', "frame-ancestors 'none'")
     }
   })
@@ -2079,7 +2181,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (err instanceof BindingCryptoError) return c.json({ error: err.code }, err.status)
     if (err instanceof AuthorisationError) {
       if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
-      if (err.status === 401 && classification(c).declaration?.path === '/api/t/:slug/mcp') {
+      const mcpRoutes = ['/api/t/:slug/mcp', ESTATE_MCP_ROUTE]
+      if (err.status === 401 && mcpRoutes.includes(classification(c).declaration?.path ?? '')) {
         c.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
       }
       return c.json({ error: err.code }, err.status)
@@ -2174,7 +2277,47 @@ export function buildApp(opts: BuildAppOptions): Hono {
       },
     })
     // Hono records caught errors in c.error; c.res holds the onError response and real status.
+    // Its response setter merges earlier headers: a failed audit must discard download headers.
+    if (response.status >= 400) {
+      c.res.headers.delete('Content-Disposition')
+      c.res.headers.delete('Content-Length')
+    }
     c.res = response
+  })
+
+  registerDuplicateRoutes(app, {
+    provider: opts.provider,
+    tenants,
+    duplicates,
+    now: opts.now,
+    review: (c, slug, pair, decision) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/duplicates/review',
+        'duplicate.review',
+        () => rememberDuplicateDecision({ tenants, duplicates, lifecycle }, slug, pair, decision),
+        { decision },
+        { kind: 'portal', slug },
+        { kind: 'duplicate-pair', id: pair },
+      ),
+  })
+
+  registerPortalEvaluations(app, opts, {
+    lifecycle,
+    tenants,
+    requestContext,
+    requestContexts,
+    notFound: adminNotFound,
+  })
+
+  registerLinkHealthRoutes(app, {
+    tenants,
+    provider,
+    sources,
+    store: linkHealth,
+    client: opts.linkHttp,
+    notFound: adminNotFound,
+    signal: (request) => operationSignals.get(request) ?? request.signal,
   })
 
   registerLifecycleRoutes(app, {
@@ -2254,12 +2397,41 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ),
   })
 
+  registerAnswerRecordRoutes(app, { store: answerRecords, tenant, notFound: adminNotFound })
+
   registerAuditRoutes(app, {
     authorise: authoriseDeclared,
     state: () => {
       if (!opts.rbac) throw new AuthorisationError(403)
       return opts.rbac
     },
+  })
+
+  registerPortalExport(app, {
+    provider,
+    tenants,
+    insights,
+    feedback,
+    keys: mcpKeys,
+    routing,
+    lifecycle,
+    state: () => {
+      if (!opts.rbac) throw new AuthorisationError(403)
+      return opts.rbac
+    },
+    configuration: (slug) => withBrandingUrls(tenants.get(slug)!),
+    resource: (slug, resource) => merchandiseSummary(enrichments, slug, resource),
+    audited: (c, includeFeedback, run) =>
+      subAction(
+        c,
+        PORTAL_EXPORT_PATH,
+        'portal.export.bundle',
+        run,
+        { includeFeedback },
+        { kind: 'portal', slug: c.req.param('slug')! },
+        { kind: 'portal', id: c.req.param('slug')! },
+        (response) => response.status < 400 ? 'success' : 'failure',
+      ),
   })
 
   registerAccessRoutes(app, {
@@ -2337,6 +2509,32 @@ export function buildApp(opts: BuildAppOptions): Hono {
       toolGuard(declaration, config, authority)
       admitAll(portal)
     },
+  })
+  const estateTimeoutMs = opts.estateSourceTimeoutMs ??
+    Number(process.env.ESTATE_SOURCE_TIMEOUT_MS ?? DEFAULT_ESTATE_SOURCE_TIMEOUT_MS)
+  registerEstateMcpRoutes(app, {
+    provider,
+    audit: opts.audit,
+    requestContext,
+    authorise: authoriseDeclared,
+    readable: (c) => requestAuthorisation(c).aggregate(),
+    portals: (c, tool, slugs) => requestAuthorisation(c).estatePortals(tool, slugs),
+    // An estate answer is one ask on every portal it reaches, as a cross-portal ask is.
+    admitAnswers: (c, targets) => {
+      const fanOut = admitEstateFanOut(c, targets)
+      return fanOut.allowed ? null : fanOut.retryAfterSec
+    },
+    beforePortal: (declaration, config, authority) => {
+      toolGuard(declaration, config, authority)
+      try {
+        lifecycle.touch(config.slug, opts.now?.())
+      } catch {
+        console.error('Portal activity could not be recorded')
+      }
+    },
+    sourceTimeoutMs: Number.isFinite(estateTimeoutMs) && estateTimeoutMs > 0
+      ? estateTimeoutMs
+      : DEFAULT_ESTATE_SOURCE_TIMEOUT_MS,
   })
 
   // Keep bookmarks for renamed routes working: a renamed route segment permanently redirects to
@@ -2580,9 +2778,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (safeMetadataRequests.has(c.req.raw)) return c.json(safeProjection(config))
     // Readers learn the hosting status (the SPA's read-only banner). A suspended portal
     // never gets here: its 423 carries the safe projection and status instead.
-    const { siteFeedback: _optIn, ...served } = withBrandingUrls(config)
+    const { siteFeedback: _optIn, federation, ...served } = withBrandingUrls(config)
     return c.json({
       ...served,
+      // Readers learn each peer's name and kind only: never where its collection lives.
+      ...(federation
+        ? {
+          federation: {
+            ...(federation.participates !== undefined
+              ? { participates: federation.participates }
+              : {}),
+            ...(federation.peers
+              ? {
+                peers: federation.peers.map(({ id, label, kind }) => ({ id, label, kind })),
+              }
+              : {}),
+          },
+        }
+        : {}),
       // Readers see the opt-in only where this deployment can deliver what they send.
       ...(siteFeedbackAvailable(config, opts.siteFeedbackNotifier) ? { siteFeedback: true } : {}),
       status: lifecycle.get(config.slug).status,
@@ -3020,6 +3233,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
   })
 
+  // Every document's display title in one small list, for the header search's suggestions. The
+  // browser fetches it once a session and matches as the reader types, so a keystroke never
+  // reaches this server or the knowledge box. A reader's view of the cached catalogue: bounded.
+  app.get(declaredRoute('GET', '/api/t/:slug/titles'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const resources = await provider.listResources(config, { bounded: true })
+    return c.json({
+      items: merchandiseSummaries(enrichments, config.slug, resources).map((resource) => ({
+        id: resource.id,
+        title: resource.title,
+        type: resource.type,
+        topicIds: resource.topicIds,
+        ...(resource.kind ? { kind: resource.kind } : {}),
+      })),
+    })
+  })
+
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
@@ -3252,7 +3483,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const pdf = type === 'application/pdf'
     const inline = type !== null && (pdf || passiveMedia(type))
     if (inline) headers.set('content-type', type)
-    if (!pdf) headers.set('content-security-policy', STORED_FILE_POLICY)
+    if (pdf) {
+      headers.set('content-security-policy', STORED_PDF_FRAMING)
+      headers.set('x-frame-options', 'SAMEORIGIN')
+    } else headers.set('content-security-policy', STORED_FILE_POLICY)
     headers.set('content-disposition', inline ? 'inline' : 'attachment')
     return new Response(upstream.body, { status: upstream.status, headers })
   })
@@ -3994,8 +4228,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.post(declaredRoute('POST', '/api/ask-estate'), estateRateLimit, async (c) => {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
-    // Selecting the portals admits the ask on every one of them or on none.
-    const targets = await requestAuthorisation(c).aggregate(parsed.data.slugs)
+    // Selecting the portals admits the ask on every one of them or on none. A portal that does
+    // not take part in federated answers is left out, and checked again as each answer streams.
+    const targets = await requestAuthorisation(c).aggregate(
+      parsed.data.slugs,
+      participatesInFederation,
+    )
     const fanOut = admitEstateFanOut(c, targets)
     if (!fanOut.allowed) return rateLimited(c, fanOut.retryAfterSec)
     return streamSSE(c, async (stream) => {
@@ -4012,14 +4250,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
         if (stream.aborted || c.req.raw.signal.aborted) return
         const record = { citations: 0, groundedness: null as number | null, failed: false }
         try {
-          for await (const event of provider.ask(config, parsed.data.query, {})) {
+          for await (
+            const event of recordComposedSource({
+              store: answerRecords,
+              config,
+              question: parsed.data.query,
+              buildId: opts.buildSha,
+              now: opts.now,
+            }, provider)
+          ) {
             if (stream.aborted || c.req.raw.signal.aborted) return
+            const current = tenant(config.slug)
+            if (!current || !participatesInFederation(current)) return
             if (event.type === 'citation') record.citations += 1
             if (event.type === 'quality') record.groundedness = event.groundedness
             if (event.type === 'error') record.failed = true
             if (
               event.type === 'delta' || event.type === 'done' || event.type === 'sources' ||
-              event.type === 'quality' || event.type === 'error'
+              event.type === 'quality' || event.type === 'error' || event.type === 'answer-record'
             ) {
               await write(config.slug, event)
             }
@@ -4122,6 +4370,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!await adminResource(c, config, parsed.data.resourceId)) return adminNotFound(c)
     const item = investigations.addEvidence(config.slug, owner, c.req.param('id'), {
       passage: parsed.data.passage,
+      ...(parsed.data.page ? { page: parsed.data.page } : {}),
       resourceId: parsed.data.resourceId,
       resourceTitle: parsed.data.resourceTitle,
       score: parsed.data.score ?? null,
@@ -4747,6 +4996,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   }
   const erasureStores = {
+    duplicates,
+    evaluations: opts.evaluations,
+    linkHealth,
     tenants,
     bindings,
     lifecycle,
@@ -4757,6 +5009,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     insights,
     feedback,
     siteFeedback,
+    answerRecords,
     suggestions,
     enrichments,
     kgProposals,
@@ -5318,6 +5571,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
       name,
       searchPlaceholder,
       regionalDiscovery,
+      agentAsk,
+      federation,
       siteFeedback: siteFeedbackSetting,
       demoTour,
       layout: _layout,
@@ -5326,10 +5581,25 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+      ...(agentAsk !== undefined ? { agentAsk } : {}),
+      ...(federation !== undefined
+        ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }
+        : {}),
       ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
       ...(demoTour !== undefined ? { demoTour } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
+    // A participation change is recorded with its before and after (who and when are the
+    // audit event's own).
+    const behaviourDetail = {
+      changedFields: behaviourFields.join(','),
+      ...(federation?.participates !== undefined
+        ? {
+          participates: federation.participates,
+          previousParticipates: participatesInFederation(config),
+        }
+        : {}),
+    }
     const appearanceFields = fields.filter((field) => !TENANT_BEHAVIOUR_FIELDS.has(field))
     if (behaviourFields.length && appearanceFields.length) {
       await subAction(c, '/api/admin/tenants/:slug', 'tenant.appearance.update', () =>
@@ -5340,7 +5610,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
               { ...config.branding, ...branding, ...(name ? { productName: name } : {}) },
               layout,
             ),
-          }), { changedFields: behaviourFields.join(',') }), {
+          }), behaviourDetail), {
         changedFields: appearanceFields.join(','),
       })
       return c.json({ ok: true })
@@ -5352,7 +5622,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         'tenant.behaviour.update',
         () =>
           tenants.patch(config.slug, behaviour),
-        { changedFields: behaviourFields.join(',') },
+        behaviourDetail,
       )
     }
     if (appearanceFields.length) {
@@ -6101,8 +6371,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const now = opts.now?.() ?? Date.now()
+    const month = usagePeriod(
+      tenantToday(config.timezone, new Date(now)).slice(0, 7),
+      config.timezone,
+      now,
+    )!
     return c.json({
       ...insights.summary(config.slug),
+      // This month's questions the collection could not answer well: curators' eyes only.
+      knowledgeGaps: knowledgeGaps(
+        insights.asksBetween(config.slug, month.from, month.to).asks,
+        month,
+      ),
       // Readers' ratings, with the unhelpful answers joined to the questions they answered.
       feedback: feedbackSummary(
         feedback.ratings(config.slug),
@@ -6110,6 +6391,58 @@ export function buildApp(opts: BuildAppOptions): Hono {
         (learningIds) => feedback.comments(config.slug, learningIds),
       ),
     })
+  })
+
+  /**
+   * One portal's usage for a calendar month in its timezone (docs/USAGE-REPORTS.md), as JSON for
+   * the printable report or, with `format=csv`, as a CSV download. Counts come from the ask log,
+   * readers' ratings and the knowledge box; a day a record no longer covers is reported as not
+   * held, never as zero. Question text never leaves in it.
+   */
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/insights/usage'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    c.header('Cache-Control', 'private, no-store')
+    const params = new URL(c.req.url).searchParams
+    const format = params.get('format') ?? 'json'
+    const now = opts.now?.() ?? Date.now()
+    const period = usagePeriod(params.get('month') ?? '', config.timezone, now)
+    if (
+      [...params.keys()].some((key) =>
+        !['month', 'format'].includes(key) || params.getAll(key).length !== 1
+      ) || !['json', 'csv'].includes(format) || !period
+    ) {
+      return c.json({
+        error: 'invalid_request',
+        message: 'Name a month as YYYY-MM, no later than this one, and a format of json or csv.',
+      }, 400)
+    }
+    const ratings = feedback.ratings(config.slug)
+    const asked = insights.questions(config.slug, ratings.map((rating) => rating.learningId))
+    let documents: { created: string[]; readBackTo: string | null } | null = null
+    if (management) {
+      try {
+        documents = await management.addedBetween(
+          config,
+          new Date(period.from).toISOString(),
+          new Date(period.to).toISOString(),
+        )
+      } catch {
+        // The report says the knowledge box could not be read rather than counting nothing.
+      }
+    }
+    const report = buildUsageReport(config.slug, period, {
+      asks: insights.asksBetween(config.slug, period.from, period.to),
+      ratings: { records: ratings, matched: new Set(Object.keys(asked)) },
+      documents,
+    }, now)
+    if (format === 'json') return c.json(report)
+    c.header('Content-Type', 'text/csv; charset=utf-8')
+    c.header(
+      'Content-Disposition',
+      `attachment; filename="usage-${config.slug}-${period.month}.csv"`,
+    )
+    return c.body(usageReportCsv(report))
   })
 
   app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/:id/hidden'), async (c) => {
@@ -6197,6 +6530,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           // was deleting the document goes too.
           try {
             enrichments.forgetResource(slug, id)
+            for (const row of linkHealth.list(slug).filter((row) => row.resourceId === id)) {
+              linkHealth.remove(slug, row.id)
+            }
           } catch {
             complete = false
           }
@@ -6324,7 +6660,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return streamSSE(c, async (stream) => {
       const emit = (event: unknown) => stream.writeSSE({ data: JSON.stringify(event) })
       try {
-        const { added, deferred } = await syncSource(
+        const { added, deferred, summary } = await syncSource(
           management,
           sources,
           config,
@@ -6332,7 +6668,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           (label) => emit({ type: 'item', label }),
           operationSignals.get(c.req.raw),
         )
-        await emit({ type: 'done', added, deferred })
+        await emit({ type: 'done', added, deferred, summary })
       } catch (err) {
         // Persist the failure against the source as well as streaming it, so
         // it is still visible after the log panel is closed - and identical
@@ -6508,15 +6844,27 @@ export function buildApp(opts: BuildAppOptions): Hono {
       ? intents.find((i) => i.id === parsed.data.intent)
       : undefined
     if (parsed.data.intent && !intentDef) return c.json({ error: 'unknown_intent' }, 400)
+    const evidence = {
+      store: answerRecords,
+      config,
+      question: parsed.data.query,
+      resourceId: parsed.data.resourceId,
+      buildId: opts.buildSha,
+      now: opts.now,
+      provider: opts.provider,
+      cancelled: (stream: import('hono/streaming').SSEStreamingApi) =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true,
+    }
     // The finished response declares UTF-8 (the streaming helper sets its own
     // content type); a Latin-1-assuming API client otherwise sees mojibake.
-    return withUtf8EventStream(streamSSE(c, async (stream) => {
+    return withUtf8EventStream(recordSSE(c, evidence, async (stream, provider, write) => {
       const cancelled = () =>
         stream.aborted || c.req.raw.signal.aborted ||
         operationSignals.get(c.req.raw)?.aborted === true
       if (cancelled()) return
       const ask: RetrievalProvider['ask'] = (config, query, options) =>
-        activeAsk(config, query, options, cancelled)
+        activeAsk(config, query, options, cancelled, provider)
       const { query, route: routeMode, ...askOpts } = parsed.data
       const settings = tenants.promptsFor(config.slug)
       const lexicon = config.entityTerms ?? []
@@ -6532,13 +6880,21 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // The answer's learning id, as the reader receives it: the ask log keeps it so a rating
       // of this answer can be joined back to its question.
       let learningId: string | undefined
+      // Response times as this server sees them (docs/USAGE-REPORTS.md): from receiving the
+      // question to the first words of the answer reaching the stream, and to its end.
+      const received = performance.now()
+      let firstWordsAt: number | undefined
       const send = (event: unknown) => {
         if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
-        const learning = event as { type?: unknown; id?: unknown } | null
+        const learning = event as { type?: unknown; id?: unknown; text?: unknown } | null
         if (learning?.type === 'learning' && typeof learning.id === 'string') {
           learningId = learning.id
         }
-        return stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'ask')) })
+        if (
+          firstWordsAt === undefined && (learning?.type === 'delta' || learning?.type === 'done') &&
+          typeof learning.text === 'string' && learning.text.trim()
+        ) firstWordsAt = performance.now()
+        return write(publicSseEvent(event, 'ask'))
       }
       // A follow-up that asks for the earlier answers in another shape
       // ("put the three drugs in a table") is answered from the papers and
@@ -8070,11 +8426,210 @@ export function buildApp(opts: BuildAppOptions): Hono {
           groundedness: record.groundedness,
           contextRelevance: record.contextRelevance,
           ...(learningId ? { learningId } : {}),
+          firstTokenSec: firstWordsAt === undefined
+            ? null
+            : Math.round(firstWordsAt - received) / 1000,
+          answerSec: Math.round(performance.now() - received) / 1000,
         })
       } catch {
         // insights are best-effort - never fail the answer over them
       }
     }))
+  })
+
+  // Agent ask (docs/AGENT-ASK.md): a retrieval agent's answer streamed step by step, or, when the
+  // portal has no agent, the portal's own answer composed across collections. Opt-in per portal;
+  // a portal that has not opted in, or a provider that can do neither, answers exactly as a route
+  // that does not exist.
+  /**
+   * The host portal's federation peers as sources of a composed answer: none when the host does
+   * not take part in federation. Each call uses the peer's sealed key from the binding store, and
+   * is audited on the host with the peer and the time it took, never the key.
+   */
+  const peerSources = (c: Context, host: TenantConfig): ComposeSource[] => {
+    if (!participatesInFederation(host)) return []
+    const peers = (host.federation?.peers ?? []).filter((peer): peer is FederationPeer =>
+      Boolean(peer.zone && peer.kbId)
+    )
+    return peers.map((peer) => ({
+      source: {
+        id: `peer:${peer.id}`,
+        label: peer.label,
+        kind: 'peer' as const,
+        transport: peer.kind === 'arag-mcp' ? 'mcp' as const : 'kb' as const,
+      },
+      search: async (question, signal) => {
+        const started = Date.now()
+        const record = (failure?: 'timeout' | 'unauthorised' | 'error') => {
+          const context = requestContext(c.req.raw)
+          appendAudit(
+            requiredAudit(),
+            createAuditEvent({
+              requestId: context.requestId,
+              actor: context.actor ?? { kind: 'anonymous' },
+              action: 'federation.peer.call',
+              scope: { kind: 'portal', slug: host.slug },
+              target: { kind: 'request' },
+              outcome: failure ? 'failure' : 'success',
+              detail: {
+                peerId: peer.id,
+                peerKind: peer.kind,
+                durationMs: Math.max(0, Date.now() - started),
+                ...(failure ? { peerFailure: failure } : {}),
+              },
+            }, opts.now),
+          )
+        }
+        try {
+          const key = bindings.get(peerKeyName(host.slug, peer.id))
+          if (!key) throw new PeerError('unauthorised', 'No key is stored for this peer')
+          const passages = await searchPeer(peer, key.token, question, {
+            signal,
+            ...(opts.peerFetch ? { fetchImpl: opts.peerFetch } : {}),
+          })
+          record()
+          return passages.map((passage, index) => ({
+            id: `peer:${peer.id}/${passage.resourceId}/${index}`,
+            title: passage.title,
+            text: passage.text.slice(0, 1200),
+            // Off by default: a link would name the partner on a public portal.
+            ...(peer.linkOrigins && passage.originUrl ? { url: passage.originUrl } : {}),
+          }))
+        } catch (error) {
+          record(
+            signal.aborted && !(error instanceof PeerError)
+              ? 'timeout'
+              : error instanceof PeerError
+              ? error.failure
+              : 'error',
+          )
+          throw error
+        }
+      },
+    }))
+  }
+
+  const agentAskStream = (
+    c: Context,
+    host: TenantConfig,
+    portals: readonly TenantConfig[],
+    request: AgentAskRequest,
+    peers: readonly ComposeSource[] = [],
+  ) =>
+    withUtf8EventStream(streamSSE(c, async (stream) => {
+      // Ends the upstream work the moment the reader goes away, not at its next event.
+      const upstream = new AbortController()
+      const cancelled = () =>
+        stream.aborted || c.req.raw.signal.aborted ||
+        operationSignals.get(c.req.raw)?.aborted === true
+      const stop = () => upstream.abort()
+      stream.onAbort(stop)
+      c.req.raw.signal.addEventListener('abort', stop, { once: true })
+      operationSignals.get(c.req.raw)?.addEventListener('abort', stop, { once: true })
+      const send = (event: unknown) =>
+        stream.writeSSE({ data: JSON.stringify(publicAgentSseEvent(event, 'agent-ask')) })
+      try {
+        if (cancelled()) return
+        for await (
+          const event of agentAnswer({
+            provider,
+            host,
+            portals,
+            peers,
+            stillParticipates: (slug) => {
+              const current = tenant(slug)
+              return current !== undefined && participatesInFederation(current)
+            },
+            question: request.query,
+            ...(request.context ? { context: request.context } : {}),
+            signal: upstream.signal,
+            ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
+            ...(opts.agentComposeTimeoutMs ? { composeTimeoutMs: opts.agentComposeTimeoutMs } : {}),
+          })
+        ) {
+          if (cancelled()) return
+          await send(event)
+        }
+      } catch (err) {
+        if (cancelled()) return
+        await send(
+          err instanceof AgentAskError
+            ? { type: 'error', code: err.code, message: err.message, retryable: err.retryable }
+            : {
+              type: 'error',
+              code: 'upstream',
+              message: publicErrorMessage(err),
+              retryable: true,
+            },
+        )
+      } finally {
+        stop()
+      }
+    }))
+  const answersAgentAsk = () => Boolean(provider.agentAsk || provider.compose)
+
+  // A federation peer's read-only service-account key: sealed beside the portal's own binding
+  // (BINDING_KEY), never returned, never in the portal's configuration. Replaces any key the peer
+  // had. Nothing is called with it here: a peer key may only search.
+  app.put(
+    declaredRoute('PUT', '/api/admin/t/:slug/federation/peers/:peerId/key'),
+    async (c) => {
+      const config = tenant(c.req.param('slug'))
+      if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+      const peer = config.federation?.peers?.find((item) => item.id === c.req.param('peerId'))
+      if (!peer?.zone || !peer.kbId) return adminNotFound(c)
+      bindings.assertWritable()
+      const raw = await c.req.json().catch(() => null) as { token?: unknown } | null
+      const parsed = peerKeyBodySchema.safeParse(
+        raw && typeof raw.token === 'string' ? { ...raw, token: cleanToken(raw.token) } : raw,
+      )
+      if (!parsed.success) return c.json({ error: 'invalid_key' }, 400)
+      await bindings.set(peerKeyName(config.slug, peer.id), {
+        baseUrl: `https://${peer.zone}.dp.progress.cloud/api/v1/kb/${peer.kbId}`,
+        token: parsed.data.token,
+        kbId: peer.kbId,
+      })
+      return c.json({ ok: true })
+    },
+  )
+
+  app.post(declaredRoute('POST', '/api/t/:slug/ask-agent'), expensiveRateLimit, async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!answersAgentAsk() || !offersAgentAsk(config)) return c.json({ error: 'not_found' }, 404)
+    const parsed = AgentAskRequestSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    // Each peer is one more search on the reader's behalf: it counts against the host's limits.
+    const peers = peerSources(c, config)
+    if (peers.length > 0) {
+      const admitted = admitAll(askEntries(c, peers.length, peers.map(() => config.slug)))
+      if (!admitted.allowed) return rateLimited(c, admitted.retryAfterSec)
+    }
+    return agentAskStream(c, config, [config], parsed.data, peers)
+  })
+
+  // The same answer across several portals, authorised and admitted as the federated ask is: every
+  // selected portal (or, with none named, every portal in the caller's directory) that offers
+  // agent ask is a source. The first is the host, whose agent answers when it has one.
+  app.post(declaredRoute('POST', '/api/ask-agent'), estateRateLimit, async (c) => {
+    const parsed = agentAskAcrossSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    if (!answersAgentAsk()) return c.json({ error: 'not_found' }, 404)
+    const { slugs, ...request } = parsed.data
+    const order = new Map((slugs ?? []).map((slug, index) => [slug, index]))
+    // Only portals that offer agent ask and take part in federated answers are sources.
+    const targets = (await requestAuthorisation(c).aggregate(
+      slugs,
+      (config) => offersAgentAsk(config) && participatesInFederation(config),
+    )).sort((a, b) => (order.get(a.slug) ?? 0) - (order.get(b.slug) ?? 0))
+    const host = targets[0]!
+    const peers = peerSources(c, host)
+    const fanOut = admitAll([
+      ...askEntries(c, targets.length, targets.map((config) => config.slug)),
+      ...(peers.length > 0 ? askEntries(c, peers.length, peers.map(() => host.slug)) : []),
+    ])
+    if (!fanOut.allowed) return rateLimited(c, fanOut.retryAfterSec)
+    return agentAskStream(c, host, targets, request, peers)
   })
 
   // The Help assistant: a grounded, cited answer about USING the portal,
@@ -8195,6 +8750,13 @@ function nearestTitles(resources: readonly ScoredResource[]): string[] {
  * share one session cookie, so opening such a file directly must never run script there.
  */
 export const STORED_FILE_POLICY = "sandbox; default-src 'none'; frame-ancestors 'none'"
+
+/**
+ * A stored PDF opens in the browser's own viewer, which a sandboxed document cannot use, so it
+ * takes no sandbox. The portal itself may frame it - the PDF reader's fallback view and its print
+ * view are frames - and nothing else may; every other response stays unframeable.
+ */
+export const STORED_PDF_FRAMING = "frame-ancestors 'self'"
 
 /** Headers for a stored branding asset: sandboxed, never sniffed and saved rather than shown. */
 function storedFileHeaders(contentType: string): Record<string, string> {

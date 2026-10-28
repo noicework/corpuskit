@@ -11,6 +11,8 @@ import type { RequestContext } from './access-lifecycle.ts'
 import type { ProgressRequestInit, UploadProgress } from './upload-transport.ts'
 import type {
   AdminTenantOverview,
+  AgentAskEvent,
+  AgentAskRequest,
   AnalyseEvent,
   AskEvent,
   CatalogPage,
@@ -47,6 +49,7 @@ import type {
 } from '@research-portal/core'
 import {
   AdminTenantOverviewSchema,
+  AgentAskEventSchema,
   type DemoTourMode,
   KnowledgeBoxStatusSchema,
   MigrationEventSchema,
@@ -200,6 +203,20 @@ export function getSuggestedQuestions(slug: string): Promise<Question[]> {
 
 export function getResources(slug: string): Promise<ResourceSummary[]> {
   return request<ResourceSummary[]>(`/api/t/${encodeURIComponent(slug)}/resources`)
+}
+
+/** One document in the title index the header search suggests from. */
+export interface TitleIndexItem {
+  id: string
+  title: string
+  type?: ResourceSummary['type']
+  topicIds?: string[]
+  kind?: string
+}
+
+/** Every document's display title, fetched once a session for the header search's suggestions. */
+export function getTitleIndex(slug: string): Promise<{ items: TitleIndexItem[] }> {
+  return request<{ items: TitleIndexItem[] }>(`/api/t/${encodeURIComponent(slug)}/titles`)
 }
 
 export function getResource(slug: string, id: string): Promise<ResourceSummary> {
@@ -480,6 +497,96 @@ export async function streamAsk(
   }
 }
 
+/**
+ * Stream a portal's agent ask (docs/AGENT-ASK.md): its retrieval agent's answer, or, when it has
+ * none, the portal's own answer composed from its collection (`agent-start.mode` says which).
+ * `agent-start` first, then steps, the passages each source returned, reasoning and answer text
+ * as they happen, citations, and one `done` or `error` last. A frame that is not a valid agent
+ * ask event is dropped. Returns when the stream closes; abort via the signal, which also ends the
+ * upstream work. A portal that does not offer agent ask rejects with a 404 `ApiError`.
+ */
+export function streamAgentAsk(
+  slug: string,
+  body: AgentAskRequest,
+  onEvent: (event: AgentAskEvent) => void,
+  signal?: AbortSignal,
+  options: RequestContext = {},
+): Promise<void> {
+  return agentAskStream(
+    `/api/t/${encodeURIComponent(slug)}/ask-agent`,
+    body,
+    onEvent,
+    signal,
+    options,
+  )
+}
+
+/**
+ * The same stream across several portals: the first in `slugs` hosts (its agent answers if it
+ * has one), and every selected portal that offers agent ask is a source when the answer is
+ * composed. Rejects with a 404 `ApiError` when none of them offers it.
+ */
+export function streamAgentAskAcross(
+  body: AgentAskRequest & { slugs?: string[] },
+  onEvent: (event: AgentAskEvent) => void,
+  signal?: AbortSignal,
+  options: RequestContext = {},
+): Promise<void> {
+  return agentAskStream('/api/ask-agent', body, onEvent, signal, options)
+}
+
+async function agentAskStream(
+  path: string,
+  body: unknown,
+  onEvent: (event: AgentAskEvent) => void,
+  signal: AbortSignal | undefined,
+  options: RequestContext,
+): Promise<void> {
+  const res = await transportFetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
+    body: JSON.stringify(body),
+    signal,
+  }, options)
+  assertResponseCurrent(res)
+  noteAskBudget(res)
+  if (!res.ok || !res.body) throw await askError(res, 'The agent is unavailable')
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  const emit = (frame: string) => {
+    assertResponseCurrent(res)
+    const line = frame.trim()
+    if (!line) return
+    const data = line.startsWith('data: ') ? line.slice('data: '.length) : line
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(data)
+    } catch {
+      // A truncated trailing frame (dropped connection) is not an event.
+      return
+    }
+    const event = AgentAskEventSchema.safeParse(parsed)
+    if (event.success) onEvent(event.data)
+  }
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+      for (const frame of frames) emit(frame)
+    }
+    emit(buffer)
+    assertResponseCurrent(res)
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+    finishResponse(res)
+  }
+}
+
 /** Reject uncertain responses before a caller changes forms, snapshots or query state. */
 function validatedAdminResult<T>(schema: z.ZodType<T>): (value: unknown) => T {
   return (value) => {
@@ -497,6 +604,12 @@ const portalSourceSchema = z.object({
   addedAt: z.string(),
   lastSync: z.string().nullable(),
   lastAdded: z.number().int().nonnegative(),
+  lastSummary: z.object({
+    new: z.number(),
+    changed: z.number(),
+    unchanged: z.number(),
+    failed: z.number(),
+  }).optional(),
   itemCount: z.number().int().nonnegative(),
   auto: z.boolean(),
   lastStatus: z.enum(['ok', 'error']).optional(),
@@ -1456,9 +1569,24 @@ export interface AnswerFeedbackSummary {
   flagged: FlaggedAnswer[]
 }
 
+/** A question this month's asks could not answer well, shortened by the server. */
+export interface KnowledgeGapQuestion {
+  question: string
+  asks: number
+  unanswered: number
+  weaklyGrounded: number
+  lastAsked: string
+}
+
 export interface InsightsSummary {
   /** Absent from a server that does not keep answer feedback. */
   feedback?: AnswerFeedbackSummary
+  /**
+   * This month's questions the collection could not answer, or answered on weak grounding, most
+   * asked first. `topics` is null: the ask log cannot be mapped to topics. Absent from older
+   * servers.
+   */
+  knowledgeGaps?: { month: string; questions: KnowledgeGapQuestion[]; topics: null }
   totalAsks: number
   answered: number
   unanswered: number
@@ -1518,6 +1646,7 @@ export interface PortalSource {
   lastSync: string | null
   /** Pages ingested by the most recent sync run. */
   lastAdded: number
+  lastSummary?: { new: number; changed: number; unchanged: number; failed: number }
   /** Pages ingested from this source in total, across every run. */
   itemCount: number
   auto: boolean
@@ -1651,6 +1780,8 @@ export type EvidenceVerdict = 'supports' | 'partial' | 'not-relevant' | 'contrad
 export interface EvidenceItem {
   id: string
   passage: string
+  /** The page (counted from one) the passage sits on in the stored file, when known. */
+  page?: number
   resourceId: string
   resourceTitle: string
   score: number | null
@@ -1736,6 +1867,8 @@ export function deleteInvestigation(slug: string, id: string): Promise<{ ok: boo
 
 export interface NewEvidence {
   passage: string
+  /** The page the passage sits on, so the saved item reopens the PDF there. */
+  page?: number
   resourceId: string
   resourceTitle: string
   score?: number | null
@@ -2311,4 +2444,48 @@ export async function compareExtraction(
     reader.releaseLock()
     finishResponse(res)
   }
+}
+
+// --- Admin: link review queue ------------------------------------------------
+const linkCheckSchema = z.object({
+  id: z.string().min(1),
+  url: z.string().min(1),
+  title: z.string(),
+  resourceId: z.string().optional(),
+  sourceId: z.string().optional(),
+  status: z.enum(['ok', 'broken', 'restricted', 'temporary', 'timeout', 'blocked']),
+  httpStatus: z.number().int().optional(),
+  firstFailed: z.string().nullable(),
+  lastChecked: z.string(),
+  attempts: z.number().int().nonnegative(),
+  ignored: z.boolean(),
+})
+export type PortalLinkCheck = z.infer<typeof linkCheckSchema>
+export function getLinkHealth(
+  slug: string,
+  access: AdminRequestAccess,
+): Promise<PortalLinkCheck[]> {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/link-health`, access)
+    .then(validatedAdminResult(linkCheckSchema.array()))
+}
+export function checkPortalLinks(slug: string, access: AdminRequestAccess) {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/link-health/check`, access, {
+    method: 'POST',
+  }).then(validatedAdminResult(z.object({
+    checked: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    deferred: z.number().int().nonnegative(),
+  })))
+}
+export function reviewPortalLink(
+  slug: string,
+  access: AdminRequestAccess,
+  id: string,
+  action: 'recheck' | 'ignore',
+): Promise<{ ok: true }> {
+  return adminRequest(
+    `/api/admin/t/${encodeURIComponent(slug)}/link-health/${encodeURIComponent(id)}/${action}`,
+    access,
+    { method: 'POST' },
+  ).then(validatedAdminResult(adminSuccessSchema))
 }

@@ -69,3 +69,79 @@
 .rp-manage-disclosure.rp-btn {
   justify-content: flex-start;
 }
+
+/* Monthly usage report: 44px controls, and a print copy that is the only thing printed. */
+.rp-usage-control.rp-btn,
+.rp-usage-control.rp-input {
+  min-height: max(2.75rem, calc(2.25rem * var(--rp-density-ctl, 1)));
+}
+
+.rp-usage-print,
+.rp-usage-eyebrow {
+  display: none;
+}
+
+@page usage-report {
+  size: A4 landscape;
+  margin: 12mm;
+}
+
+@media print {
+  html.rp-printing-usage body > :not(.rp-usage-print) {
+    display: none !important;
+  }
+
+  /* Paper is light whatever the palette: system colours under a light scheme, no tinted grounds. */
+  html.rp-printing-usage .rp-usage-print {
+    display: block;
+    page: usage-report;
+    color-scheme: light;
+    color: CanvasText;
+    background: Canvas;
+    font-size: 10pt;
+  }
+
+  .rp-usage-print *,
+  .rp-usage-print *::before,
+  .rp-usage-print *::after {
+    color: inherit !important;
+    background: transparent !important;
+    border-color: GrayText !important;
+    box-shadow: none !important;
+  }
+
+  .rp-usage-print .rp-usage-tile {
+    border: 1px solid GrayText;
+  }
+
+  .rp-usage-print .rp-usage-table {
+    overflow: visible;
+  }
+
+  .rp-usage-print .rp-usage-eyebrow {
+    display: block;
+  }
+
+  .rp-usage-print table {
+    min-width: 0;
+    font-size: 8.5pt;
+  }
+
+  .rp-usage-print th,
+  .rp-usage-print td {
+    padding-block: 1.5pt;
+  }
+
+  .rp-usage-print .rp-usage-definitions dl {
+    row-gap: 2pt;
+  }
+
+  .rp-usage-print thead {
+    display: table-header-group;
+  }
+
+  .rp-usage-print tr,
+  .rp-usage-print dl > div {
+    break-inside: avoid;
+  }
+}

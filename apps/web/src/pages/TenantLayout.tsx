@@ -1,7 +1,7 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
 import {
   acceptsSiteFeedback,
   demoTourMode,
@@ -23,11 +23,11 @@ import {
   type IconProps,
   MessageSquare,
   Moon,
-  Search,
   Sun,
 } from '../components/icons.tsx'
 import { Button, IconButton } from '../components/ui.tsx'
 import { CommandPalette } from '../components/CommandPalette.tsx'
+import { HeaderSearch } from '../components/HeaderSearch.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
 import {
   accountEntries,
@@ -37,6 +37,7 @@ import {
 import { HelpItemIcon, HelpMenu } from '../components/HelpMenu.tsx'
 import { helpMenuItems } from '../components/help-menu-items.ts'
 import { pageTitle } from '../lib/page-title.ts'
+import { PageSubjectContext } from '../lib/page-subject.ts'
 import { portalNavigation } from '../lib/portal-nav.ts'
 import { KbSwitcher } from '../components/KbSwitcher.tsx'
 import { PortalFooter } from '../components/PortalFooter.tsx'
@@ -168,7 +169,6 @@ function prefersReducedMotion(): boolean {
 export function TenantLayout() {
   const { slug } = useParams<{ slug: string }>()
   const location = useLocation()
-  const navigate = useNavigate()
   const [navOpen, setNavOpen] = useState(false)
   // The sheet outlives `navOpen` by the length of its exit, so the panel, the
   // scrim and the rows can animate away and the trigger can morph back from the
@@ -177,7 +177,6 @@ export function TenantLayout() {
   const [navTop, setNavTop] = useState<number | null>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [logoFailed, setLogoFailed] = useState(false)
-  const [headerQuery, setHeaderQuery] = useState('')
   const [signInOpen, setSignInOpen] = useState(false)
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const access = useAccess()
@@ -370,15 +369,17 @@ export function TenantLayout() {
   }, [config, navMounted])
 
   // Every surface names itself in the tab, so two open portal tabs are told
-  // apart by what they hold rather than by the product name alone (D6-14).
+  // apart by what they hold rather than by the product name alone (D6-14); a
+  // page that shows one thing (a document, a filtered library) names it too.
+  const [pageSubject, setPageSubject] = useState<string | null>(null)
   useEffect(() => {
     if (config) {
-      document.title = pageTitle(location.pathname, config.branding.productName, ui)
+      document.title = pageTitle(location.pathname, config.branding.productName, ui, pageSubject)
     }
     return () => {
       document.title = ui('Research Portal')
     }
-  }, [config, location.pathname, ui])
+  }, [config, location.pathname, ui, pageSubject])
 
   // Load the faces for the tenant's typography choice, apply its text scale,
   // and mirror the theme onto <body> so portaled overlays follow it too (all
@@ -548,7 +549,7 @@ export function TenantLayout() {
                         }}
                         aria-label={navOpen ? ui('Close menu') : ui('Open menu')}
                         aria-expanded={navOpen}
-                        aria-controls='mobile-nav-sheet'
+                        aria-controls={navMounted ? 'mobile-nav-sheet' : undefined}
                         className='rp-navtoggle rp-chrome-acmd-toggle rp-focus'
                       >
                         {ui('Explore ')}
@@ -621,41 +622,7 @@ export function TenantLayout() {
                         <KbSwitcher config={config} />
                       )}
                     </div>
-                    {
-                      /* Header search, centred and full-measure: it is the only search
-              * box in the product now, so it carries the weight. */
-                    }
-                    <div className='hidden w-[min(40rem,42vw)] min-w-0 items-center lg:flex'>
-                      <form
-                        role='search'
-                        onSubmit={(event) => {
-                          event.preventDefault()
-                          const trimmed = headerQuery.trim()
-                          if (!trimmed) return
-                          navigate(`/t/${config.slug}/search?q=${encodeURIComponent(trimmed)}`)
-                          setHeaderQuery('')
-                        }}
-                        className='rp-field flex w-full items-center gap-1 rounded-[var(--rp-radius-input)] border bg-surface p-1'
-                      >
-                        <label htmlFor='header-search' className='sr-only'>
-                          {locale.ui('Search')} {config.branding.productName}
-                        </label>
-                        <input
-                          id='header-search'
-                          type='search'
-                          value={headerQuery}
-                          onChange={(event) => setHeaderQuery(event.target.value)}
-                          placeholder={config.searchPlaceholder}
-                          className='min-h-[max(2.75rem,calc(2.75rem*var(--rp-density-ctl,1)))] min-w-0 flex-1 bg-transparent px-3 text-base text-ink outline-none'
-                        />
-                        <IconButton
-                          type='submit'
-                          label={locale.ui('Search')}
-                          icon={Search}
-                          size='lg'
-                        />
-                      </form>
-                    </div>
+                    <HeaderSearch config={config} />
 
                     {
                       /* Below `sm` this cluster takes exactly the width its buttons
@@ -736,7 +703,7 @@ export function TenantLayout() {
                           icon={MenuBars}
                           size='lg'
                           aria-expanded={navOpen}
-                          aria-controls='mobile-nav-sheet'
+                          aria-controls={navMounted ? 'mobile-nav-sheet' : undefined}
                           className='rp-navtoggle rp-chrome-header-control'
                         />
                       </span>
@@ -978,7 +945,11 @@ export function TenantLayout() {
         {/* Keyed on the path so each route change replays the entrance. */}
         <div key={location.pathname} className='rp-page-enter'>
           {routeAllowed
-            ? <Outlet context={{ config } satisfies TenantOutletContext} />
+            ? (
+              <PageSubjectContext.Provider value={setPageSubject}>
+                <Outlet context={{ config } satisfies TenantOutletContext} />
+              </PageSubjectContext.Provider>
+            )
             : (
               <main data-route-unavailable className='rp-shell py-12'>
                 <h1 className='rp-display text-2xl text-ink' tabIndex={-1}>

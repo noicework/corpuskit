@@ -1,3 +1,7 @@
+import type { DuplicateReviewStore } from './duplicate-store.ts'
+import type { AnswerRecordStoreApi } from './answer-record-store.ts'
+import type { EvaluationStore } from './evaluation-store.ts'
+import type { LinkHealthStoreApi } from './link-health.ts'
 import { appendAudit, type AuditActor, type AuditStore, createAuditEvent } from './audit.ts'
 import type { BindingStoreApi } from './bindings.ts'
 import type { EnrichmentStoreApi } from './enrichments.ts'
@@ -32,14 +36,18 @@ export { ERASED_RECORD_KINDS, type ErasedCounts, type ErasedRecordKind }
  * inventory tests fail when a store keyed by slug is left out.
  */
 export interface PortalErasureStores {
+  duplicates: Pick<DuplicateReviewStore, 'erase'>
+  evaluations?: Pick<EvaluationStore, 'erase'>
   tenants: Pick<TenantStoreApi, 'erase'>
-  bindings: Pick<BindingStoreApi, 'status' | 'remove'>
+  bindings: Pick<BindingStoreApi, 'status' | 'remove' | 'removePeers'>
   lifecycle: Pick<PortalLifecycleStore, 'erase'>
   sessions: Pick<SessionsStoreApi, 'erase'>
   investigations: Pick<InvestigationStoreApi, 'erase'>
   watches: Pick<WatchStoreApi, 'erase'>
+  linkHealth: Pick<LinkHealthStoreApi, 'erase'>
   sources: Pick<SourceStoreApi, 'erase'>
   insights: Pick<InsightsStoreApi, 'erase'>
+  answerRecords: Pick<AnswerRecordStoreApi, 'erase'>
   feedback: Pick<FeedbackStoreApi, 'erase'>
   siteFeedback: Pick<SiteFeedbackStoreApi, 'erase'>
   suggestions: Pick<SuggestionStoreApi, 'erase'>
@@ -78,14 +86,18 @@ const AUDIT_FIELDS: Record<ErasedRecordKind, string> = {
   configuration: 'erasedConfiguration',
   aliases: 'erasedAliases',
   bindings: 'erasedBindings',
+  duplicates: 'erasedDuplicates',
   lifecycle: 'erasedLifecycle',
+  evaluations: 'erasedEvaluations',
   sessions: 'erasedSessions',
   investigations: 'erasedInvestigations',
   watches: 'erasedWatches',
   sources: 'erasedSources',
+  linkHealth: 'erasedLinkHealth',
   insights: 'erasedInsights',
   feedback: 'erasedFeedback',
   siteFeedback: 'erasedSiteFeedback',
+  answerRecords: 'erasedAnswerRecords',
   suggestions: 'erasedSuggestions',
   enrichments: 'erasedEnrichments',
   kgProposals: 'erasedKgProposals',
@@ -130,14 +142,20 @@ export function erasePortal(
       stores.bindings.remove(slug)
       erased.bindings = 1
     }
+    // Federation peer keys are kept beside the binding, under the portal's slug.
+    erased.bindings += stores.bindings.removePeers(slug)
+    erased.duplicates = stores.duplicates.erase(slug)
+    erased.evaluations = stores.evaluations?.erase(slug) ?? 0
     erased.lifecycle = stores.lifecycle.erase(slug)
     erased.sessions = stores.sessions.erase(slug)
     erased.investigations = stores.investigations.erase(slug)
     erased.watches = stores.watches.erase(slug)
+    erased.linkHealth = stores.linkHealth.erase(slug)
     erased.sources = stores.sources.erase(slug)
     erased.insights = stores.insights.erase(slug)
     erased.feedback = stores.feedback.erase(slug)
     erased.siteFeedback = stores.siteFeedback.erase(slug)
+    erased.answerRecords = stores.answerRecords.erase(slug)
     erased.suggestions = stores.suggestions.erase(slug)
     erased.enrichments = stores.enrichments.erase(slug)
     erased.kgProposals = stores.kgProposals.erase(slug)

@@ -699,6 +699,8 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'An executive briefing document - an overview, structured sections, and the key takeaways worth remembering.':
     '概要、構成された節、主要な知見をまとめたブリーフィング資料です。',
   'Answer complete': '回答が完了しました',
+  '{retrieved} sources retrieved, {cited} cited.':
+    '{retrieved}件の資料を取得し、{cited}件を引用しました。',
   'Answer in progress': '回答を作成中',
   'Answer paused - results only': '回答を一時停止し、検索結果のみを表示しています',
   'Answer relevance': '回答の関連度',
@@ -1107,4 +1109,26 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'Full screen': '全画面表示',
   'Exit full screen': '全画面表示を終了',
   'Full screen is unavailable.': '全画面表示を利用できません。',
+  // The evidence brief: an agent ask answer saved as a Word document.
+  'Evidence brief': '根拠ブリーフ',
+  'Answered by a retrieval agent across {count} collections':
+    '検索エージェントが{count}件のコレクションを横断して回答',
+  'Answered by a retrieval agent from one collection':
+    '検索エージェントが1件のコレクションから回答',
+  'Answered by a retrieval agent': '検索エージェントによる回答',
+  'Composed by {product} across {count} collections':
+    '{product}が{count}件のコレクションを横断して構成',
+  'Composed by {product} from one collection': '{product}が1件のコレクションから構成',
+  'Composed by {product}': '{product}による構成',
+  '{count} passages': '{count}件の抜粋',
+  '1 passage': '1件の抜粋',
+  'No answer within the time limit': '制限時間内に回答がありませんでした',
+  'Could not be searched': '検索できませんでした',
+  'This partner could not be reached': 'このパートナーに接続できませんでした',
+  'federated partner': '連携パートナー',
+  'partner over MCP': 'MCP経由のパートナー',
+  'Collections not searched': '検索できなかったコレクション',
+  'Collections': 'コレクション',
+  'Save this answer trail as a Word document with references grouped by collection':
+    'この回答の記録を、コレクションごとにまとめた参考資料付きのWord文書として保存',
 }

@@ -93,6 +93,11 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Library': 'ライブラリ',
   'Ask': '質問',
   'Search': '検索',
+  'Search for “{query}”': '「{query}」を検索',
+  'Ask “{query}”': '「{query}」について質問',
+  '1 suggestion': '候補 1 件',
+  '{count} suggestions': '候補 {count} 件',
+  'Suggested questions': 'おすすめの質問',
   'Sort': '並べ替え',
   'Sort by': '並べ替え',
   'Newest published': '発行日の新しい順',
@@ -117,6 +122,7 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'New conversation': '新しい会話',
   'New session': '新しい会話',
   'Open menu': 'メニューを開く',
+  'Code example': 'コード例',
   'Close menu': 'メニューを閉じる',
   'Light mode': 'ライト表示',
   'Dark mode': 'ダーク表示',
@@ -281,4 +287,8 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Thank you - your feedback has been sent.':
     'ありがとうございます。フィードバックを送信しました。',
   'The portal team has been notified.': 'ポータルの担当者に通知しました。',
+  'Accessibility': 'アクセシビリティ',
+  'About this portal': 'このポータルについて',
+  'Phone': '電話',
+  'Website': 'ウェブサイト',
 }

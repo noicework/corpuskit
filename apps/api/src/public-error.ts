@@ -129,3 +129,27 @@ export function publicSseEvent(event: unknown, label: string): unknown {
   if (detail && !isPortalMessage(detail)) console.error(`[${label}] upstream error: ${detail}`)
   return { ...record, message: publicStreamErrorMessage(detail) }
 }
+
+/** What a reader is told when an agent ask ends without an answer, by its error code. */
+export const AGENT_ASK_MESSAGES = {
+  timeout: 'The agent took too long to answer - please try again.',
+  cancelled: 'The question was stopped before the agent finished.',
+  not_configured: 'Agent answers are not set up for this portal yet.',
+} as const
+
+/**
+ * An agent ask event on its way to a reader. Same rule as `publicSseEvent`: an error's own
+ * message goes to the server log, and the reader gets the portal's wording for its code.
+ */
+export function publicAgentSseEvent(event: unknown, label: string): unknown {
+  if (typeof event !== 'object' || event === null) return event
+  const record = event as Record<string, unknown>
+  if (record.type !== 'error') return event
+  const code = record.code
+  if (code === 'timeout' || code === 'cancelled' || code === 'not_configured') {
+    const detail = typeof record.message === 'string' ? record.message : ''
+    if (detail) console.error(`[${label}] ${code}: ${detail}`)
+    return { ...record, message: AGENT_ASK_MESSAGES[code] }
+  }
+  return publicSseEvent({ ...record, code: 'upstream' }, label)
+}

@@ -25,6 +25,7 @@ export const AUDIT_ACTIONS = [
   'portal.alias.set',
   'portal.alias.remove',
   'portal.erase',
+  'portal.export.bundle',
   'portal.delete.suspended',
   'local.mutation',
   'assignment.create',
@@ -35,6 +36,8 @@ export const AUDIT_ACTIONS = [
   'migration.admin_emails',
   'request.denied',
   'request.privileged',
+  'estate.query',
+  'duplicate.review',
   'resource.delete',
   'resource.questions.generate',
   'resource.questions.cache',
@@ -53,10 +56,13 @@ export const AUDIT_ACTIONS = [
   'break_glass.locked',
   'audit.retention',
   'maintenance.run',
+  'maintenance.link.check',
   'maintenance.source.sync',
   'maintenance.watch.run',
   'maintenance.enrichment.run',
+  'maintenance.evaluation.run',
   'maintenance.questions.run',
+  'federation.peer.call',
 ] as const
 const identifier = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.:@/-]{0,159}$/).refine((v) =>
   !v.includes('://')

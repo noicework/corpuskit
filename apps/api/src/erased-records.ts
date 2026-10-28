@@ -11,15 +11,20 @@ export const ERASED_RECORD_KINDS = [
   'bindings',
   /** Hosting status and limits, ask counts, the capacity ledger and the suspension record. */
   'lifecycle',
+  'duplicates',
+  'evaluations',
   'sessions',
   'investigations',
   'watches',
   'sources',
+  'linkHealth',
   'insights',
   /** Readers' ratings of answers and their comments. */
   'feedback',
   /** Readers' messages to the portal team, with any reply address they gave. */
   'siteFeedback',
+  /** Generated answer evidence and per-portal retention settings. */
+  'answerRecords',
   'suggestions',
   /** Generated enrichments and cached suggested questions. */
   'enrichments',

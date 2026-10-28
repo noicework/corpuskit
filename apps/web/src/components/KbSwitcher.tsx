@@ -206,7 +206,8 @@ export function KbSwitcher({ config }: { config: TenantConfig }) {
         onKeyDown={onTriggerKeyDown}
         aria-haspopup='menu'
         aria-expanded={open}
-        aria-controls={menuId}
+        // The menu mounts only while open; a reference to an absent id is broken (WCAG 4.1.2).
+        aria-controls={open ? menuId : undefined}
         className='rp-chrome-switcher ml-1 shrink-0'
       />
 

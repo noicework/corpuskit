@@ -35,6 +35,7 @@ import {
   type MapLayout,
   type MapNode,
 } from '../components/KnowledgeMap.tsx'
+import { GraphList } from '../components/GraphList.tsx'
 import { KnowledgeMap3D } from '../components/KnowledgeMap3D.tsx'
 import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
@@ -419,7 +420,7 @@ function EntityPanel({
         <p className='mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs'>
           <span
             className='font-semibold uppercase tracking-wide'
-            style={{ color: groupStyle?.ink ?? 'var(--rp-ink-2)' }}
+            style={{ color: 'var(--rp-ink)' }}
           >
             {graphGroupLabel(node.group, ui)}
           </span>
@@ -625,7 +626,7 @@ function ConceptPanel({
         <h2 className='rp-display mt-1 text-lg text-ink'>{node.label}</h2>
         <p
           className='mt-1 text-xs font-semibold uppercase tracking-wide'
-          style={{ color: groupStyle?.ink ?? 'var(--rp-ink-2)' }}
+          style={{ color: 'var(--rp-ink)' }}
         >
           {ui(node.weight === 1 ? 'on {count} resource' : 'on {count} resources', {
             count: node.weight,
@@ -763,7 +764,7 @@ function NavigatorRail({
                     onClick={() => onToggleGroup(group)}
                     className='rp-chip gap-1.5 text-xs'
                     style={{
-                      color: style.ink,
+                      color: 'var(--rp-ink)',
                       textDecoration: hiddenGroups.has(group) ? 'line-through' : undefined,
                     }}
                   >
@@ -815,7 +816,16 @@ function NavigatorRail({
                       }}
                       aria-hidden='true'
                     />
-                    <span className='min-w-0 flex-1 truncate'>{node.label}</span>
+                    <span className='min-w-0 flex-1'>
+                      <span className='block truncate'>{node.label}</span>
+                      {groupStyles.size > 1
+                        ? (
+                          <span className='block text-xs text-ink-2 [overflow-wrap:anywhere]'>
+                            {graphGroupLabel(node.group, ui)}
+                          </span>
+                        )
+                        : null}
+                    </span>
                     <span className='shrink-0 tabular-nums text-xs text-ink-3'>{measure}</span>
                   </button>
                 </li>
@@ -1004,6 +1014,20 @@ export function GraphPage() {
   const canConfigure = access.can('graph.write', { kind: 'portal', slug: config.slug })
   const slug = config.slug
   const [mode, setMode] = useState<Mode>('entity')
+  const [motionPlaying, setMotionPlaying] = useState(true)
+  const [cameraControlsEl, setCameraControlsEl] = useState<HTMLDivElement | null>(null)
+  const [view, setView] = useState<'map' | 'list'>(() =>
+    globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'list' : 'map'
+  )
+  useEffect(() => {
+    const query = globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')
+    if (!query) return
+    const changed = () => {
+      if (query.matches) setView('list')
+    }
+    query.addEventListener('change', changed)
+    return () => query.removeEventListener('change', changed)
+  }, [])
   const [layout, setLayout] = useState<MapLayout>('grouped')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
@@ -1246,7 +1270,7 @@ export function GraphPage() {
   const error = mode === 'entity' ? relationsQuery.error : conceptQuery.error
   const refetch = mode === 'entity' ? relationsQuery.refetch : conceptQuery.refetch
   const hasGraph = !loading && !error && nodes.length > 0
-  const mapBusy = loading || (hasGraph && !mapReady)
+  const mapBusy = loading || (view === 'map' && hasGraph && !mapReady)
   // The API flags an entity graph that is empty because extraction is still
   // running, so the empty state can say "working" rather than "set this up".
   const extracting =
@@ -1270,6 +1294,7 @@ export function GraphPage() {
   return (
     <div
       data-graph-page
+      data-graph-view={view}
       className='flex h-[calc(100dvh-var(--rp-header-h,7.875rem))] min-h-0 flex-col overflow-hidden bg-app'
     >
       {
@@ -1285,7 +1310,7 @@ export function GraphPage() {
           <HeroGround />
           {/* Keep Find beside the title so four lens/layout targets fit below it. */}
           <div className='rp-graph-mobile-chrome relative py-1'>
-            <div className='flex items-center justify-between gap-2'>
+            <div className='rp-graph-mobile-heading flex items-center justify-between gap-2'>
               <div className='min-w-0'>
                 <h1 className='rp-display min-w-0 break-words text-xl text-[var(--rp-on-primary)]'>
                   {ui('Knowledge map')}
@@ -1299,27 +1324,33 @@ export function GraphPage() {
                   )
                   : null}
               </div>
-              <div className='rp-seg rp-seg-on-brand rp-graph-brand-seg shrink-0'>
-                <button
-                  type='button'
-                  aria-label={ui('Find in the map')}
-                  aria-expanded={searchOpen}
-                  aria-pressed={searchOpen}
-                  title={ui('Find in the map')}
-                  onClick={() => setSearchOpen((open) => !open)}
-                  className='rp-seg-item rp-icon-btn'
-                >
-                  <Search size='sm' />
-                </button>
-              </div>
+              {view === 'map'
+                ? (
+                  <div className='rp-seg rp-seg-on-brand rp-graph-brand-seg shrink-0'>
+                    <button
+                      type='button'
+                      aria-label={ui('Find in the map')}
+                      aria-expanded={searchOpen}
+                      aria-pressed={searchOpen}
+                      title={ui('Find in the map')}
+                      onClick={() => setSearchOpen((open) => !open)}
+                      className='rp-seg-item rp-icon-btn'
+                    >
+                      <Search size='sm' />
+                    </button>
+                  </div>
+                )
+                : null}
             </div>
-            <div className='mt-1 flex flex-wrap items-center justify-end gap-2'>
+            <div className='rp-graph-mobile-views mt-1 flex flex-wrap items-center justify-end gap-2'>
               <ModeToggle mode={mode} onChange={switchMode} compact />
-              {hasGraph ? <LayoutToggle layout={layout} onChange={setLayout} compact /> : null}
+              {hasGraph && view === 'map'
+                ? <LayoutToggle layout={layout} onChange={setLayout} compact />
+                : null}
             </div>
           </div>
         </div>
-        {searchOpen
+        {searchOpen && view === 'map'
           ? (
             <div
               className='rp-anim-fade absolute inset-x-0 top-full border-b border-line bg-surface py-2 rp-shadow-md'
@@ -1363,24 +1394,52 @@ export function GraphPage() {
               : null}
           </div>
           <div className='flex flex-wrap items-center justify-end gap-2.5'>
-            <NodeSearch nodes={nodes} groupStyles={groupStyles} onPick={focusAndSelect} />
+            {view === 'map'
+              ? <NodeSearch nodes={nodes} groupStyles={groupStyles} onPick={focusAndSelect} />
+              : null}
             <ModeToggle mode={mode} onChange={switchMode} />
-            {hasGraph ? <LayoutToggle layout={layout} onChange={setLayout} /> : null}
+            {hasGraph && view === 'map'
+              ? <LayoutToggle layout={layout} onChange={setLayout} />
+              : null}
           </div>
         </div>
+      </div>
+
+      <div
+        data-graph-view-switch
+        className='rp-graph-view-switch flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-line bg-surface px-4 py-2'
+      >
+        <div role='group' aria-label={ui('Graph view')} className='rp-seg'>
+          {(['map', 'list'] as const).map((option) => (
+            <button
+              key={option}
+              data-graph-view-choice={option}
+              type='button'
+              className='rp-seg-item'
+              aria-pressed={view === option}
+              onClick={() => setView(option)}
+            >
+              {ui(option === 'map' ? 'Map' : 'List')}
+            </button>
+          ))}
+        </div>
+        {view === 'map' ? <div ref={setCameraControlsEl} /> : null}
+        <p className='text-xs text-ink-2'>{ui('List includes all topics and relationships')}</p>
       </div>
 
       {/* Canvas stage - the map fills it; panels float over it. */}
       <div
         ref={setStageEl}
         data-graph-stage
-        className='relative min-h-0 flex-1 bg-surface'
+        className={`relative min-h-0 flex-1 bg-surface ${
+          view === 'list' ? 'rp-graph-list-stage' : ''
+        }`}
         aria-busy={mapBusy}
       >
         <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
           {mapBusy ? ui('Loading knowledge map.') : hasGraph ? ui('Knowledge map ready.') : ''}
         </p>
-        {loading || (hasGraph && !mapReady) ? <CanvasSkeleton /> : null}
+        {loading || (view === 'map' && hasGraph && !mapReady) ? <CanvasSkeleton /> : null}
         {loading ? null : error
           ? (
             <CanvasNotice>
@@ -1415,6 +1474,8 @@ export function GraphPage() {
               />
             </CanvasNotice>
           )
+          : view === 'list'
+          ? <GraphList nodes={nodes} edges={edges} slug={slug} concept={mode === 'concept'} />
           : (
             <>
               <div
@@ -1436,6 +1497,9 @@ export function GraphPage() {
                   insets={insets}
                   hint={ui('Drag to orbit · scroll to zoom · click a node to explore it')}
                   onReady={() => setMapReady(true)}
+                  initiallyPlaying={motionPlaying}
+                  onMotionChange={setMotionPlaying}
+                  controlsTarget={cameraControlsEl}
                 />
               </div>
 

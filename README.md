@@ -142,7 +142,8 @@ All commands are `deno task <name>`, defined in `deno.json`.
 | `build:cloudflare` | Builds the SPA and Worker as one production package.                                  |
 | `build:css` | Compiles `apps/web/src/styles.css` with the Tailwind CLI into `apps/web/dist/styles.css`.       |
 | `build:js`  | Bundles `apps/web/src/main.tsx` with esbuild into `apps/web/dist/app.js` (React and friends stay external, resolved by the browser's import map). |
-| `check`     | The full gate: `deno check` on the server/scripts/web entry points, `deno lint`, `deno fmt --check`, then `test`. This is what CI runs. |
+| `check`     | The full gate: `check:static`, then `test`. This is what CI runs. |
+| `check:static` | `deno check` on the server/scripts/web entry points, `deno lint` and `deno fmt --check`: the gate without the tests. |
 | `test`      | Runs the Deno test suite (`deno test`) across `packages/` and `apps/`.                          |
 | `test:e2e`  | Builds the web bundle, then runs the browser end-to-end suite in `e2e/` against a local test server. |
 | `test:e2e:visual` | The opt-in screenshot matrix (`e2e/rbac-visual.test.ts`, about 22 minutes). CI skips it; the "Visual matrix" workflow runs it on demand and keeps the captures. |
@@ -163,11 +164,11 @@ Deployment order is **local -> pull request -> Cloudflare, always**. Nobody runs
 deploy from a developer machine. The flow is:
 
 1. Commit locally and push.
-2. `.github/workflows/deploy.yml` runs the gate job (`deno task build:cloudflare` then `deno task check` -
-   typecheck, lint, format, tests) on GitHub's runners, and beside it the browser E2E suite split
-   across parallel shards (`e2e/support/shard.ts`).
-3. Only if the gate and every E2E shard pass does the deploy job publish the preserved package as
-   the Cloudflare Worker named `corpuskit`.
+2. `.github/workflows/deploy.yml` runs the gate on GitHub's runners as jobs that run at the same
+   time: `deno task build:cloudflare` and `deno task check:static` (typecheck, lint, format), the
+   unit tests and the browser E2E suite, each split across parallel shards (`e2e/support/shard.ts`).
+3. Only if the gate and every shard pass does the deploy job publish the preserved package as the
+   Cloudflare Worker named `corpuskit`.
 
 A push that fails the gate never reaches production. Cloudflare configuration is in
 `wrangler.jsonc`; the production and Entra runbook is in `docs/CLOUDFLARE.md`.
@@ -233,6 +234,7 @@ corpuskit/
 | `docs/CLOUDFLARE.md` | The production and Entra runbook. |
 | `docs/TEST-FRAMEWORK.md` | The testing bar and how to run each suite. |
 | `docs/PERSONAS.md` | The people the portal is built for. |
+| `docs/USAGE-REPORTS.md` | The monthly per-portal usage report: its route, columns, retention and CSV format. |
 | `CHANGELOG.md` | What changed in each release, with upgrade notes for anyone running a deployment. Also at [corpuskit.org/docs/release-notes](https://corpuskit.org/docs/release-notes). |
 | `docs/RELEASING.md` | How a release is versioned, noted, tagged and published. |
 | `CONTRIBUTING.md` | How to work on this. |

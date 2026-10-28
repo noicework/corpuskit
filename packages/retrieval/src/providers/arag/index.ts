@@ -1,4 +1,5 @@
 import type {
+  AgentAskEvent,
   AskEvent,
   CatalogItem,
   CatalogPage,
@@ -25,18 +26,23 @@ import {
   DOCUMENTATION_LABEL,
   DOCUMENTATION_LABELSET,
   type ExtractionMethod,
+  FEDERATION_EXCLUDE_LABEL,
   type Intent,
   isDocOrigin,
   type LabelRef,
   ResourceSummarySchema,
 } from '@research-portal/core'
 import type { DocPage } from '@research-portal/core'
-import type {
-  AskOptions,
-  CatalogOptions,
-  ListResourcesOptions,
-  RetrievalProvider,
-  SearchOptions,
+import {
+  AgentAskError,
+  type AgentAskOptions,
+  type AskOptions,
+  type CatalogOptions,
+  type ComposePassage,
+  type ExportResource,
+  type ListResourcesOptions,
+  type RetrievalProvider,
+  type SearchOptions,
 } from '../../provider.ts'
 import {
   baselineMerchandising,
@@ -53,11 +59,13 @@ import {
   FOOTNOTE_PROMPT,
 } from './citation-mode.ts'
 import { bindFootnotes, FootnoteError, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
+import { type CitedParagraph, citeParagraphs, isFileParagraph } from './cited-pages.ts'
 import { prepareExtraContext } from './extra-context.ts'
 import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
 import { dedupeNames, isNoiseEntity, keepEntity, preferredSpelling } from './entity-filter.ts'
 import { rankSuggestedQuestions } from './suggest-ranking.ts'
+import { exportResource } from './portal-export.ts'
 import {
   catalogFilterExpression,
   matchesCatalogFilters,
@@ -139,6 +147,12 @@ const CATALOG_MAX_PAGES = 40
 /** A catalogue page that has not answered in this long is given up on, ending the walk there. */
 const CATALOG_PAGE_TIMEOUT_MS = 10_000
 /**
+ * Reading back when documents were added, for a usage report: at most 50 pages (10,000 documents
+ * added since the period began), and no new page once this long has passed.
+ */
+const ADDED_MAX_PAGES = 50
+const ADDED_READ_BUDGET_MS = 20_000
+/**
  * The longest a reader's request (search, Ask, typeahead, the Library) waits on a catalogue walk.
  * After it the request goes on with the cached listing, or what the walk has read so far, and the
  * walk carries on for the requests after it.
@@ -166,6 +180,15 @@ class CatalogueTimeoutError extends Error {
     super('The knowledge box took too long to list its catalogue')
     this.name = 'CatalogueTimeoutError'
   }
+}
+
+/**
+ * A platform timestamp in epoch milliseconds. The platform keeps time in UTC, so a date and time
+ * without a zone is read as UTC, not in the server's own timezone.
+ */
+export function platformTime(value: string | undefined): number {
+  if (!value) return NaN
+  return Date.parse(/T[^Z+-]*$/i.test(value) ? `${value}Z` : value)
 }
 
 /** Run a read that is given up on, and aborted, after `ms`, whether or not it honours the abort. */
@@ -449,6 +472,50 @@ export function isPurgeEligible(raw: DisplayabilityInput): boolean {
  * independent of search's, even though today the two agree.
  */
 export const MIN_GENERATE_GROUNDING = 0.1
+
+/** A 412 the platform gives when the model refuses the forced tool call behind structured output. */
+function refusesStructuredOutput(err: unknown): boolean {
+  return err instanceof AragApiError && err.status === 412 &&
+    /LLM exception|error received from LLM/i.test(err.message)
+}
+
+/** The system-prompt line that asks for the structured answer as JSON text instead. */
+function jsonReplyInstruction(schema: { name: string; description: string; parameters: unknown }) {
+  return `Reply with only one JSON object and no other text: ${schema.name}, ${schema.description}. ` +
+    `It must match this JSON Schema: ${JSON.stringify(schema.parameters)}`
+}
+
+/** The JSON object in a text answer, with or without a code fence; null when there is none. */
+function parseJsonObject(text: string): unknown {
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  try {
+    const value = JSON.parse(text.slice(start, end + 1))
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+/** The structured answer `compose` asks for: the composed text, citations inline. */
+const COMPOSE_SCHEMA = {
+  name: 'composed_answer',
+  description: 'One answer composed strictly from numbered passages, citing them inline as [n]',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+  },
+}
+const COMPOSE_INSTRUCTIONS =
+  'Answer the question in `answer` STRICTLY from the numbered passages, never from outside ' +
+  'knowledge. The passages come from several collections: say which collection each point ' +
+  'comes from where it helps the reader, and where collections differ, say so. Cite every ' +
+  'claim inline with the number of the passage that states it, as [n] straight after the ' +
+  'sentence; cite only the passages given, and write no reference list. When the passages do ' +
+  'not answer the question, say that in one sentence. Plain paragraphs, no headings.'
 
 /**
  * Refusal-override floor for `ask`: a known platform quirk (see
@@ -1339,6 +1406,11 @@ export class AragProvider implements RetrievalProvider {
       // route resolves PMC identifiers against it when the ingest stored no
       // pmcid field of its own.
       ...(raw.origin?.url ? { originUrl: raw.origin.url } : {}),
+      ...(classificationLabels(raw, FEDERATION_EXCLUDE_LABEL.labelset).includes(
+          FEDERATION_EXCLUDE_LABEL.label,
+        )
+        ? { federationExcluded: true as const }
+        : {}),
       enriched: false,
       ...((raw as { hidden?: boolean }).hidden === true ? { hidden: true } : {}),
     })
@@ -1430,7 +1502,59 @@ export class AragProvider implements RetrievalProvider {
     tenant: TenantConfig,
     options: ListResourcesOptions = {},
   ): Promise<ResourceSummary[]> {
+    if (options.includeHidden) {
+      const resources: ResourceSummary[] = []
+      for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
+        options.signal?.throwIfAborted()
+        const catalog = await within(
+          CATALOG_PAGE_TIMEOUT_MS,
+          (timeout) =>
+            this.client(tenant).getJson<{ resources?: Record<string, RawResource> }>(
+              `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=extra&show=origin`,
+              { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout },
+            ),
+        )
+        const batch = Object.entries(catalog.resources ?? {})
+        for (const [id, raw] of batch) resources.push(this.toSummary(id, raw))
+        if (batch.length < CATALOG_PAGE_SIZE) break
+      }
+      // Administrative rows never enter the reader's catalogue cache.
+      return resources
+    }
     return (await this.loadCatalogue(tenant, options.bounded === true)).resources
+  }
+
+  /** Administrative export uses fresh provider pages, with no reader visibility filters. */
+  async *exportResources(tenant: TenantConfig, signal: AbortSignal): AsyncIterable<ExportResource> {
+    const client = this.client(tenant)
+    const seen = new Set<string>()
+    for (let page = 0;; page++) {
+      signal.throwIfAborted()
+      const catalog = await client.getJson<{
+        resources: Record<string, RawResource>
+        fulltext?: { next_page?: boolean }
+      }>(
+        `/catalog?page_number=${page}&page_size=100&show=basic&show=extra&show=origin&show=values`,
+        { signal },
+      )
+      if (!catalog.resources || typeof catalog.resources !== 'object') {
+        throw new Error('Incomplete export inventory')
+      }
+      const batch = Object.entries(catalog.resources)
+      for (const [id, raw] of batch) {
+        signal.throwIfAborted()
+        // A changing page must fail visibly instead of producing a duplicate or looping forever.
+        if (seen.has(id)) throw new Error('Export inventory changed during pagination')
+        seen.add(id)
+        yield exportResource(this.toSummary(id, raw), raw)
+      }
+      const more = catalog.fulltext?.next_page
+      if (more !== undefined && typeof more !== 'boolean') {
+        throw new Error('Invalid export pagination')
+      }
+      if (more === true && batch.length === 0) throw new Error('Incomplete export inventory')
+      if (more === false || (more === undefined && batch.length < 100)) return
+    }
   }
 
   /**
@@ -1628,6 +1752,62 @@ export class AragProvider implements RetrievalProvider {
         hidden: (r as { hidden?: boolean }).hidden ?? false,
       }
     })
+  }
+
+  /**
+   * When each library document the box still holds was added, for those added from `from` up to
+   * `to` (ISO times). Drafts, in-app documentation and failed imports are left out, as the library
+   * leaves them out. The catalogue is read newest first until it passes `from`. A read that stops
+   * short of `from`, at a failed page or the page or time budget, gives `readBackTo`, the earliest
+   * addition it reached: documents added before then are not listed. A failed first page throws.
+   */
+  async addedBetween(
+    tenant: TenantConfig,
+    from: string,
+    to: string,
+  ): Promise<{ created: string[]; readBackTo: string | null }> {
+    const start = Date.parse(from)
+    const end = Date.parse(to)
+    const client = this.client(tenant)
+    const began = Date.now()
+    const created: string[] = []
+    let oldest: number | undefined
+    const stopped = () => ({
+      created,
+      readBackTo: new Date(oldest === undefined ? end : Math.max(oldest, start)).toISOString(),
+    })
+    for (let page = 0; page < ADDED_MAX_PAGES; page++) {
+      if (page > 0 && Date.now() - began > ADDED_READ_BUDGET_MS) return stopped()
+      let batch: (RawResource & { hidden?: boolean })[]
+      try {
+        const catalog = await within(
+          CATALOG_PAGE_TIMEOUT_MS,
+          (signal) =>
+            client.getJson<{ resources?: Record<string, RawResource & { hidden?: boolean }> }>(
+              `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=origin&sort_field=created&sort_order=desc&hidden=false`,
+              { signal },
+            ),
+        )
+        batch = Object.values(catalog.resources ?? {})
+      } catch (error) {
+        if (page === 0) throw error
+        return stopped()
+      }
+      let passed = false
+      for (const raw of batch) {
+        const at = platformTime(raw.created)
+        if (!Number.isFinite(at)) continue
+        oldest = Math.min(oldest ?? at, at)
+        if (at < start) passed = true
+        else if (
+          at < end && raw.hidden !== true && isDisplayableResource(raw) &&
+          !isDocumentationResource(raw)
+        ) created.push(new Date(at).toISOString())
+      }
+      // Newest first: once one page reaches past `from`, every later page is older still.
+      if (passed || batch.length < CATALOG_PAGE_SIZE) return { created, readBackTo: null }
+    }
+    return stopped()
   }
 
   async uploadFile(
@@ -2627,7 +2807,7 @@ export class AragProvider implements RetrievalProvider {
       [] as ResourceSummary[]
     )
     const byId = new Map(catalogue.map((r) => [r.id, r]))
-    const res = await client.postStream('/ask', {
+    const request: Record<string, unknown> = {
       query,
       features: ['keyword', 'semantic'],
       answer_json_schema: schema,
@@ -2660,8 +2840,22 @@ export class AragProvider implements RetrievalProvider {
       // The default cap triggers 412 "Error generating json: max_tokens" on
       // large payloads like comparison matrices.
       max_tokens: 4096,
-    })
+    }
+    let res: Response
+    let asText = false
+    try {
+      res = await client.postStream('/ask', request)
+    } catch (err) {
+      if (!refusesStructuredOutput(err)) throw err
+      // Some models refuse the forced tool call structured output rides on, and the platform
+      // answers 412. Ask for the same object as JSON text and parse it from the answer.
+      const { answer_json_schema: _schema, ...plain } = request
+      const system = [opts.instructions?.trim(), jsonReplyInstruction(schema)].filter(Boolean)
+      res = await client.postStream('/ask', { ...plain, prompt: { system: system.join('\n\n') } })
+      asText = true
+    }
     let object: unknown = null
+    let answerText = ''
     let sources: ScoredResource[] = []
     const passagesByResource: Record<string, string[]> = {}
     for await (const line of ndjson(res)) {
@@ -2704,8 +2898,11 @@ export class AragProvider implements RetrievalProvider {
           .slice(0, 12)
       } else if (item.type === 'answer_json' && item.object !== undefined) {
         object = item.object
+      } else if (asText && item.type === 'answer' && typeof item.text === 'string') {
+        answerText += item.text
       }
     }
+    if (asText && object === null) object = parseJsonObject(answerText)
     const grounded = sources.filter((s) => s.relevance >= MIN_GENERATE_GROUNDING)
     if (opts.requireGrounding && grounded.length === 0) {
       return { object: null, sources: grounded, insufficientGrounding: true, passagesByResource }
@@ -2790,6 +2987,10 @@ export class AragProvider implements RetrievalProvider {
   // -------------------------------------------------------------------------
   // Data-augmentation agents (DA tasks on the data-plane host).
   // -------------------------------------------------------------------------
+
+  storeIdentifier(tenant: TenantConfig): string | undefined {
+    return this.opts.resolveBinding(tenant.slug)?.kbId
+  }
 
   /** The box's configured user-facing answer model. DA tasks must not inherit it. */
   async generativeModel(tenant: TenantConfig): Promise<string> {
@@ -3982,6 +4183,90 @@ export class AragProvider implements RetrievalProvider {
     )
   }
 
+  /**
+   * TODO(agent-ask): stream a retrieval agent session. Needs a real agent and the per-portal agent
+   * configuration (agent id, zone, the agent's sealed service-account key, set through the
+   * operator API and never sent to the browser). The call is `POST
+   * https://{zone}.dp.progress.cloud/api/v1/agent/{id}/session/ephemeral?workflow_id=default`
+   * with `{question, operation: 0, chat_history, streaming: true}`; its NDJSON body goes through
+   * `normaliseAgentStream(ndjson(res), {sources})`, with a 300 s timeout that quits the session
+   * and reports `timeout`, and `opts.signal` aborting the fetch. Until then every portal answers
+   * `not_configured`.
+   */
+  agentAsk(
+    _tenant: TenantConfig,
+    _question: string,
+    _opts?: AgentAskOptions,
+  ): AsyncIterable<AgentAskEvent> {
+    throw new AgentAskError('not_configured', 'No retrieval agent is configured for this portal')
+  }
+
+  /**
+   * One answer composed from passages gathered across collections, on the structured generation
+   * path the investigation synthesis uses (this box's model and the binding's inference model).
+   * The passages ride the prompt, numbered; the platform's own retrieval is held to one paragraph
+   * so the answer is written from them, and the caller checks every `[n]` against its passage.
+   */
+  async compose(
+    tenant: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts: Pick<AgentAskOptions, 'context'> = {},
+  ): Promise<string> {
+    const earlier = (opts.context ?? []).slice(-4).map((turn) =>
+      `${turn.author === 'USER' ? 'Earlier question' : 'Earlier answer'}: ${
+        turn.text.slice(0, 600)
+      }`
+    )
+    const prompt = [
+      `Question: ${question}`,
+      ...(earlier.length > 0 ? ['', ...earlier] : []),
+      '',
+      ...passages.map((passage, index) =>
+        `[${index + 1}] ${passage.source} | ${passage.title}\n${passage.text.slice(0, 1200)}`
+      ),
+    ].join('\n')
+    const instructions = COMPOSE_INSTRUCTIONS +
+      (tenant.languagePolicy ? '' : ' Use Australian English.')
+    let answer: unknown
+    try {
+      const result = await this.askStructured(tenant, COMPOSE_SCHEMA, prompt, {
+        instructions,
+        topK: 1,
+      })
+      answer = (result.object as { answer?: unknown } | null)?.answer
+    } catch {
+      // Some models refuse the forced tool call structured output rides on, and the platform
+      // answers 412. The same prompt as a plain answer still composes.
+      answer = await this.composePlain(tenant, prompt, instructions.replace('in `answer` ', ''))
+    }
+    if (typeof answer !== 'string' || !answer.trim()) {
+      throw new Error('The platform returned no composed answer')
+    }
+    return answer.trim()
+  }
+
+  /** `compose` without a schema: the same prompt and instructions, the answer read as text. */
+  private async composePlain(
+    tenant: TenantConfig,
+    prompt: string,
+    instructions: string,
+  ): Promise<string> {
+    const res = await this.client(tenant).postStream('/ask', {
+      query: prompt,
+      features: ['keyword', 'semantic'],
+      prompt: { system: instructions },
+      top_k: 1,
+      max_tokens: 4096,
+    })
+    let text = ''
+    for await (const line of ndjson(res)) {
+      const item = (line as { item?: { type?: string; text?: unknown } }).item
+      if (item?.type === 'answer' && typeof item.text === 'string') text += item.text
+    }
+    return text
+  }
+
   async *ask(
     tenant: TenantConfig,
     query: string,
@@ -4179,6 +4464,9 @@ export class AragProvider implements RetrievalProvider {
 
     let sources: ScoredResource[] = []
     const contextTexts: string[] = []
+    // Every retrieved document paragraph by its platform id, so a citation can
+    // carry the text and page of the paragraph it actually cited.
+    const citedParagraphs = new Map<string, CitedParagraph>()
     let fullAnswer = ''
     let refusalPossible = true
     let generating = false
@@ -4226,11 +4514,17 @@ export class AragProvider implements RetrievalProvider {
         // card chooses among them for the paragraph that carries the claim.
         const paged: { score: number; text: string; page?: number }[] = []
         for (const [fieldKey, field] of Object.entries(raw.fields ?? {})) {
-          for (const paragraph of Object.values(field.paragraphs ?? {})) {
+          for (const [paragraphId, paragraph] of Object.entries(field.paragraphs ?? {})) {
             if (paragraph.text) contextTexts.push(paragraph.text)
             const paragraphPage = displayPage(
               (paragraph as { position?: { page_number?: number } }).position?.page_number,
             )
+            if (paragraph.text && !isGeneratedField(fieldKey)) {
+              citedParagraphs.set(paragraphId, {
+                text: paragraph.text,
+                ...(paragraphPage && isFileParagraph(paragraphId) ? { page: paragraphPage } : {}),
+              })
+            }
             if (
               paragraph.text && !isGeneratedField(fieldKey) &&
               !looksLikeDeclarationsChunk(paragraph.text)
@@ -4294,6 +4588,7 @@ export class AragProvider implements RetrievalProvider {
       if (attempt > 1) {
         sources = []
         contextTexts.length = 0
+        citedParagraphs.clear()
         fullAnswer = ''
         refusalPossible = true
         generating = false
@@ -4551,7 +4846,10 @@ export class AragProvider implements RetrievalProvider {
           const standardInstead = !!parsedFootnotes && parsedFootnotes.references === 0 &&
             Object.keys(citationsMapAccum).length > 0
           let bound: ReturnType<typeof bindFootnotes>
+          // The paragraphs the answer cited, in citing order.
+          let citedIds: string[]
           if (parsedFootnotes && !standardInstead) {
+            citedIds = parsedFootnotes.anchors.map((anchor) => anchor.id)
             bound = bindFootnotes(
               parsedFootnotes,
               citable,
@@ -4569,6 +4867,7 @@ export class AragProvider implements RetrievalProvider {
             }
           } else {
             const scoped = scopeCitationsMap(citationsMapAccum, citable, extraContext.resources)
+            citedIds = Object.keys(scoped.citations)
             bound = {
               ...spliceCitationMarkers(
                 parsedFootnotes ? parsedFootnotes.text : fullAnswer,
@@ -4595,7 +4894,9 @@ export class AragProvider implements RetrievalProvider {
             }))
           }
           // No emit-time filtering: binding already validated the source set.
-          for (const citation of bound.citations) yield { type: 'citation', citation }
+          for (const citation of citeParagraphs(bound.citations, citedIds, citedParagraphs)) {
+            yield { type: 'citation', citation }
+          }
           boundText = bound.text
           // Quality scoring sees the prose, never internal block definitions.
           if (parsedFootnotes) fullAnswer = parsedFootnotes.text

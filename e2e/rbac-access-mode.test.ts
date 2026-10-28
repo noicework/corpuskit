@@ -2,6 +2,7 @@ import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
 import { startTestServer } from './support/test-server.ts'
 import { assertCurrentBuild, captureBoundary } from './support/rbac-fixture.ts'
+import { settle } from './support/settle.ts'
 
 const directory = '.planning/logs/04-13-01'
 async function click(page: Page, label: string, selector = 'button') {
@@ -42,8 +43,12 @@ async function capture(
       )!
       : scope
     target.setAttribute('data-capture-target', '')
-    target.scrollIntoView({ block: 'center' })
   }, { args: [selector, headingName] })
+  await settle(page, '[data-capture-target]')
+  await page.evaluate(() =>
+    document.querySelector('[data-capture-target]')!.scrollIntoView({ block: 'center' })
+  )
+  await settle(page, '[data-capture-target]')
   await captureBoundary(page, directory, name, width)
   expect(
     await page.evaluate(() => {

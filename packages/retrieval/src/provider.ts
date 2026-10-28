@@ -1,4 +1,6 @@
 import type {
+  AgentAskErrorCode,
+  AgentAskEvent,
   AskEvent,
   CatalogPage,
   FacetCounts,
@@ -143,6 +145,29 @@ export interface AskOptions {
   light?: boolean
 }
 
+export interface AgentAskOptions {
+  /** Prior turns, oldest first, for multi-turn conversations. */
+  context?: { author: 'USER' | 'AGENT'; text: string }[]
+  /** Aborted when the reader goes away: the provider ends its upstream session at once. */
+  signal?: AbortSignal
+}
+
+/** A passage gathered for a composed answer, cited by its 1-based place in the list. */
+export interface ComposePassage {
+  /** The collection it came from, as the reader knows it. */
+  source: string
+  title: string
+  text: string
+}
+
+/** An agent ask refused before it streamed: the route reports it as an `error` event. */
+export class AgentAskError extends Error {
+  constructor(readonly code: AgentAskErrorCode, message: string, readonly retryable = false) {
+    super(message)
+    this.name = 'AgentAskError'
+  }
+}
+
 export interface CatalogOptions {
   page?: number
   pageSize?: number
@@ -167,6 +192,9 @@ export interface CatalogOptions {
  */
 /** How a caller reads the catalogue listing. */
 export interface ListResourcesOptions {
+  /** Administrative enumeration only: include drafts and failed resources without caching them. */
+  includeHidden?: boolean
+  signal?: AbortSignal
   /**
    * A reader's request that must not wait on a slow box: answer within a bound with the cached
    * listing, or as much of it as has been read, possibly none, rather than the whole catalogue.
@@ -175,7 +203,25 @@ export interface ListResourcesOptions {
   bounded?: boolean
 }
 
+/** Administrative inventory, including drafts and failed ingests, without credentialed URLs. */
+export interface ExportResource {
+  resource: ResourceSummary
+  metadata: Record<string, unknown>
+  labels: { labelset: string; label: string }[]
+  created?: string
+  modified?: string
+  status?: string
+  files: { fieldId: string; contentType?: string }[]
+}
+
 export interface RetrievalProvider {
+  /** Complete paged inventory or failure. Optional providers must refuse export, never truncate. */
+  exportResources?(tenant: TenantConfig, signal: AbortSignal): AsyncIterable<ExportResource>
+  /** The configured answer model, when the provider can report it. No credentials. */
+  generativeModel?(tenant: TenantConfig): Promise<string>
+  /** Non-secret identifier of the store supplying this portal. */
+  storeIdentifier?(tenant: TenantConfig): string | undefined
+
   listResources(tenant: TenantConfig, options?: ListResourcesOptions): Promise<ResourceSummary[]>
   /**
    * One resource by id. A hidden resource (a draft) is null unless `hidden` is set, which only a
@@ -193,6 +239,28 @@ export interface RetrievalProvider {
    */
   suggest(tenant: TenantConfig, query?: string): Promise<Question[]>
   ask(tenant: TenantConfig, query: string, opts?: AskOptions): AsyncIterable<AskEvent>
+  /**
+   * A retrieval agent's answer, streamed step by step (docs/AGENT-ASK.md). Optional: a provider
+   * with no agent support leaves it out. It may throw `AgentAskError` before streaming, and it
+   * ends its upstream session when `opts.signal` aborts or the caller stops iterating.
+   */
+  agentAsk?(
+    tenant: TenantConfig,
+    question: string,
+    opts?: AgentAskOptions,
+  ): AsyncIterable<AgentAskEvent>
+  /**
+   * One answer composed from passages the caller gathered across collections (agent ask without
+   * an agent, docs/AGENT-ASK.md), on this portal's own generation path and model. It cites the
+   * passages inline as `[n]`, n each one's 1-based place in `passages`, and nothing else; the
+   * caller checks every citation against its passage. Optional: without it, no composing.
+   */
+  compose?(
+    tenant: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts?: Pick<AgentAskOptions, 'context'>,
+  ): Promise<string>
   catalog(tenant: TenantConfig, opts?: CatalogOptions): Promise<CatalogPage>
   /** Top resources filed under one topic (Explore's topic rows) - via the classification index, not per-resource topicIds. */
   topicResources(tenant: TenantConfig, topicId: string, limit?: number): Promise<ResourceSummary[]>
