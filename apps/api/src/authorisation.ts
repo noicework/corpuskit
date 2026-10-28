@@ -20,12 +20,14 @@ import {
   createAuditEvent,
 } from './audit.ts'
 import type { BreakGlassService } from './break-glass.ts'
-import type { Declaration, SubAction } from './permissions.ts'
+import { type Declaration, ESTATE_MCP_ROUTE, type SubAction } from './permissions.ts'
 import { type TrustedSessionFacts, validSessionFacts } from './principal.ts'
 import { type ResearchOwner, researchOwnerValue } from './research-owner.ts'
 import {
+  type KeyPortalGrant,
   type ScopedKeyDependencies,
   type VerifiedScopedKey,
+  verifyEstateKey,
   verifyScopedKey,
 } from './scoped-keys.ts'
 import type { TenantStoreApi } from './tenants.ts'
@@ -53,7 +55,7 @@ export type RequestAuthority =
   | { kind: 'break-glass'; actor: AuditActor; provenanceSession: TrustedSessionFacts | null }
 
 export interface AuthorityDependencies extends ScopedKeyDependencies {
-  tenants: Pick<TenantStoreApi, 'get' | 'isDisabled'>
+  tenants: Pick<TenantStoreApi, 'get' | 'isDisabled' | 'list'>
   breakGlass: Pick<BreakGlassService, 'authorise'>
   audit: Pick<AuditStore, 'append'>
 }
@@ -95,6 +97,10 @@ const KEY_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>([
   'enrichments.write',
   'graph.write',
 ])
+/** The portals a key reaches with its role on each: its own, and at the estate endpoint its estate. */
+export function keyPortalRoles(key: VerifiedScopedKey): readonly KeyPortalGrant[] {
+  return key.portals ?? [{ slug: key.slug, role: key.role }]
+}
 function keyPermits(authority: RequestAuthority, permission: unknown): boolean {
   if (authority.kind !== 'key') return true
   const parsed = PermissionSchema.safeParse(permission)
@@ -162,6 +168,8 @@ async function select(
   const state: AuthorityState = { request, context, deps }
   const path = new URL(request.url).pathname
   const slug = /^\/api\/t\/([A-Za-z0-9_-]{1,64})\//.exec(path)?.[1]
+  // The one route without a portal in its path that accepts a key: the key names its portals.
+  const estate = path === ESTATE_MCP_ROUTE
   const scope: Scope = slug ? { kind: 'portal', slug } : { kind: 'platform' }
   const session = context.session
   const sessionValid = session !== null && validSessionFacts(session, (deps.now ?? Date.now)()) &&
@@ -196,25 +204,30 @@ async function select(
   } else if (hasBearer) {
     const header = request.headers.get('authorization')!
     const token = /^Bearer ([A-Za-z0-9_-]+)$/i.exec(header)?.[1]
-    if (!token || !slug) refuse(state, actor, scope)
+    if (!token || (!slug && !estate)) refuse(state, actor, scope)
     // Registry availability and policy corruption cannot make a key public.
-    try {
-      const tenant = deps.tenants.get(slug)
-      if (
-        !tenant || deps.tenants.isDisabled(slug) ||
-        !PortalPolicySchema.safeParse({
+    const usable = (portal: string) => {
+      const tenant = deps.tenants.get(portal)
+      return !!tenant && !deps.tenants.isDisabled(portal) &&
+        PortalPolicySchema.safeParse({
           slug: tenant.slug,
           accessMode: tenant.accessMode,
           configuredTenantId: deps.configuredTenantId,
         }).success
-      ) refuse(state, actor, scope)
+    }
+    let candidates: string[] = []
+    try {
+      if (slug && !usable(slug)) refuse(state, actor, scope)
+      if (!slug) candidates = deps.tenants.list(false).map((tenant) => tenant.slug).filter(usable)
     } catch (error) {
       if (error instanceof AuditWriteError || error instanceof AuthorisationError) throw error
       refuse(state, actor, scope)
     }
     let key: VerifiedScopedKey | null
     try {
-      key = await verifyScopedKey(token, slug, deps)
+      key = slug
+        ? await verifyScopedKey(token, slug, deps)
+        : await verifyEstateKey(token, candidates, deps)
     } catch {
       refuse(state, actor, scope)
     }
@@ -317,12 +330,15 @@ function principalFor(
     }, policy)
   }
   if (authority.kind === 'key') {
-    if (scope.kind !== 'portal' || scope.slug !== authority.slug) return null
+    const portalRoles = keyPortalRoles(authority)
+    if (scope.kind !== 'portal' || !portalRoles.some((grant) => grant.slug === scope.slug)) {
+      return null
+    }
     return normalisePrincipal({
       kind: 'user',
       tenantId: state.deps.configuredTenantId,
       oid: authority.id,
-    }, { portalRoles: [{ slug: authority.slug, role: authority.role }] })
+    }, { portalRoles: [...portalRoles] })
   }
   if (authority.kind === 'break-glass') {
     return normalisePrincipal({

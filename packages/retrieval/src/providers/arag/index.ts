@@ -1433,6 +1433,25 @@ export class AragProvider implements RetrievalProvider {
     tenant: TenantConfig,
     options: ListResourcesOptions = {},
   ): Promise<ResourceSummary[]> {
+    if (options.includeHidden) {
+      const resources: ResourceSummary[] = []
+      for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
+        options.signal?.throwIfAborted()
+        const catalog = await within(
+          CATALOG_PAGE_TIMEOUT_MS,
+          (timeout) =>
+            this.client(tenant).getJson<{ resources?: Record<string, RawResource> }>(
+              `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=extra&show=origin`,
+              { signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout },
+            ),
+        )
+        const batch = Object.entries(catalog.resources ?? {})
+        for (const [id, raw] of batch) resources.push(this.toSummary(id, raw))
+        if (batch.length < CATALOG_PAGE_SIZE) break
+      }
+      // Administrative rows never enter the reader's catalogue cache.
+      return resources
+    }
     return (await this.loadCatalogue(tenant, options.bounded === true)).resources
   }
 
@@ -2826,6 +2845,10 @@ export class AragProvider implements RetrievalProvider {
   // -------------------------------------------------------------------------
   // Data-augmentation agents (DA tasks on the data-plane host).
   // -------------------------------------------------------------------------
+
+  storeIdentifier(tenant: TenantConfig): string | undefined {
+    return this.opts.resolveBinding(tenant.slug)?.kbId
+  }
 
   /** The box's configured user-facing answer model. DA tasks must not inherit it. */
   async generativeModel(tenant: TenantConfig): Promise<string> {

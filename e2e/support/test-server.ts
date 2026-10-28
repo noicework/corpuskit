@@ -75,6 +75,7 @@ export function startTestServer(options: {
   apiOnly?: boolean
   management?: BuildAppOptions['management']
   sources?: BuildAppOptions['sources']
+  linkHttp?: BuildAppOptions['linkHttp']
   insights?: BuildAppOptions['insights']
   domainProvisioner?: BuildAppOptions['domainProvisioner']
   breakGlass?: boolean
@@ -255,6 +256,7 @@ export function startTestServer(options: {
       ...stores,
       provider,
       management: options.management,
+      linkHttp: options.linkHttp,
       bindings,
       domainProvisioner: options.domainProvisioner ?? null,
       siteFeedbackNotifier: options.siteFeedbackNotifier,

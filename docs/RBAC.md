@@ -156,10 +156,80 @@ Keys let MCP clients and scripts act on one portal.
   creator who lost access makes the key inert without deleting it. A creator whose authority
   comes only from Entra claims must sign in again once those claims age past the session bound.
 - Accepted as `Authorization: Bearer ck_...` on `/api/t/:slug/*` and the MCP endpoint of the
-  bound portal only. Refused on `/api/admin/*`, on other portals, after expiry or revocation, and
-  for every management permission: a key is a data-plane credential whatever role it carries.
+  bound portal, and on the estate MCP endpoint below. Refused on `/api/admin/*`, on other
+  portals' routes, after expiry or revocation, and for every management permission: a key is a
+  data-plane credential whatever role it carries.
+- A key may name an `estate`: up to 19 other portals it also reaches at the estate MCP endpoint,
+  and only there. Its creator must hold the key's role on each of them when it is minted, and on
+  each the effective role is again `min(key role, creator's current role on that portal)`, so a
+  portal drops out of the key's reach as soon as the creator loses access to it. The key is listed,
+  revoked and expires on the portal it was minted on, and revoking it there ends it everywhere.
+  A revoked key keeps no estate.
 - Keys minted before this release (`ck_mcp_` prefix) keep working as fixed `viewer` keys on their
   portal. They cannot be raised, and the key list marks them as legacy.
+
+## Estate MCP endpoint
+
+`/api/estate/mcp` is a Streamable HTTP MCP endpoint over many portals at once, for an agent that
+works across a research estate rather than inside one portal. It is stateless, takes `POST`
+only, and offers two read-only tools:
+
+- `search_estate` (`portal.read`): `query`, optional `mode`, `limit` per portal (default 5, at
+  most 20) and `portals`. Returns one list ranked by relevance, each result tagged with its
+  `portal` slug and `portalTitle`.
+- `answer_estate` (`portal.ask`): `question` and optional `portals`. Every portal answers from its
+  own corpus; each answer carries its `portal`, `portalTitle` and its own verified citations, and
+  each citation names its portal too. An answer that is neither refused nor cited is not returned.
+
+Who reaches what is the cross-portal ask's rule (see Portal list): a key reaches the portal it was
+minted on and its estate; a signed-in user reaches the portals in their directory. `portals`
+narrows a call; a portal outside the caller's reach is left out and never queried, and a call
+left with no portal is refused. A caller with no portal at all is refused at the transport, 401
+without credentials and 403 with them. Each tool call is authorised again on its own permission.
+
+Each portal is queried at once with its own time limit, `ESTATE_SOURCE_TIMEOUT_MS` (default
+25000). A portal that fails, times out, answers without a verified citation, or is unavailable
+(suspended, or its asks for the day are spent) is listed in `failed_sources` with its `portal`,
+`portalTitle` and a `reason` (`upstream`, `timeout`, `unverified` or `unavailable`), and the rest
+still return. When every portal fails the call is a tool error that still names each one.
+
+Every call writes one `estate.query` audit row for each portal it queried, in that portal's own
+log, so each portal's administrators see who reached it: the actor (for a key, its id), the tool,
+the number of portals in the call, the key's role there and the outcome, with the failure code
+for a portal that did not return. A failed audit write fails the request with 500 and nothing is
+released. An answer is one ask on every portal it reaches: it counts toward each portal's daily
+ask limit, and against the caller's per-minute ask limits once per portal, all admitted or none,
+as a cross-portal ask does (see [hosting](HOSTING.md)). Failed bearers count against the same
+per-address MCP authentication limit as a portal's own endpoint, before any key is looked up.
+
+A key with an estate is minted with the portal's key route, by a signed-in user:
+
+```http
+POST /api/t/<portal>/mcp/keys
+content-type: application/json
+
+{"label": "Estate agent", "role": "viewer", "estate": ["<portal-b>", "<portal-c>"]}
+```
+
+An MCP client then needs only the endpoint and the key. For example, in a client that reads an
+`mcpServers` file:
+
+```json
+{
+  "mcpServers": {
+    "corpuskit-estate": {
+      "type": "http",
+      "url": "https://<deployment>/api/estate/mcp",
+      "headers": { "Authorization": "Bearer ck_..." }
+    }
+  }
+}
+```
+
+or with Claude Code:
+`claude mcp add --transport http corpuskit-estate https://<deployment>/api/estate/mcp --header "Authorization: Bearer ck_..."`.
+
+The endpoint answers on the platform domain only; on a portal's alias host it is not found.
 
 ## Audit log
 
@@ -235,7 +305,16 @@ mappings need `groupMembershipClaims` set on the registration.
   session; keys are capped by their creator's current role.
 - Cross-portal access: scope comes from the route, and every object lookup is portal-checked.
 - Escalation through keys: keys never satisfy management permissions and never own artefacts.
+  An estate reaches other portals only at the estate endpoint, only while the key's creator holds
+  a role on each, and each of those portals' audit logs records every call that reached it.
 - Audit tampering: no update or delete route; retention purges are recorded; details are
   whitelisted per action.
 - Denial of service through audit growth: safe-metadata fetches and ordinary reads are not
   audited; MCP credential failures are rate limited before they are verified.
+
+## Answer evidence records
+
+Answer record reads and JSON/CSV exports use `content.write` (curator and above), scoped to the
+portal in the route. These are privileged reads and refuse keys. Retention settings use
+`behaviour.write` (portal administrator and above). See [Answer records](ANSWER-RECORDS.md) for the
+route inventory, personal-data handling and per-portal retention.

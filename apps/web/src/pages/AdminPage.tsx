@@ -1,3 +1,4 @@
+import { OverlapPanel } from './admin/OverlapPanel.tsx'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink } from 'react-router-dom'
@@ -223,7 +224,7 @@ export function PlatformAdminShell(
           {links.length > 0 && (
             <nav
               ref={navigation}
-              className='rp-admin-platform-tabs mb-6 flex min-w-0 gap-2 overflow-x-auto pb-2 lg:mb-0 lg:flex-col lg:overflow-visible lg:pb-0'
+              className='rp-admin-platform-tabs mb-6 flex min-w-0 gap-2 overflow-x-auto pb-2 lg:mb-0 lg:flex-col lg:self-start lg:overflow-visible lg:pb-0'
               aria-label={ui('Platform administration')}
             >
               {links.map((link) => (
@@ -274,6 +275,7 @@ function AdminContent() {
 
       {data && (
         <div className='mt-6 space-y-6 lg:space-y-8' data-admin-overview>
+          {authority.can('portal.create', { kind: 'platform' }) && <OverlapPanel />}
           <AddPortal />
 
           <div className='space-y-4'>

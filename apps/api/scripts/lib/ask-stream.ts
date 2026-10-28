@@ -11,14 +11,23 @@
 export type AskEventLike = Record<string, unknown> & { type?: unknown }
 
 /** Parses a `text/event-stream` response body into its `data:` JSON payloads, in order. */
-export async function* sseEvents(response: Response): AsyncGenerator<AskEventLike> {
+export async function* sseEvents(
+  response: Response,
+  signal?: AbortSignal,
+): AsyncGenerator<AskEventLike> {
+  signal?.throwIfAborted()
   if (!response.body) return
   const reader = response.body.getReader()
+  const abort = () => {
+    void reader.cancel().catch(() => {})
+  }
+  signal?.addEventListener('abort', abort, { once: true })
   const decoder = new TextDecoder()
   let buffer = ''
   try {
     while (true) {
       const { done, value } = await reader.read()
+      signal?.throwIfAborted()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
       const chunks = buffer.split('\n\n')
@@ -37,6 +46,7 @@ export async function* sseEvents(response: Response): AsyncGenerator<AskEventLik
       }
     }
   } finally {
+    signal?.removeEventListener('abort', abort)
     reader.releaseLock()
   }
 }

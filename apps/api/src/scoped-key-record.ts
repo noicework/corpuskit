@@ -26,6 +26,11 @@ const legacyShape = {
 }
 const LegacyMcpKeyRecordSchema = z.object(legacyShape).strict()
 
+/** Other portals a key also reaches at the estate MCP endpoint; its own portal is implied. */
+export const MAX_ESTATE_PORTALS = 19
+export const KeyEstateSchema = z.array(KeyPortalSlugSchema).min(1).max(MAX_ESTATE_PORTALS)
+  .refine((slugs) => new Set(slugs).size === slugs.length, 'Duplicate estate portal')
+
 /** Historical input shape retained until all minting callers use scoped metadata. */
 export type LegacyMcpKeyRecord = z.infer<typeof LegacyMcpKeyRecordSchema>
 
@@ -41,13 +46,16 @@ export const ScopedKeyRecordSchema = z.object({
         : identifier.safeParse(identity.oid).success
     ).nullable(),
   provenance: z.enum(['verified-session', 'legacy-unproven']),
+  // Absent on a key for its own portal only, so those records keep their original shape.
+  estate: KeyEstateSchema.optional(),
 }).strict().refine(
   (record) =>
     record.provenance === 'verified-session'
       ? record.creator !== null
-      : record.creator === null && record.role === 'viewer' && record.expiresAt === null,
+      : record.creator === null && record.role === 'viewer' && record.expiresAt === null &&
+        record.estate === undefined,
   'Inconsistent key provenance',
-)
+).refine((record) => !record.estate?.includes(record.tenant), 'Estate repeats the key portal')
 
 export type ScopedKeyRecord = z.infer<typeof ScopedKeyRecordSchema>
 

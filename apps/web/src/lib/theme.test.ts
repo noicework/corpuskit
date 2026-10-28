@@ -11,6 +11,7 @@ import {
   type TenantConfig,
 } from '@research-portal/core'
 import {
+  accentHeroEdge,
   accentMarkVars,
   customFontCss,
   DENSITY_DIALS,
@@ -753,6 +754,27 @@ describe('accent marks', () => {
     // A dark hero shows the white field itself, so the house edge stays.
     const navy = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
     expect(navy['--rp-hero-field-edge']).toBe('var(--rp-field)')
+  })
+
+  it('edges the hero chips in the accent, deepened to 3:1, on a hero the accent tints', () => {
+    const ends = ['#00B14E', '#7FD8A6']
+    const tinted = paletteVars(branding({
+      colours: { primary: '#1C1C1C', accent: '#00B14E', heroFrom: ends[0]!, heroTo: ends[1]! },
+      paletteId: 'default',
+    }))
+    const edge = tinted['--rp-hero-chip-edge']!
+    for (const end of ends) expect(contrastRatio(edge, end)).toBeGreaterThanOrEqual(3)
+    // A dark green, not the hero's near-black text colour the ask field falls back to.
+    expect(edge).not.toBe(tinted['--rp-on-hero'])
+    const [r, g, b] = [1, 3, 5].map((at) => parseInt(edge.slice(at, at + 2), 16))
+    expect(g!).toBeGreaterThan(r!)
+    expect(g!).toBeGreaterThan(b!)
+    // Where the white fill already stands out, the chips keep the field's edge.
+    const navy = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
+    expect(navy['--rp-hero-chip-edge']).toBeUndefined()
+    // A grey hero is not tinted by the accent, and an accent no step of which reads keeps none.
+    expect(accentHeroEdge('#00B14E', ['#9a9a9a'], '#1a1815')).toBeNull()
+    expect(accentHeroEdge('#00B14E', ['#0b3d1f', '#9be3b8'], '#1a1815')).toBeNull()
   })
 
   it("gives every hero's ask field a fill or an edge at 3:1 on it, in either scheme", () => {
