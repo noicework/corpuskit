@@ -45,7 +45,7 @@ export function useAgentAsk(options: {
   slug: string
   /** Whether the reader may still ask: checked before every event is applied. */
   canAsk: () => boolean
-  messages: { timeout: string; unavailable: string; notOffered: string }
+  messages: { timeout: string; unavailable: string; dropped: string; notOffered: string }
 }): UseAgentAsk {
   const { slug, canAsk, messages } = options
   const [state, setState] = useState<AgentAskState>(initialAgentAskState)
@@ -98,7 +98,9 @@ export function useAgentAsk(options: {
 
     const current = () => abortRef.current === controller && !controller.signal.aborted
     const end = (
-      ending: { code: 'cancelled' } | { code: 'timeout' | 'upstream'; message: string },
+      ending:
+        | { code: 'cancelled' }
+        | { code: 'timeout' | 'upstream' | 'not_configured'; message: string },
     ) => {
       if (!current()) return
       controller.abort()
@@ -122,20 +124,22 @@ export function useAgentAsk(options: {
       : streamAgentAsk(run.slugs[0] ?? slug, body, onEvent, controller.signal)
     stream.then(() => {
       // The stream closed without its last event: the connection went, not the agent.
-      end({ code: 'upstream', message: messages.unavailable })
+      end({ code: 'upstream', message: messages.dropped })
     }).catch((err: unknown) => {
       if (!current()) return
       // The portal's own words, never the browser's or an upstream one. The detail stays in
       // the console, where a developer can read it.
       console.error('agent ask stream failed', err)
-      const message = err instanceof ApiError && err.status === 404
-        ? messages.notOffered
-        : err instanceof ApiError && err.status === 429
+      if (err instanceof ApiError && err.status === 404) {
+        end({ code: 'not_configured', message: messages.notOffered })
+        return
+      }
+      const message = err instanceof ApiError && err.status === 429
         ? err.message
         : messages.unavailable
       end({ code: 'upstream', message })
     })
-  }, [slug, canAsk, messages.timeout, messages.unavailable, messages.notOffered])
+  }, [slug, canAsk, messages.timeout, messages.unavailable, messages.dropped, messages.notOffered])
 
   const elapsedMs = startedAt === null ? 0 : Math.max(0, now - startedAt)
   return { state, question, elapsedMs, streaming, ask, stop }

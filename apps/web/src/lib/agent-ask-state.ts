@@ -312,7 +312,9 @@ export function applyAgentAskEvent(
  */
 export function endAgentAsk(
   state: AgentAskState,
-  ending: { code: 'cancelled' } | { code: 'timeout' | 'upstream'; message: string },
+  ending:
+    | { code: 'cancelled' }
+    | { code: 'timeout' | 'upstream' | 'not_configured'; message: string },
   now: number,
 ): AgentAskState {
   if (state.status === 'done' || state.status === 'error') return state
@@ -325,7 +327,11 @@ export function endAgentAsk(
     ...flushReasoning(state),
     status: 'error',
     steps,
-    error: { code: ending.code, message: ending.message, retryable: true },
+    error: {
+      code: ending.code,
+      message: ending.message,
+      retryable: ending.code !== 'not_configured',
+    },
   }
 }
 

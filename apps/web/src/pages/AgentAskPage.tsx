@@ -8,18 +8,12 @@ import { AgentSteps } from '../components/AgentSteps.tsx'
 import { Check, Send, X } from '../components/icons.tsx'
 import { Button, LiveStatus } from '../components/ui.tsx'
 import { useAgentAnnouncements, useAgentAsk } from '../components/useAgentAsk.ts'
-import { getTenants } from '../api/client.ts'
+import { getSuggestedQuestions, getTenants } from '../api/client.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { citationNumbers, stepTotal } from '../lib/agent-ask-state.ts'
 import { runtimeHostPortal } from '../lib/portal-url.ts'
+import { portalStarterQuestions } from '../lib/tenant-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
-
-/** Questions the empty page offers, generic enough for any corpus of applied research. */
-const EXAMPLE_QUESTIONS = [
-  'How is a warmer climate changing pest and disease pressure?',
-  'What triggers movement controls between growing areas?',
-  'Which management changes does the research recommend for hot seasons?',
-]
 
 /**
  * Agent ask (docs/AGENT-ASK.md): one question, answered by the portal's retrieval agent or
@@ -53,9 +47,18 @@ export function AgentAskPage() {
   ]
 
   const messages = useMemo(() => ({
-    timeout: ui('No answer arrived within five minutes, so the page stopped waiting.'),
-    unavailable: ui('The portal could not start the answer. Try again in a moment.'),
-    notOffered: ui('Agent ask is not set up on this portal.'),
+    timeout: ui(
+      'No answer arrived within five minutes, so the page stopped waiting. The steps and passages found so far are kept. Try again, or ask a narrower question.',
+    ),
+    unavailable: ui(
+      "The portal could not start this answer. Try again in a moment, or use Ask for this portal's collection.",
+    ),
+    dropped: ui(
+      'The connection closed before the answer finished. What arrived is kept on this page. Try again in a moment.',
+    ),
+    notOffered: ui(
+      "Agent ask is not set up on this portal. Use Ask to put your question to this portal's collection.",
+    ),
   }), [ui])
   const agent = useAgentAsk({ slug: config.slug, canAsk: canAskNow, messages })
   const { state, streaming } = agent
@@ -63,21 +66,33 @@ export function AgentAskPage() {
     step: (title) => title,
     failed: (labels) =>
       labels.length === 1
-        ? ui('{label} could not be searched; the answer comes from the rest.', {
+        ? ui('{label} could not be searched. The answer uses the other collections.', {
           label: labels[0] ?? '',
         })
-        : ui('{count} collections could not be searched; the answer comes from the rest.', {
+        : ui('{count} collections could not be searched. The answer uses the others.', {
           count: labels.length,
         }),
     done: (citations, collections) =>
-      ui('Answer complete: {citations} citations across {collections} collections.', {
-        citations,
-        collections,
-      }),
-    cancelled: ui('Stopped. Everything that had arrived is kept.'),
+      citations === 0
+        ? ui('Finished. No direct evidence found in the collections searched.')
+        : citations === 1
+        ? ui('Answer finished: 1 citation from 1 collection.')
+        : collections === 1
+        ? ui('Answer finished: {citations} citations from 1 collection.', { citations })
+        : ui('Answer finished: {citations} citations from {collections} collections.', {
+          citations,
+          collections,
+        }),
+    cancelled: ui('Stopped. The steps and passages found so far are kept.'),
   })
 
   const [draft, setDraft] = useState(() => searchParams.get('q') ?? '')
+  const { data: storedSuggestions } = useQuery({
+    queryKey: ['suggested-questions', config.slug],
+    queryFn: () => getSuggestedQuestions(config.slug),
+  })
+  const suggestions = (storedSuggestions ? portalStarterQuestions(config, storedSuggestions) : [])
+    .slice(0, 3)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const lastRunRef = useRef<{ query: string; slugs: string[] } | null>(null)
 
@@ -151,7 +166,7 @@ export function AgentAskPage() {
             </h1>
             <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
               {ui(
-                "Ask a question across all of this portal's collections. Answers take one to two minutes.",
+                "Ask a question across all of this portal's collections. An answer can take up to two minutes.",
               )}
             </p>
           </div>
@@ -170,7 +185,7 @@ export function AgentAskPage() {
                 rows={2}
                 maxLength={2000}
                 aria-describedby='agent-question-hint'
-                placeholder={ui('Ask one question across every collection')}
+                placeholder={ui('Ask a question about this research')}
                 className='rp-agent-composer min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none sm:text-sm'
               />
               <Button
@@ -186,14 +201,14 @@ export function AgentAskPage() {
               </Button>
             </div>
             <p id='agent-question-hint' className='mt-1.5 text-xs leading-relaxed text-ink-2'>
-              {ui('Enter sends; Shift+Enter starts a new line. Up to 2,000 characters.')}
+              {ui('Enter to send · Shift+Enter for a new line · up to 2,000 characters')}
             </p>
 
             {!onPortalHost && others.length > 0
               ? (
                 <fieldset className='mt-4' data-agent-collections>
                   <legend className='text-sm font-medium text-ink'>
-                    {ui('Collections to search')}
+                    {ui('Portals to include')}
                   </legend>
                   <div className='mt-2 flex flex-wrap gap-2'>
                     <span className='rp-chip rp-chip-active rp-agent-target cursor-default'>
@@ -227,7 +242,7 @@ export function AgentAskPage() {
                   </div>
                   <p className='mt-1.5 text-xs leading-relaxed text-ink-2'>
                     {ui(
-                      "Each collection's owner decides whether it takes part. The answer lists which did.",
+                      'Each organisation decides whether its portal takes part, so a portal selected here may be left out. The collections searched show which took part.',
                     )}
                   </p>
                 </fieldset>
@@ -247,34 +262,36 @@ export function AgentAskPage() {
                 />
               </div>
             )
-            : (
+            : suggestions.length > 0
+            ? (
               <section aria-labelledby='agent-examples-heading' className='mt-6'>
                 <h2 id='agent-examples-heading' className='rp-eyebrow text-ink-3'>
                   {ui('Try a question')}
                 </h2>
                 <ul className='mt-3 flex flex-wrap gap-2'>
-                  {EXAMPLE_QUESTIONS.map((question) => (
-                    <li key={question} className='min-w-0 max-w-full'>
+                  {suggestions.map((question) => (
+                    <li key={question.id} className='min-w-0 max-w-full'>
                       <button
                         type='button'
                         onClick={() => {
-                          setDraft(question)
+                          setDraft(question.text)
                           textareaRef.current?.focus()
                         }}
                         disabled={!canAsk}
                         className='rp-chip rp-agent-target h-auto whitespace-normal py-1.5 text-left'
                       >
-                        {ui(question)}
+                        {question.text}
                       </button>
                     </li>
                   ))}
                 </ul>
               </section>
-            )}
+            )
+            : null}
         </div>
 
         <aside
-          aria-label={ui('How this answer is being made')}
+          aria-label={ui('Steps and collections searched')}
           className='rp-agent-rail min-w-0 space-y-6'
           data-agent-rail
         >

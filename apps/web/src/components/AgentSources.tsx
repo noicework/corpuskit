@@ -19,7 +19,7 @@ import { ArrowRight, ExternalLink, FileText } from './icons.tsx'
 export function sourceFailureSentence(reason: SourceFailure, ui: (text: string) => string): string {
   switch (reason) {
     case 'timeout':
-      return ui('Did not answer within the time limit.')
+      return ui('Did not answer in time.')
     case 'unauthorised':
       return ui('This partner could not be reached.')
     case 'error':
@@ -165,9 +165,14 @@ function SourceBadge(
       </span>
     )
   }
+  const searched = group.lookups.length > 0
   return (
     <span className='rp-agent-tag'>
-      {status === 'streaming' ? ui('Queued') : ui('No passages')}
+      {searched
+        ? ui('No passages found')
+        : status === 'streaming'
+        ? ui('Not searched yet')
+        : ui('Not searched')}
     </span>
   )
 }
@@ -217,7 +222,8 @@ function SourceCard(
           {lookup.question
             ? (
               <p className='text-xs italic leading-relaxed text-ink-2'>
-                <span className='not-italic font-medium'>{ui('Asked')}</span> {lookup.question}
+                <span className='not-italic font-medium'>{ui('Searched for')}</span>{' '}
+                {lookup.question}
               </p>
             )
             : null}
@@ -271,12 +277,12 @@ export function AgentSources(
     <section aria-labelledby='agent-sources-heading' data-agent-sources>
       <div className='flex items-baseline justify-between gap-3'>
         <h2 id='agent-sources-heading' className='rp-eyebrow text-ink-3'>
-          {ui('Collections searched')}
+          {ui('Research collections searched')}
         </h2>
         {sources.length > 0
           ? (
             <span className='text-xs tabular-nums text-ink-2'>
-              {ui('{found} of {total} returned passages', {
+              {ui('Passages from {found} of {total}', {
                 found: contributing,
                 total: sources.length,
               })}

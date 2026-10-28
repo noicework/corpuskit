@@ -59,10 +59,14 @@ export function AgentSteps(
         {total > 0
           ? (
             <span className='text-xs tabular-nums text-ink-2' data-agent-step-count>
-              {ui('{done} of {total} done', {
-                done: finished,
-                total: Math.max(total, steps.length),
-              })}
+              {status === 'streaming'
+                ? ui('{done} of about {total} done', {
+                  done: finished,
+                  total: Math.max(total, steps.length),
+                })
+                : steps.length === 1
+                ? ui('1 step')
+                : ui('{count} steps', { count: steps.length })}
             </span>
           )
           : null}
@@ -72,7 +76,7 @@ export function AgentSteps(
           <p className='mt-2 text-sm leading-relaxed text-ink-2'>
             {status === 'streaming'
               ? ui('Waiting for the first step.')
-              : ui('Each step appears here as the answer is made.')}
+              : ui('Each step appears here as the portal works on your question.')}
           </p>
         )
         : runs.map((run, runIndex) => (

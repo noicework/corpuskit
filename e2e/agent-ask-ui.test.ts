@@ -92,7 +92,7 @@ describe('agent ask page', () => {
       })
       expect(seen.title).toBe('Agent ask | Southern Waters Research Portal')
       expect(seen.heading).toBe('Ask across the collections')
-      expect(seen.mode).toBe('Research agent')
+      expect(seen.mode).toBe("Answered by the portal's research agent")
       expect(seen.steps).toBe(12)
       expect(seen.stepStatuses).toBe(1)
       expect(seen.sources).toEqual([
@@ -108,7 +108,7 @@ describe('agent ask page', () => {
       expect(seen.failed).toBe(false)
       expect(seen.clock).toBe('Answered in 1 min 30 s')
       // One announcement for the whole answer, not one a chunk.
-      expect(seen.status).toEqual(['Answer complete: 6 citations across 3 collections.'])
+      expect(seen.status).toEqual(['Answer finished: 6 citations from 3 collections.'])
       // `run` is consumed; `q` stays so the address names the question.
       expect(seen.query).toBe('How is warming changing pests? #fast')
       expect(seen.run).toBeNull()
@@ -149,9 +149,9 @@ describe('agent ask page', () => {
           el.textContent?.trim()
         ),
       }))
-      expect(seen.mode).toBe('Composed by CorpusKit across 3 collections')
+      expect(seen.mode).toBe('Composed by CorpusKit from 2 collections')
       expect(seen.notice).toBe(
-        'Water partner collection This partner could not be reached. The answer draws on the other 2 collections.',
+        'Water partner collection could not be reached. The answer uses the collections that responded, so it may leave out research held only in Water partner collection.',
       )
       expect(seen.sources).toEqual([
         ['marine', 'found'],
@@ -162,7 +162,7 @@ describe('agent ask page', () => {
       expect(seen.partnerLinks).toBe(0)
       expect(seen.hostLinks.every((href) => href?.startsWith('/t/marine/library/'))).toBe(true)
       expect(seen.unlinkedChips).toBeGreaterThan(0)
-      expect(seen.status).toEqual(['Answer complete: 5 citations across 2 collections.'])
+      expect(seen.status).toEqual(['Answer finished: 5 citations from 2 collections.'])
     } finally {
       await page.close()
     }

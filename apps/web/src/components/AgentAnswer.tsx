@@ -8,7 +8,9 @@ import {
   citationHref,
   citedSources,
   clockLabel,
+  contributingSources,
   durationLabel,
+  type SourceFailure,
   sourceKindLabel,
   splitAnswerMarkers,
 } from '../lib/agent-ask-state.ts'
@@ -16,22 +18,39 @@ import { placeMarkersAfterPunctuation } from '../lib/answer-text.ts'
 import { AnswerMarkdown } from './AnswerMarkdown.tsx'
 import { EvidenceDisclosure } from './AnswerStream.tsx'
 import { AlertTriangle, RotateCcw } from './icons.tsx'
-import { sourceFailureSentence } from './AgentSources.tsx'
 import { Button } from './ui.tsx'
+
+/** The failed-source notice's sentence, read after the collection's name. */
+function failedSentence(reason: SourceFailure, ui: (text: string) => string): string {
+  switch (reason) {
+    case 'timeout':
+      return ui('did not answer in time.')
+    case 'unauthorised':
+      return ui('could not be reached.')
+    case 'error':
+      return ui('could not be searched.')
+  }
+}
 
 /** The mode line: who wrote the answer, said plainly and never as more than it is. */
 export function AgentModeBadge({ state }: { state: Pick<AgentAskState, 'mode' | 'sources'> }) {
   const { ui } = usePortalLocale()
   if (state.mode === 'agent') {
-    return <span className='rp-agent-tag' data-agent-mode='agent'>{ui('Research agent')}</span>
+    return (
+      <span className='rp-agent-tag' data-agent-mode='agent'>
+        {ui("Answered by the portal's research agent")}
+      </span>
+    )
   }
   if (state.mode === 'orchestrated') {
-    const count = state.sources.length
+    // Only the collections that returned passages: one that failed or found nothing wrote none
+    // of this.
+    const count = Math.max(contributingSources(state).length, 1)
     return (
       <span className='rp-agent-tag' data-agent-mode='orchestrated'>
         {count === 1
           ? ui('Composed by CorpusKit from 1 collection')
-          : ui('Composed by CorpusKit across {count} collections', { count })}
+          : ui('Composed by CorpusKit from {count} collections', { count })}
       </span>
     )
   }
@@ -141,7 +160,7 @@ function CitationChip(
     return (
       <span
         className={`${className} cursor-default`}
-        title={ui('This partner does not link to its documents')}
+        title={ui("Shown without a link to the partner's document")}
       >
         {inner}
       </span>
@@ -202,7 +221,6 @@ export function AgentAnswer(
   }
 
   const cited = citedSources(state)
-  const remaining = state.sources.length - state.failedSources.length
 
   return (
     <article
@@ -218,7 +236,9 @@ export function AgentAnswer(
             style={{ backgroundColor: 'var(--rp-accent)' }}
             aria-hidden='true'
           />
-          <h2 id='agent-answer-heading' className='rp-eyebrow text-ink-3'>{ui('Cited answer')}</h2>
+          <h2 id='agent-answer-heading' className='rp-eyebrow text-ink-3'>
+            {state.citations.length > 0 ? ui('Cited answer') : ui('Answer')}
+          </h2>
         </span>
         <AgentModeBadge state={state} />
         <span className='ml-auto text-xs tabular-nums text-ink-2' data-agent-clock>
@@ -246,14 +266,19 @@ export function AgentAnswer(
                 {state.failedSources.map((source) => (
                   <li key={source.id} className='text-sm leading-relaxed'>
                     <span className='font-semibold'>{source.label}</span>{' '}
-                    {sourceFailureSentence(source.reason, ui)}
+                    {failedSentence(source.reason, ui)}
                   </li>
                 ))}
               </ul>
               <p className='mt-1 text-sm leading-relaxed'>
-                {remaining === 1
-                  ? ui('The answer draws on the one remaining collection.')
-                  : ui('The answer draws on the other {count} collections.', { count: remaining })}
+                {state.failedSources.length === 1
+                  ? ui(
+                    'The answer uses the collections that responded, so it may leave out research held only in {label}.',
+                    { label: state.failedSources[0]?.label ?? '' },
+                  )
+                  : ui(
+                    'The answer uses the collections that responded, so it may leave out research held only in those collections.',
+                  )}
               </p>
             </div>
           </div>
@@ -295,6 +320,16 @@ export function AgentAnswer(
         )
         : null}
 
+      {state.status === 'done' && hasText && state.citations.length === 0
+        ? (
+          <p className='mt-3 text-sm leading-relaxed text-ink-2' data-agent-uncited>
+            {ui(
+              'This answer has no citations. Check the passages under the collections searched before relying on it.',
+            )}
+          </p>
+        )
+        : null}
+
       {state.status === 'done' && !hasText
         ? (
           <div className='rp-agent-notice rp-agent-notice-warn mt-4' role='status'>
@@ -331,7 +366,9 @@ export function AgentAnswer(
               {hasText
                 ? (
                   <p className='mt-1 text-sm leading-relaxed'>
-                    {ui('The text above is what arrived before it stopped; it may be incomplete.')}
+                    {ui(
+                      'The text above arrived before the answer stopped and may be incomplete. Check its citations before relying on it.',
+                    )}
                   </p>
                 )
                 : null}
@@ -360,9 +397,9 @@ export function AgentAnswer(
               <p className='mt-1 text-sm leading-relaxed text-ink-2'>
                 {hasText
                   ? ui(
-                    'The text above is what arrived before you stopped it; it may be incomplete.',
+                    'The text above arrived before you stopped the answer and may be incomplete. Check its citations before relying on it.',
                   )
-                  : ui('Everything that had arrived is kept.')}
+                  : ui('The steps and passages found so far are kept.')}
               </p>
               <Button
                 variant='outline'
@@ -384,7 +421,7 @@ export function AgentAnswer(
               regionId='agent-reasoning'
               open={reasoningOpen}
               onToggle={() => setReasoningOpen((prev) => !prev)}
-              label={ui('reasoning')}
+              label={ui('working')}
               summary={reasoning.length === 1
                 ? ui('1 note')
                 : ui('{count} notes', { count: reasoning.length })}
