@@ -70,7 +70,11 @@ PUT /api/admin/t/:slug/federation/peers/:peerId/key
 - The key is sealed with `BINDING_KEY` in the binding store, beside the portal's own binding, and
   is never returned: not by this route, not in the portal's configuration, not to the browser.
   Readers' configuration shows each peer's `id`, `label` and `kind` only. Storing a key calls
-  nothing. Putting a key again replaces it; erasing the portal removes its peers' keys.
+  nothing. Putting a key again replaces it. Removing a peer from `federation.peers` deletes its
+  sealed key in the same PATCH request, before the configuration is saved; adding the same id
+  again starts without a key. The `tenant.behaviour.update` audit records the removed peer ids,
+  with the binding deletion also recorded as `local.mutation`. Erasing the portal removes all
+  its peers' keys.
 - **Allowlist.** A peer key may only call `/find` (`arag-kb`) and `/mcp` (`arag-mcp`). The MCP
   session may only use `initialize`, `notifications/initialized` and `tools/call` for
   `search_documents`, `get_document` and `batch_get_documents`. Anything else is refused before it
@@ -99,15 +103,18 @@ A portal that does not take part is left out of other portals' composed answers
 (`POST /api/ask-agent`), of federated asks (`POST /api/ask-estate`) and of the estate MCP
 endpoint's tools (`/api/estate/mcp`) before anything is asked
 or counted, is checked again as each answer is assembled (a portal that leaves mid-answer
-contributes nothing), and does not federate to its own peers. Its own one-portal agent ask is
-unaffected. The change is audited as `tenant.behaviour.update` with `participates` and
+contributes nothing). Turning participation off also stops its own one-portal composed agent ask
+from searching partner collections: it still answers, using its own collection only. The
+participation setting does not disable that route or its configured retrieval agent. The change
+is audited as `tenant.behaviour.update` with `participates` and
 `previousParticipates`; the event records who and when.
 
-**One policy rule.** A resource labelled `federation/exclude` (labelset `federation`, label
-`exclude`) never leaves its portal in a federated answer: it is dropped from another portal's
-composed answer and from any peer's results. It still answers in its own portal. The rule
-applies to composed answers; the federated ask's per-portal answers honour portal participation
-only.
+**Document exclusions.** A resource labelled `federation/exclude` (labelset `federation`, label
+`exclude`) is left out when another portal composes an answer from this collection. Excluded
+resources are also dropped from external peers' results before composition. The composing
+portal can still use its own excluded documents. Separate answers from
+each portal (`POST /api/ask-estate` and estate MCP `answer_estate`) and estate MCP search
+(`search_estate`) do not apply document exclusions; those routes honour portal participation only.
 
 ## Managing federation in the portal
 
@@ -118,7 +125,8 @@ remove partners, choose whether citations link to original documents, and set or
 partner's read-only key. The participation history shows successful audit records with the
 actor, time, previous value and new value, with a link to the full portal audit log.
 
-Keys are write-only: the panel shows only **Key set** or **No key**. Saving a key does not
+Keys are write-only: a small label beside the partner name shows **Key saved** or **No key**.
+The input is labelled **Replace key**. Saving a key does not
 contact the partner or check its connection. The connection kinds offered are those accepted
 by the server's federation schema. Knowledge-box search and knowledge-box MCP are supported;
 the panel also has descriptors for generic MCP and hosted-portal connections, which remain

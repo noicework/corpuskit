@@ -112,12 +112,12 @@ async function visuals(page: Page, testServer: TestServer) {
     await page.goto(`${testServer.url}/t/marine/manage?tab=federation`)
     await page.waitForSelector('[data-federation-history]')
     await page.waitForFunction(() =>
-      document.querySelector('[data-peer-key-status]')?.textContent === 'Key set'
+      document.querySelector('[data-peer-key-status]')?.textContent === 'Key saved'
     )
     for (const width of [1440, 390]) {
       await screenshot(page, 'federation', width, scheme)
       await screenshot(page, 'partners', width, scheme, '[data-federation-peer]')
-      await screenshot(page, 'exclusions', width, scheme, '[data-federation-excluded]')
+      await screenshot(page, 'exclusions', width, scheme, '[data-federation-exclusions]')
       await screenshot(page, 'history', width, scheme, '[data-federation-history]')
       await click(page, 'Add partner')
       await screenshot(page, 'partner-form', width, scheme, '[data-peer-editor]')
@@ -148,6 +148,8 @@ async function visuals(page: Page, testServer: TestServer) {
     document.documentElement.style.fontSize = '200%'
   })
   await screenshot(page, 'federation-text200', 1440, 'dark')
+  await screenshot(page, 'partners-text200', 1440, 'dark', '[data-federation-peer]')
+  await screenshot(page, 'exclusions-text200', 1440, 'dark', '[data-federation-exclusions]')
   await page.evaluate(() => {
     document.documentElement.style.fontSize = ''
   })
@@ -237,7 +239,7 @@ Deno.test('Manage federation: participation audit, peers, write-only key, docume
     await click(page, 'Set key')
     await saved(page, 'Partner key saved.')
     expect(await page.evaluate(() => document.querySelector('[data-peer-key-status]')!.textContent))
-      .toBe('Key set')
+      .toBe('Key saved')
     expect(
       await page.evaluate(() =>
         document.querySelector<HTMLInputElement>('input[name=token]')!.value
@@ -269,6 +271,52 @@ Deno.test('Manage federation: participation audit, peers, write-only key, docume
     await saved(page, 'Partner removed.')
     await expectFocus(page, 'Add partner')
     expect(testServer.tenants.get('marine')!.federation!.peers).toEqual([])
+    expect(testServer.bindings.get('marine#peer:soil-hub')).toBeUndefined()
+    const removedAudit = await page.evaluate(async () =>
+      (await (await fetch(
+        '/api/admin/t/marine/audit?action=tenant.behaviour.update&outcome=success',
+      ))
+        .json()).items
+    )
+    expect(
+      removedAudit.some((row: { actor_id: string; detail_json: string }) =>
+        row.actor_id === 'e2e-portal-admin' &&
+        JSON.parse(row.detail_json).removedPeerIds === 'soil-hub'
+      ),
+    ).toBe(true)
+    // Reusing the id through Manage must never restore the removed credential.
+    await click(page, 'Add partner')
+    await input(page, '[aria-label="Partner ID"]', 'soil-hub')
+    await input(page, '[aria-label="Collection name"]', 'Soil Research Hub')
+    await input(page, '[aria-label="Zone"]', 'test-zone')
+    await input(page, '[aria-label="Knowledge box ID"]', 'soil-box')
+    await click(page, 'Save partner')
+    await saved(page, 'Partner saved.')
+    expect(await page.evaluate(() => document.querySelector('[data-peer-key-status]')!.textContent))
+      .toBe('No key')
+    await input(page, 'input[name=token]', token)
+    await click(page, 'Set key')
+    await saved(page, 'Partner key saved.')
+    // API clients use the same deletion path as Manage.
+    const peer = testServer.tenants.get('marine')!.federation!.peers![0]!
+    const results = await page.evaluate(async (peer) => {
+      const patch = (peers: unknown[]) =>
+        fetch('/api/admin/tenants/marine', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ federation: { peers } }),
+        })
+      return [(await patch([])).status, (await patch([peer])).status]
+    }, { args: [peer] })
+    expect(results).toEqual([200, 200])
+    expect(testServer.bindings.get('marine#peer:soil-hub')).toBeUndefined()
+    expect(Deno.readTextFileSync(`${testServer.directory}/bindings.json`))
+      .not.toContain('marine#peer:soil-hub')
+    await page.goto(`${testServer.url}/t/marine/manage?tab=federation`)
+    await page.waitForFunction(() =>
+      document.querySelector('[data-peer-key-status]')?.textContent === 'No key'
+    )
+    expect(await page.evaluate(() => document.body.innerHTML)).not.toContain(token)
   } finally {
     await page.close()
     await browser.close()

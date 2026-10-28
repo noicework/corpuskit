@@ -154,7 +154,7 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
         <h3 className='mt-5 font-semibold'>{ui('Participation')}</h3>
         <p className='mt-2 max-w-prose text-sm text-ink-2'>
           {ui(
-            'Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal querying its partners. Answers within this portal remain available.',
+            "Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal searching partner collections when it composes an answer. Agent ask stays available for this portal's own collection.",
           )}
         </p>
         {can('behaviour.write')
@@ -277,7 +277,20 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
             >
               <div className='flex min-w-0 flex-wrap items-start justify-between gap-3'>
                 <div className='min-w-0'>
-                  <h3 className='break-words font-semibold'>{peer.label}</h3>
+                  <div className='flex min-w-0 flex-wrap items-center gap-2'>
+                    <h3 className='break-words font-semibold'>{peer.label}</h3>
+                    {snapshot && isPeerKind(peer.kind) && PEER_KINDS[peer.kind].key && (
+                      <span className='rp-badge text-xs' data-peer-key-status>
+                        {ui(
+                          snapshot.peers.find((item) =>
+                              item.id === peer.id
+                            )!.keySet
+                            ? 'Key saved'
+                            : 'No key',
+                        )}
+                      </span>
+                    )}
+                  </div>
                   <p className='mt-1 break-words text-sm text-ink-2'>
                     {ui(isPeerKind(peer.kind) ? PEER_KINDS[peer.kind].label : 'Partner collection')}
                     {' '}
@@ -343,7 +356,6 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
                 PEER_KINDS[peer.kind].key && (
                 <PeerKeyForm
                   keySet={snapshot.peers.find((item) => item.id === peer.id)!.keySet}
-                  label={peer.label}
                   busy={busy}
                   save={(token) =>
                     run(() =>
@@ -382,12 +394,12 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
         )}
       </section>
       {can('content.write') && (
-        <section className='rp-card min-w-0 p-5 lg:p-6'>
+        <section className='rp-card min-w-0 p-5 lg:p-6' data-federation-exclusions>
           <SectionHeader
             className='rp-manage-section-head'
             title={ui('Excluded documents')}
             description={ui(
-              'Documents labelled federation/exclude stay in this portal and are withheld from composed federated answers. Per-portal answers in federated ask use participation only.',
+              "Excluded documents can still be used in this portal's answers. Other portals leave them out when composing an answer from this collection. Separate answers from each portal and federated search do not use this exclusion.",
             )}
           />
           {documents.isLoading && (
@@ -396,7 +408,10 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
           {documents.isError && (
             <p role='alert' className='mt-3 text-sm'>
               {ui('Could not load federation documents.')}{' '}
-              <Button variant='ghost' onClick={() => void documents.refetch()}>
+              <Button
+                variant='ghost'
+                onClick={() => void documents.refetch()}
+              >
                 {ui('Try again')}
               </Button>
             </p>
@@ -429,7 +444,9 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
                             () => setFederationExclusion(slug, item.id, false, context),
                             'Document exclusion removed.',
                           ).then((saved) => {
-                            if (saved) setFocusTarget('document')
+                            if (saved) {
+                              setFocusTarget('document')
+                            }
                           })}
                       >
                         {ui('Remove exclusion')}
@@ -466,7 +483,8 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
                         value={documentId}
                         disabled={busy}
                         required
-                        onChange={(event) => setDocumentId(event.target.value)}
+                        onChange={(event) =>
+                          setDocumentId(event.target.value)}
                       >
                         <option value=''>{ui('Choose a document')}</option>
                         {included.map((item) => (
@@ -573,9 +591,8 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
 }
 
 function PeerKeyForm(
-  { keySet, label, busy, save }: {
+  { keySet, busy, save }: {
     keySet: boolean
-    label: string
     busy: boolean
     save(token: string): Promise<boolean>
   },
@@ -593,16 +610,13 @@ function PeerKeyForm(
         void save(token)
       }}
     >
-      <p className='text-sm font-medium' data-peer-key-status>
-        {ui(keySet ? 'Key set' : 'No key')}
-      </p>
       <p id={`${id}-help`} className='max-w-prose text-sm text-ink-2'>
         {ui(
           'Keys are write-only. Enter a read-only partner key to set or replace it; saved keys are never displayed.',
         )}
       </p>
       <label className='block text-sm font-medium' htmlFor={id}>
-        {ui('Key for {partner}', { partner: label })}
+        {ui('Replace key')}
       </label>
       <input
         id={id}

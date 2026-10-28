@@ -3,14 +3,14 @@ export const FEDERATION_JA: Readonly<Record<string, string>> = {
   'Choose how this portal shares research with partner collections.':
     'このポータルの研究資料を連携先コレクションと共有する方法を設定します。',
   'Participation': '連携への参加',
-  'Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal querying its partners. Answers within this portal remain available.':
-    '参加すると、他のポータルの連携回答と検索にこのコレクションを含めることができます。参加を停止すると、このポータルから連携先への問い合わせも停止します。このポータル内の回答は引き続き利用できます。',
+  "Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal searching partner collections when it composes an answer. Agent ask stays available for this portal's own collection.":
+    '参加すると、他のポータルの連携回答と検索にこのコレクションを含めることができます。参加を停止すると、このポータルが統合回答を作成する際に連携先コレクションを検索しなくなります。このポータルのコレクションに対するエージェントへの質問は引き続き利用できます。',
   "Take part in other portals' federated answers and search":
     '他のポータルの連携回答と検索に参加する',
   'This portal takes part in federation.': 'このポータルは連携に参加しています。',
   'This portal does not take part in federation.': 'このポータルは連携に参加していません。',
   'Participation updated.': '連携への参加設定を更新しました。',
-  'Agent ask': 'エージェントへの質問',
+  'Agent ask': 'エージェントに質問',
   'Agent ask composes a cited answer from available collections. This setting does not change participation.':
     '利用可能なコレクションから出典付きの回答を作成します。この設定は連携への参加設定には影響しません。',
   'Offer agent ask on this portal': 'このポータルでエージェントへの質問を提供する',
@@ -27,15 +27,15 @@ export const FEDERATION_JA: Readonly<Record<string, string>> = {
     'このポータルが連携に参加している場合に連携先を検索します。元資料へのリンクは許可した場合にのみ共有します。',
   'Add partner': '連携先を追加',
   'No partner collections configured.': '連携先コレクションは設定されていません。',
-  'Partner collection': '連携先コレクション',
+  'Partner collection': '連携先のコレクション',
   'Edit {partner}': '{partner}を編集',
   'Remove {partner}': '{partner}を削除',
   'Partner removed.': '連携先を削除しました。',
   'Partner saved.': '連携先を保存しました。',
   'Partner key saved.': '連携先のキーを保存しました。',
   'Excluded documents': '連携から除外した資料',
-  'Documents labelled federation/exclude stay in this portal and are withheld from composed federated answers. Per-portal answers in federated ask use participation only.':
-    'federation/exclude ラベルの付いた資料はこのポータル内に保持され、統合された連携回答には使用されません。連携質問のポータル別回答には参加設定のみが適用されます。',
+  "Excluded documents can still be used in this portal's answers. Other portals leave them out when composing an answer from this collection. Separate answers from each portal and federated search do not use this exclusion.":
+    '除外した資料は、このポータルの回答で引き続き使用できます。他のポータルがこのコレクションから回答を作成する際には使用されません。ポータルごとの個別回答と連携検索には、この除外設定は適用されません。',
   'Loading documents...': '資料を読み込み中...',
   'Could not load federation documents.': '連携対象の資料を読み込めませんでした。',
   'No documents are excluded.': '除外された資料はありません。',
@@ -58,11 +58,10 @@ export const FEDERATION_JA: Readonly<Record<string, string>> = {
   'Older changes': '以前の変更',
   'Latest changes': '最新の変更',
   'Open full audit log': '監査ログ全体を開く',
-  'Key set': 'キー設定済み',
+  'Key saved': 'キー保存済み',
   'No key': 'キー未設定',
   'Keys are write-only. Enter a read-only partner key to set or replace it; saved keys are never displayed.':
     'キーは書き込み専用です。連携先の読み取り専用キーを入力して設定または置換します。保存されたキーは表示されません。',
-  'Key for {partner}': '{partner}のキー',
   'Replace key': 'キーを置換',
   'Set key': 'キーを設定',
   'Edit partner': '連携先を編集',
