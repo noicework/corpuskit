@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import {
   contrastRatio,
+  deepenForContrast,
   DEFAULT_PALETTES,
   type DensityId,
   fieldBorder,
@@ -288,8 +289,10 @@ const DARK_WASH_STRONG_SHARE = 0.3
  * and brand/accent inks lightened to AA on the dark surface. Brand ink is
  * also checked on both washes, since Explore's tiles set it on them: a bright
  * accent makes a wash light enough that a brand ink checked against the
- * surface alone fell under AA there. Accent ink is drawn on the surface only
- * (on a wash the accent is a border), so it keeps the surface check.
+ * surface alone fell under AA there. Accent ink and the focus ring are checked
+ * on every ground they are drawn on - the surface, the app ground, the grey
+ * panels and the selected wash - since a lift measured on the surface alone
+ * left links at 3.9:1 on the wash and rings at 2.8:1 on the grey panels.
  */
 function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
   const surface = DARK_GREY_SUITE['--rp-surface']!
@@ -298,13 +301,19 @@ function viewerDarkVars(roles: Record<string, string>): Record<string, string> {
     ? [mixHex(accent, surface, DARK_WASH_SHARE), mixHex(accent, surface, DARK_WASH_STRONG_SHARE)]
     : []
   const inkGrounds = [surface, ...washes]
+  const accentGrounds = [
+    surface,
+    DARK_GREY_SUITE['--rp-paper']!,
+    DARK_GREY_SUITE['--rp-surface-2']!,
+    ...washes.slice(0, 1),
+  ]
   return {
     ...DARK_GREY_SUITE,
     ...DARK_STATUS_VARS,
     '--rp-glass-bg': `color-mix(in srgb, ${surface} 92%, transparent)`,
     '--rp-brand-fg': ensureContrastOn(roles['--rp-brand-fg'] ?? accent, inkGrounds, 4.5),
-    '--rp-accent-fg': ensureContrast(roles['--rp-accent-fg'] ?? accent, surface, 4.5),
-    '--rp-focus': ensureContrast(roles['--rp-focus'] ?? accent, surface, 3),
+    '--rp-accent-fg': ensureContrastOn(roles['--rp-accent-fg'] ?? accent, accentGrounds, 4.5),
+    '--rp-focus': ensureContrastOn(roles['--rp-focus'] ?? accent, accentGrounds, 3),
     '--rp-wash': `color-mix(in srgb, ${accent} ${DARK_WASH_SHARE * 100}%, ${surface})`,
     '--rp-wash-strong': `color-mix(in srgb, ${accent} ${
       DARK_WASH_STRONG_SHARE * 100
@@ -328,6 +337,39 @@ export function secondaryInk(foreground: string, grounds: readonly string[]): st
     if (hexGrounds.every((ground) => contrastRatio(candidate, ground) >= 4.5)) return candidate
   }
   return textOn(hexGrounds, 4.5)
+}
+
+/**
+ * The accent where it has to be seen, not only enjoyed (WCAG 1.4.11), measured on the actual
+ * grounds after the scheme swap:
+ *
+ * - `--rp-accent-line`: the accent as a state or emphasis mark on the page - an on switch's edge,
+ *   a relevance bar, a quote rule, a "new results" dot - at 3:1 on the surface, the app ground
+ *   and the grey panels. The accent itself when it already reads, else stepped toward the ink.
+ * - `--rp-accent-on-primary`: the current-page underline on the brand ground, at 3:1 there.
+ *
+ * Colours this cannot measure (a seed may use any CSS colour) keep the accent.
+ */
+export function accentMarkVars(
+  roles: Record<string, string>,
+  grounds: readonly string[],
+): Record<string, string> {
+  const accent = normaliseHex(roles['--rp-accent'] ?? '')
+  const primary = normaliseHex(roles['--rp-primary'] ?? '')
+  const onPrimary = normaliseHex(roles['--rp-on-primary'] ?? '')
+  const ink = normaliseHex(roles['--rp-ink'] ?? '') ?? HOUSE_LIGHT_SUITE.ink
+  const measured = grounds.map(normaliseHex)
+  const vars: Record<string, string> = {
+    '--rp-accent-line': roles['--rp-accent']!,
+    '--rp-accent-on-primary': roles['--rp-accent']!,
+  }
+  if (accent && measured.every((ground) => ground !== null)) {
+    vars['--rp-accent-line'] = deepenForContrast(accent, measured as string[], 3, ink)
+  }
+  if (accent && primary && onPrimary) {
+    vars['--rp-accent-on-primary'] = deepenForContrast(accent, [primary], 3, onPrimary)
+  }
+  return vars
 }
 
 /** Derived roles run after the scheme swap, so they measure the actual grounds. */
@@ -364,7 +406,9 @@ function foundationRoleVars(
       : '#27364b'
   }
   const palette = resolvePalette(branding)
+  const surface2 = roles['--rp-surface-2'] ?? HOUSE_LIGHT_SUITE.surface2
   return {
+    ...accentMarkVars(roles, [surface, paper, surface2]),
     '--rp-on-primary-2': secondaryInk(roles['--rp-on-primary']!, [primary]),
     '--rp-on-hero-2': secondaryInk(roles['--rp-on-hero']!, [
       roles['--rp-hero-from']!,

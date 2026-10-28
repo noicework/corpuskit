@@ -11,6 +11,7 @@ import {
   type TenantConfig,
 } from '@research-portal/core'
 import {
+  accentMarkVars,
   customFontCss,
   DENSITY_DIALS,
   densityVars,
@@ -199,8 +200,21 @@ describe('paletteVars', () => {
     const colours = { ...DEFAULT_PORTAL_COLOURS }
     const vars = paletteVars(branding({ colours }), 'dark')
     const surface = DARK_GREY_SUITE['--rp-surface']!
-    expect(vars['--rp-accent-fg']).toBe(ensureContrast(colours.accent, surface, 4.5))
-    expect(vars['--rp-focus']).toBe(ensureContrast(colours.accent, surface, 3))
+    // Links and rings are drawn on the grey panels and the selected wash as well as the surface.
+    // Lifted against the surface alone, the default accent was 4.41:1 on the grey panel and
+    // 3.86:1 on the wash, so the lift goes on until every one of them reads.
+    const accentGrounds = [
+      surface,
+      DARK_GREY_SUITE['--rp-paper']!,
+      DARK_GREY_SUITE['--rp-surface-2']!,
+      mixHex(colours.accent, surface, 0.18),
+    ]
+    expect(contrastRatio(ensureContrast(colours.accent, surface, 4.5), accentGrounds[3]!))
+      .toBeLessThan(4.5)
+    for (const ground of accentGrounds) {
+      expect(contrastRatio(vars['--rp-accent-fg']!, ground), ground).toBeGreaterThanOrEqual(4.5)
+      expect(contrastRatio(vars['--rp-focus']!, ground), ground).toBeGreaterThanOrEqual(3)
+    }
     // The brand ink also has to read on the washes Explore's tiles use, so it
     // is lifted past the surface-only value when that falls short there.
     const grounds = [
@@ -616,6 +630,7 @@ describe('viewer dark scheme', () => {
     for (const ground of [surface, mixHex(accent, surface, 0.18), mixHex(accent, surface, 0.3)]) {
       expect(contrastRatio(vars['--rp-brand-fg']!, ground), ground).toBeGreaterThanOrEqual(4.5)
     }
+    // A bright accent already reads on every dark ground, so its ink is not lifted further.
     expect(vars['--rp-accent-fg']).toBe(ensureContrast(accent, surface, 4.5))
     expect(vars['--rp-wash']).toBe(`color-mix(in srgb, ${accent} 18%, ${surface})`)
     expect(vars['--rp-wash-strong']).toBe(`color-mix(in srgb, ${accent} 30%, ${surface})`)
@@ -636,6 +651,124 @@ describe('viewer dark scheme', () => {
     const observatory = branding({ paletteId: 'observatory' })
     expect(paletteVars(observatory, 'dark')).toEqual(paletteVars(observatory))
     expect(paletteMode(observatory, 'light')).toBe('dark')
+  })
+})
+
+describe('accent marks', () => {
+  // AgriFutures Australia's portal (agrifutures.corpuskit.cloud): a near-black brand ground, the
+  // brand green as the accent and the hero, which is about 2.8:1 on white.
+  const agrifutures = {
+    primary: '#1C1C1C',
+    accent: '#00B14E',
+    heroFrom: '#00B14E',
+    heroTo: '#7FD8A6',
+  }
+  const LIGHT_GROUNDS = [
+    HOUSE_LIGHT_SUITE.surface,
+    HOUSE_LIGHT_SUITE.paper,
+    HOUSE_LIGHT_SUITE.surface2,
+  ]
+
+  it('keeps a mid-tone brand accent and gives its state marks and rings 3:1 on every ground', () => {
+    const vars = paletteVars(branding({ colours: agrifutures, paletteId: 'default' }))
+    // The stored brand colours are what the nav underline, the fills and the hero still use.
+    expect(vars['--rp-accent']).toBe('#00b14e')
+    expect(vars['--rp-hero-from']).toBe('#00b14e')
+    expect(contrastRatio('#00b14e', '#ffffff')).toBeLessThan(3)
+    // A state mark on the page is the green deepened only as far as 3:1 needs.
+    const line = vars['--rp-accent-line']!
+    expect(line).not.toBe('#00b14e')
+    for (const ground of LIGHT_GROUNDS) {
+      expect(contrastRatio(line, ground), ground).toBeGreaterThanOrEqual(3)
+    }
+    expect(contrastRatio(line, '#ffffff')).toBeLessThan(4.5)
+    // The ring reads on the grey panels and the selected wash too, not only on white.
+    for (const ground of [...LIGHT_GROUNDS, vars['--rp-wash']!]) {
+      expect(contrastRatio(vars['--rp-focus']!, ground), ground).toBeGreaterThanOrEqual(3)
+    }
+    // The green reads on the near-black band as it is.
+    expect(vars['--rp-accent-on-primary']).toBe('#00b14e')
+  })
+
+  it('leaves an accent that already reads alone', () => {
+    const vars = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
+    expect(vars['--rp-accent-line']).toBe(DEFAULT_PORTAL_COLOURS.accent)
+    expect(vars['--rp-accent-on-primary']).toBe(DEFAULT_PORTAL_COLOURS.accent)
+    for (const id of Object.keys(DEFAULT_PALETTES) as (keyof typeof DEFAULT_PALETTES)[]) {
+      const palette = DEFAULT_PALETTES[id].palette
+      const library = paletteVars(branding({ paletteId: id }))
+      expect(library['--rp-accent-on-primary'], id).toBe(palette.accent)
+    }
+  })
+
+  it('lifts the current-page underline where a dark scheme darkens the brand ground', () => {
+    // The CorpusKit palette's nav band becomes the dark surface in the dark scheme, where its
+    // blue accent underline was 2.56:1.
+    const vars = paletteVars(branding({ paletteId: 'corpuskit' }), 'dark')
+    const accent = DEFAULT_PALETTES.corpuskit.palette.accent
+    expect(contrastRatio(accent, vars['--rp-primary']!)).toBeLessThan(3)
+    expect(contrastRatio(vars['--rp-accent-on-primary']!, vars['--rp-primary']!))
+      .toBeGreaterThanOrEqual(3)
+    for (const ground of ['--rp-surface', '--rp-paper', '--rp-surface-2']) {
+      expect(contrastRatio(vars['--rp-accent-line']!, vars[ground]!), ground)
+        .toBeGreaterThanOrEqual(3)
+      expect(contrastRatio(vars['--rp-focus']!, vars[ground]!), ground).toBeGreaterThanOrEqual(3)
+      expect(contrastRatio(vars['--rp-accent-fg']!, vars[ground]!), ground)
+        .toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('gives every accent its marks, rings and links at their minimum in either scheme', () => {
+    const channel = [0, 64, 128, 192, 255]
+    for (const r of channel) {
+      for (const g of channel) {
+        for (const b of channel) {
+          const accent = `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`
+          const colours = { ...agrifutures, accent, heroFrom: accent }
+          for (const scheme of ['light', 'dark'] as const) {
+            const vars = paletteVars(branding({ colours, paletteId: 'default' }), scheme)
+            const label = `${accent} ${scheme}`
+            const grounds = scheme === 'light'
+              ? LIGHT_GROUNDS
+              : ['--rp-surface', '--rp-paper', '--rp-surface-2'].map((t) => vars[t]!)
+            for (const ground of grounds) {
+              expect(contrastRatio(vars['--rp-accent-line']!, ground), label)
+                .toBeGreaterThanOrEqual(3)
+              expect(contrastRatio(vars['--rp-focus']!, ground), label).toBeGreaterThanOrEqual(3)
+              expect(contrastRatio(vars['--rp-accent-fg']!, ground), label)
+                .toBeGreaterThanOrEqual(4.5)
+            }
+            expect(contrastRatio(vars['--rp-accent-on-primary']!, vars['--rp-primary']!), label)
+              .toBeGreaterThanOrEqual(3)
+          }
+        }
+      }
+    }
+  })
+
+  it('uses the accent as it is when it cannot measure the colours', () => {
+    expect(accentMarkVars({ '--rp-accent': 'rebeccapurple', '--rp-primary': 'navy' }, ['#ffffff']))
+      .toEqual({
+        '--rp-accent-line': 'rebeccapurple',
+        '--rp-accent-on-primary': 'rebeccapurple',
+      })
+  })
+
+  it('draws the hero field, the nav underlines and the on switch with the measured marks', async () => {
+    // Whatever the hero is painted with, one band of the two-tone ring reads on it.
+    expect(rule('.rp-field.rp-hero-field:focus-within')).toContain(
+      'box-shadow: var(--rp-ring-inverse);',
+    )
+    expect(rule('.rp-navlink-active::after')).toContain(
+      'background-color: var(--rp-accent-on-primary);',
+    )
+    const chrome = await Deno.readTextFile(new URL('../styles/chrome.css', import.meta.url))
+    expect(rule(".rp-chrome-nav-row[aria-current='page']::after", chrome)).toContain(
+      'background: var(--rp-accent-on-primary);',
+    )
+    expect(rule(".rp-switch[data-on='true']")).toContain('border-color: var(--rp-accent-line);')
+    const explore = await Deno.readTextFile(new URL('../pages/ExplorePage.tsx', import.meta.url))
+    expect(explore).toMatch(/'rp-field rp-hero-field /)
   })
 })
 

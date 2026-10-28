@@ -132,16 +132,35 @@ describe('a portal on its own colours', () => {
           const accent = `#${[r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('')}`
           const palette = paletteFromColours({ ...DEFAULT_PORTAL_COLOURS, accent })!
           const label = `accent ${accent}`
-          for (const ground of [palette.surface, palette.accentWash]) {
+          for (const ground of [palette.surface, palette.surface2, palette.accentWash]) {
             expect(contrastRatio(palette.accentForeground, ground), label)
               .toBeGreaterThanOrEqual(4.5)
+            expect(contrastRatio(palette.focusRing, ground), label).toBeGreaterThanOrEqual(3)
           }
-          expect(contrastRatio(palette.focusRing, palette.surface), label)
-            .toBeGreaterThanOrEqual(3)
           expect(contrastRatio(palette.onAccent, accent), label).toBeGreaterThanOrEqual(4.5)
         }
       }
     }
+  })
+
+  it('rings a mid-tone accent at 3:1 on the grey ground and the wash, not only on white', () => {
+    // AgriFutures Australia's brand green: a ring deepened to 3:1 on white alone (#01a94b) was
+    // 2.96:1 on the grey ground and 2.74:1 on the wash.
+    const palette = paletteFromColours({
+      primary: '#1C1C1C',
+      accent: '#00B14E',
+      heroFrom: '#00B14E',
+      heroTo: '#7FD8A6',
+    })!
+    expect(palette.accent).toBe('#00b14e')
+    expect(contrastRatio('#01a94b', palette.surface)).toBeGreaterThanOrEqual(3)
+    expect(contrastRatio('#01a94b', palette.surface2)).toBeLessThan(3)
+    for (const ground of [palette.surface, palette.surface2, palette.accentWash]) {
+      expect(contrastRatio(palette.focusRing, ground), ground).toBeGreaterThanOrEqual(3)
+    }
+    // Deepened only as far as it must: still the brand green, not the ink.
+    expect(contrastRatio(palette.focusRing, palette.surface)).toBeLessThan(4.5)
+    expect(validatePalette(palette)).toEqual([])
   })
 
   it('uses a colour it cannot measure as it is', () => {

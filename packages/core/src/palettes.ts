@@ -396,7 +396,30 @@ export const PALETTE_CONTRACT: PaletteContractPair[] = [
     dark: 4.5,
     use: 'chip labels on wash',
   },
+  {
+    foreground: 'accentForeground',
+    background: 'surface2',
+    light: 4.5,
+    dark: 4.5,
+    use: 'links on the grey ground',
+  },
   { foreground: 'focusRing', background: 'surface', light: 3, dark: 3, use: 'focus indicator' },
+  // A ring sits on whatever holds the control: the grey panels (the Ask sidebar, the library
+  // toolbar) and selected washes as well as the surface.
+  {
+    foreground: 'focusRing',
+    background: 'surface2',
+    light: 3,
+    dark: 3,
+    use: 'focus indicator on the grey ground',
+  },
+  {
+    foreground: 'focusRing',
+    background: 'accentWash',
+    light: 3,
+    dark: 3,
+    use: 'focus indicator on wash',
+  },
   {
     foreground: 'onHero',
     background: 'heroFrom',
@@ -543,7 +566,8 @@ export function textOn(
  * (the nav band, the accent, the hero); what is drawn on top of them is chosen for contrast.
  *
  * Whatever the colours, accent and brand text are deepened until they read at 4.5:1 on the
- * surface and on the washes, the focus ring until 3:1, and the text on the solid accent reads at
+ * surface, the grey ground and the washes, the focus ring until 3:1 on each ground a ring can sit
+ * on (the surface, the grey ground and the wash), and the text on the solid accent reads at
  * 4.5:1 (white or ink, whichever reads better, black when neither does). The text on the brand
  * ground and the hero is chosen the same way, but the 7:1 the contract asks of those, and the
  * 3:1 nav underline (the accent against the brand ground), depend on the colours themselves: a
@@ -559,6 +583,7 @@ export function paletteFromColours(colours: PortalColours): Palette | null {
   const suite = HOUSE_LIGHT_SUITE
   const accentWash = mixHex(accent, suite.surface, WASH_SHARE)
   const accentWashStrong = mixHex(accent, suite.surface, WASH_STRONG_SHARE)
+  const accentGrounds = [suite.surface, suite.surface2, accentWash]
   return {
     mode: 'light',
     brandSurface: primary,
@@ -566,8 +591,10 @@ export function paletteFromColours(colours: PortalColours): Palette | null {
     brandForeground: deepenForContrast(primary, [suite.surface, accentWashStrong], 4.5),
     accent,
     onAccent: textOn([accent], 4.5),
-    accentForeground: deepenForContrast(accent, [suite.surface, accentWash], 4.5),
-    focusRing: deepenForContrast(accent, [suite.surface], 3),
+    accentForeground: deepenForContrast(accent, accentGrounds, 4.5),
+    // A mid-tone accent that just clears 3:1 on white (AgriFutures' #00b14e deepened to 3.1:1)
+    // fell to 2.96:1 on the grey ground and 2.74:1 on the wash.
+    focusRing: deepenForContrast(accent, accentGrounds, 3),
     accentWash,
     accentWashStrong,
     heroFrom,
