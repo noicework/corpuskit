@@ -329,8 +329,10 @@ export function LibraryBrowser(
   const view = viewProp ?? viewState
   const setView = onViewChange ?? setViewState
 
-  const [queryDraft, setQueryDraft] = useState('')
-  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [searchParams] = useSearchParams()
+  // Entity links from the graph open the library with the same search term.
+  const [queryDraft, setQueryDraft] = useState(() => searchParams.get('q') ?? '')
+  const [debouncedQuery, setDebouncedQuery] = useState(() => searchParams.get('q')?.trim() ?? '')
   const [sortState, setSortState] = useState<SortValue>(DEFAULT_SORT)
   const sort = sortProp ?? sortState
   const setSort = onSortChange ?? setSortState
@@ -338,7 +340,6 @@ export function LibraryBrowser(
   const [densityState, setDensityState] = useState(4)
   const density = densityProp ?? densityState
   const setDensity = onDensityChange ?? setDensityState
-  const [searchParams] = useSearchParams()
   const [selectedTopics, setSelectedTopics] = useState<string[]>(() =>
     facetsFromUrl(searchParams, 'topic', 'topics')
   )

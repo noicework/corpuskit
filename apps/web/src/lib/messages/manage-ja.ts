@@ -397,6 +397,19 @@ export const MANAGE_JA: Readonly<Record<string, string>> = {
   'Refresh key list': 'キーの一覧を更新',
   'Refresh metrics': '指標を更新',
   'Refresh recent additions': '最近追加された資料を更新',
+  'Update and re-index': '更新して再インデックス',
+  'Update and re-index “{title}”': '「{title}」を更新して再インデックス',
+  'Updated content': '更新後の内容',
+  'Replace text and re-index': '本文を置き換えて再インデックス',
+  'Cancel update': '更新をキャンセル',
+  'Updating and requesting indexing...': '更新してインデックス処理をリクエストしています...',
+  'Could not update the document.': '資料を更新できませんでした。',
+  'Could not update the document. Check recent additions before retrying.':
+    '資料を更新できませんでした。再試行する前に最近追加された資料を確認してください。',
+  'Updated “{title}” and requested indexing. Check its processing status below.':
+    '「{title}」を更新してインデックス処理をリクエストしました。以下で処理状況を確認してください。',
+  'Paste the full replacement text (at least 80 words). A new text document is indexed and the original is removed. The title, source address and draft status are kept. Saved citations still refer to the original document.':
+    '置き換える本文全体（80語以上）を貼り付けてください。新しいテキスト資料がインデックスに登録され、元の資料は削除されます。タイトル、出典のアドレス、下書きの状態は維持されます。保存済みの引用は引き続き元の資料を参照します。',
   'Refresh routing activity': '振り分けの記録を更新',
   'Refresh search configurations': '検索設定を更新',
   'Refresh sources': 'ソースを更新',

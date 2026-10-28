@@ -6,6 +6,7 @@
 @import './styles/manage.css';
 @import './styles/admin.css';
 @import './styles/pages.css';
+@import './styles/search-suggest.css';
 
 /* ---------------------------------------------------------------------------
  * Token layer.

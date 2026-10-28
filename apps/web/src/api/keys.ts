@@ -30,6 +30,8 @@ const summarySchema = z.object({
   effectiveRole: PortalRoleSchema.nullable(),
   legacy: z.boolean(),
   upgradeable: z.boolean(),
+  /** Other portals the key also reaches at the estate MCP endpoint. */
+  estate: z.array(z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)).min(1).max(19).optional(),
 }).strict().refine((row) =>
   (row.status === 'active' ? row.effectiveRole !== null : row.effectiveRole === null) &&
   (row.inactiveReason === 'creator_claims_expired'

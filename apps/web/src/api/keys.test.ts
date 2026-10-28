@@ -77,6 +77,13 @@ Deno.test('key transport requires current signed scope and sanitised exact summa
     globalThis.fetch = () =>
       Promise.resolve(Response.json([{ ...row, id: 'a'.repeat(160), prefix: 'p'.repeat(80) }]))
     expect((await listKeys('marine', options))[0]!.id.length).toBe(160)
+    // A key that also reaches other portals at the estate endpoint still lists.
+    globalThis.fetch = () => Promise.resolve(Response.json([{ ...row, estate: ['grains'] }]))
+    expect((await listKeys('marine', options))[0]!.estate).toEqual(['grains'])
+    for (const estate of [[], ['../grains']]) {
+      globalThis.fetch = () => Promise.resolve(Response.json([{ ...row, estate }]))
+      await expect(listKeys('marine', options)).rejects.toThrow(KeyError)
+    }
     controller.invalidate('changed')
     await expect(listKeys('marine', options)).rejects.toThrow('Access changed')
   } finally {
