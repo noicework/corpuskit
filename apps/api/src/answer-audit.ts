@@ -15,6 +15,7 @@
  */
 export function normaliseFigures(text: string): string {
   return normaliseGlyphs(text)
+    .replace(/(\d+(?:\.\d+)?)\s*(?:per\s+cent|percent)\b/gi, '$1%')
     .replace(/([\d%])\s*[‐‑‒–—−]\s*(\d)/g, '$1-$2')
     .replace(/(\d(?:\.\d+)?%?)\s+(?:to|through)\s+(\d)/g, '$1-$2')
     .replace(/(?<![\d.])\.(\d+)/g, '0.$1')

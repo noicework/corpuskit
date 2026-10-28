@@ -191,6 +191,51 @@ describe('literal Japanese citation support', () => {
 })
 
 describe('bindSentences', () => {
+  it('exempts collection labels and their words while still checking other names and figures', () => {
+    const allowedTerms = [
+      'Knowledge Hub research portal',
+      'Fisheries research (demonstration)',
+      'Grains RDC (demonstration)',
+    ]
+    expect(namedEntities('The Knowledge Hub cites Fisheries, Grains and RDC.', [], allowedTerms))
+      .toEqual([])
+    const supported =
+      'Pest monitoring covered 65 per cent of trial farms and included 67 surveys. ' +
+      'The sector contributed 12.9 billion dollars in economic value.'
+    const bind = (text: string) =>
+      bindSentences({
+        text,
+        citations: [{ index: 1, resourceId: 'survey', title: 'Monitoring survey' }],
+        texts: new Map([[1, supported]]),
+        lexicon: ['Knowledge', 'Fisheries', 'Grains', 'RDC', 'Amber blight'],
+        allowedTerms,
+      })
+    const result = bind(
+      'According to Knowledge Hub research portal, pest monitoring covered 65% of trial farms. [1] ' +
+        'The Fisheries research (demonstration) collection included 67 surveys. [1] ' +
+        'Grains RDC (demonstration) reports that the sector contributed $12.9 billion in economic value. [1]',
+    )
+    expect(result.sentences.map((s) => s.bound)).toEqual([[1], [1], [1]])
+    expect(result.dropped).toBe(0)
+    expect(
+      bind('According to Knowledge Hub, pest monitoring covered 66% of trial farms. [1]').citations,
+    )
+      .toEqual([])
+    expect(
+      bind('According to Fisheries, Amber blight monitoring covered 65% of trial farms. [1]')
+        .citations,
+    )
+      .toEqual([])
+    expect(
+      bind('According to Fisheries, pest monitoring covered 65% of trial farms. [1]').citations,
+    )
+      .toHaveLength(1)
+    expect(
+      bind('Grains RDC reports that the sector contributed $12.8 billion in economic value. [1]')
+        .citations,
+    ).toEqual([])
+  })
+
   it('binds each sentence to the passage that carries it and drops the paragraph spray', () => {
     const text = 'Lamotrigine is contraindicated in Dravet syndrome. ' +
       'Vigabatrin was recorded as a concomitant medication in 14 patients. ' +

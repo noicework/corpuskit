@@ -28,6 +28,7 @@ import {
 import { composeDeadline, ComposeTimedOut } from './compose-deadline.ts'
 import { bindSentences, renderBound, sentenceFeatures } from './citation-binding.ts'
 import { agentRecordVerification } from './agent-record-verification.ts'
+import { closestComposeSources } from './agent-compose-quality.ts'
 
 /** How long one collection's search may take before it is reported as not answering. */
 export const SOURCE_TIMEOUT_MS = 20_000
@@ -378,6 +379,7 @@ export async function* composeAcross(
     })),
     texts: new Map(gathered.map(({ chunk }, index) => [index + 1, chunk.text])),
     lexicon,
+    allowedTerms: gathered.map(({ source }) => source.label),
   })
   const removed = new Set(
     bound.sentences.flatMap((sentence, index) =>
@@ -403,11 +405,12 @@ export async function* composeAcross(
     ...(notes.length > 0 ? { reason: `${notes.join('; ')}.` } : {}),
   }
   if (bound.citations.length === 0 || !answer.trim()) {
-    if (!streamed) yield { type: 'delta', text: NO_SUPPORTED_ANSWER }
+    const decline = closestComposeSources(NO_SUPPORTED_ANSWER, gathered)
+    if (!streamed) yield { type: 'delta', text: decline }
     yield {
       type: 'done',
       elapsedMs: Math.max(0, Math.round(now() - started)),
-      text: NO_SUPPORTED_ANSWER,
+      text: decline,
     }
     return
   }

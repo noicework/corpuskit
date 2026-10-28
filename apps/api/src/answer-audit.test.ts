@@ -45,6 +45,24 @@ const numbersMissing = (answer: string, citedTexts: readonly string[]): string[]
 }
 
 describe('answer audit', () => {
+  it('matches percentage spellings without accepting a bare count as a percentage', () => {
+    expect(normaliseFigures('65 per cent and 65 percent')).toBe('65% and 65%')
+    expect(extractNumbers('Monitoring covered 65 per cent of farms.')).toEqual(['65%'])
+    for (const claim of ['65%', '65 per cent', '65 percent']) {
+      for (const source of ['65%', '65 per cent', '65 percent']) {
+        expect(
+          numbersMissing(`Monitoring covered ${claim} of farms.`, [
+            `Monitoring covered ${source} of farms.`,
+          ]),
+        ).toEqual([])
+      }
+      expect(
+        numbersMissing(`Monitoring covered ${claim} of farms.`, ['Monitoring covered 65 farms.']),
+      )
+        .toEqual(['65%'])
+    }
+  })
+
   it('extracts figures but not markers, list numbers or years', () => {
     const answer =
       '1. At 1,400 mg per day or less the rate was 6.42% [1][2]; above it 33.9% (2024). HR 0.54.'
