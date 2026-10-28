@@ -11,6 +11,7 @@
 // checked against an allowlist before anything is sent.
 // ---------------------------------------------------------------------------
 import { COMPOSE_PASSAGE_CHARS, COMPOSE_PASSAGES_PER_SOURCE } from '../../compose.ts'
+import { peerScore, peerTitle } from './peer-passages.ts'
 import {
   FEDERATION_EXCLUDE_LABEL,
   FEDERATION_ZONE,
@@ -47,7 +48,9 @@ const PROTOCOL_VERSION = '2025-06-18'
 /** Passages kept from one peer. */
 export const PEER_PASSAGES = COMPOSE_PASSAGES_PER_SOURCE
 
-type PeerAddress = Pick<FederationPeer, 'kind' | 'zone' | 'kbId'>
+type PeerAddress =
+  & Pick<FederationPeer, 'kind' | 'zone' | 'kbId'>
+  & Partial<Pick<FederationPeer, 'linkOrigins'>>
 
 /** The peer's endpoint for `path`, or a refusal for any address or path not allowed. */
 export function peerEndpoint(peer: PeerAddress, path: string): URL {
@@ -168,7 +171,8 @@ async function searchPeerKb(
           isRecord(field) && excludedBy(field.classifications)
         ))
     if (excluded) continue
-    const origin = isRecord(raw.origin) ? httpsUrl(raw.origin.url) : undefined
+    const origin = peer.linkOrigins && isRecord(raw.origin) ? httpsUrl(raw.origin.url) : undefined
+    const meta = isRecord(raw._meta) ? raw._meta : {}
     const fields = isRecord(raw.fields) ? Object.values(raw.fields) : []
     for (const field of fields) {
       const paragraphs = isRecord(field) && isRecord(field.paragraphs)
@@ -176,12 +180,19 @@ async function searchPeerKb(
         : []
       for (const paragraph of paragraphs) {
         if (!isRecord(paragraph) || !text(paragraph.text)) continue
+        const score = peerScore(paragraph.score)
+        if (score === undefined) continue
         passages.push({
           resourceId,
-          title: text(raw.title) || 'Untitled document',
+          title: peerTitle(
+            text(raw.title),
+            text(meta.resource_title),
+            text(paragraph.text),
+            peer.linkOrigins,
+          ),
           text: text(paragraph.text).slice(0, COMPOSE_PASSAGE_CHARS),
           ...(origin ? { originUrl: origin } : {}),
-          score: typeof paragraph.score === 'number' ? paragraph.score : 0,
+          score,
         })
       }
     }
@@ -323,18 +334,43 @@ async function searchPeerMcp(
   if (!isRecord(result) || result.isError === true || !Array.isArray(result.content)) {
     throw new PeerError('error', 'The peer search failed')
   }
-  const passages: PeerPassage[] = []
+  const passages: (PeerPassage & { score: number })[] = []
   for (const item of result.content) {
-    if (!isRecord(item) || item.type !== 'text' || !text(item.text)) continue
+    if (!isRecord(item)) continue
+    const resource = isRecord(item.resource) ? item.resource : {}
+    const body = item.type === 'text'
+      ? text(item.text)
+      : item.type === 'resource'
+      ? text(resource.text)
+      : ''
+    if (!body) continue
     const meta = isRecord(item._meta) ? item._meta : {}
+    // A generated summary is also a text content item. Only retrieved paragraphs or embedded
+    // resource references are evidence; a title alone does not establish passage provenance.
+    const reference = text(meta.parent) || text(meta.paragraph_id) || text(resource.uri)
+    if (!reference) continue
     const labels = Array.isArray(meta.resource_labels) ? meta.resource_labels : []
     if (labels.some((entry) => isRecord(entry) && excludedBy(entry.classifications))) continue
+    const score = peerScore(meta.score ?? item.score)
+    if (score === undefined) continue
+    const origin = peer.linkOrigins
+      ? httpsUrl(meta.url) ?? (isRecord(meta.origin) ? httpsUrl(meta.origin.url) : undefined) ??
+        httpsUrl(resource.uri)
+      : undefined
     passages.push({
-      resourceId: text(meta.parent) || text(meta.paragraph_id) || `passage-${passages.length}`,
-      title: text(meta.resource_title) || 'Untitled document',
-      text: text(item.text).slice(0, COMPOSE_PASSAGE_CHARS),
+      // A resource URI may name the origin. Keep it out of identifiers even with links off.
+      resourceId: /^https?:\/\//i.test(reference) ? `passage-${passages.length}` : reference,
+      title: peerTitle(
+        text(item.title) || text(resource.title),
+        text(meta.resource_title),
+        body,
+        peer.linkOrigins,
+      ),
+      text: body.slice(0, COMPOSE_PASSAGE_CHARS),
+      ...(origin ? { originUrl: origin } : {}),
+      score,
     })
-    if (passages.length === PEER_PASSAGES) break
   }
-  return passages
+  return passages.sort((a, b) => b.score - a.score).slice(0, PEER_PASSAGES)
+    .map(({ score: _score, ...passage }) => passage)
 }
