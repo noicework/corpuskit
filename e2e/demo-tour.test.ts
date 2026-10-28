@@ -28,19 +28,29 @@ async function settle(page: Page, probe: () => boolean, what = 'the page'): Prom
   throw new Error(`${what} did not settle in time`)
 }
 
-const TRIGGER = '[data-demo-tour-entry] button'
+const HELP_TRIGGER = 'button[id^="help-trigger"]'
 
 const dialogOpen = () =>
   document.querySelector('dialog[data-demo-tour]')?.hasAttribute('open') === true
 const dialogGone = () => document.querySelector('dialog[data-demo-tour]') === null
 
-async function openFromBand(page: Page): Promise<void> {
-  await page.waitForSelector(TRIGGER)
+/** The help menu's "Take the tour" row, which the tour must then open on the home page. */
+async function openFromHelpMenu(page: Page): Promise<void> {
+  await page.waitForSelector(HELP_TRIGGER)
   await page.evaluate((selector) => {
-    const trigger = document.querySelector<HTMLButtonElement>(selector)!
-    trigger.focus()
-    trigger.click()
-  }, { args: [TRIGGER] })
+    document.querySelector<HTMLButtonElement>(selector)!.click()
+  }, { args: [HELP_TRIGGER] })
+  await settle(
+    page,
+    () =>
+      Array.from(document.querySelectorAll<HTMLAnchorElement>('[role="menuitem"]'))
+        .some((item) => item.textContent?.trim() === 'Take the tour'),
+    'the help menu',
+  )
+  await page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLAnchorElement>('[role="menuitem"]'))
+      .find((item) => item.textContent?.trim() === 'Take the tour')!.click()
+  )
   await settle(page, dialogOpen, 'the dialog')
 }
 
@@ -48,8 +58,24 @@ describe('the guided tour', () => {
   it('is offered only where the portal opts in, and opens by itself only on auto, once', async () => {
     const page = await browser.newPage(`${server.url}/t/grains`)
     try {
-      await page.waitForSelector(TRIGGER)
+      await page.waitForSelector(HELP_TRIGGER)
       expect(await page.evaluate(dialogGone)).toBe(true)
+      // The Help menu offers it on a portal that opts in, from any page.
+      await page.goto(`${server.url}/t/marine/library`)
+      await page.waitForSelector(HELP_TRIGGER)
+      await page.evaluate(
+        (selector) => document.querySelector<HTMLButtonElement>(selector)!.click(),
+        { args: [HELP_TRIGGER] },
+      )
+      await settle(page, () => document.querySelector('[role="menuitem"]') !== null, 'the menu')
+      expect(
+        await page.evaluate(() =>
+          Array.from(document.querySelectorAll('[role="menuitem"]')).map((item) =>
+            item.textContent?.trim()
+          )
+        ),
+      ).toEqual(['Help and documentation', 'How this works', 'Take the tour'])
+      await page.keyboard.press('Escape')
 
       // Auto: open on the first arrival at the home page, remembered once closed.
       await page.goto(`${server.url}/t/marine`)
@@ -57,7 +83,7 @@ describe('the guided tour', () => {
       await page.keyboard.press('Escape')
       await settle(page, dialogGone, 'closing')
       await page.reload()
-      await page.waitForSelector(TRIGGER)
+      await page.waitForSelector(HELP_TRIGGER)
       expect(await page.evaluate(dialogGone)).toBe(true)
       expect(await page.evaluate(() => localStorage.getItem('rp_demo_tour_done'))).toBe('1')
 
@@ -83,7 +109,7 @@ describe('the guided tour', () => {
   it('walks the scenes with focus held inside, announces each step, and gives focus back', async () => {
     const page = await browser.newPage(`${server.url}/t/grains`)
     try {
-      await openFromBand(page)
+      await openFromHelpMenu(page)
       const state = () =>
         page.evaluate(() => {
           const dialog = document.querySelector<HTMLDialogElement>('dialog[data-demo-tour]')!
@@ -100,13 +126,26 @@ describe('the guided tour', () => {
             ),
           }
         })
-      // The band already said what this is, so the tour opens on its first step.
+      // The welcome is the first slide, named for the portal; the steps count from the next one.
       let now = await state()
       expect(now.modal).toBe(true)
-      expect(now.heading).toBe('Find answers and sources')
+      expect(now.heading).toBe('Welcome to Dryland Cropping Research Portal')
       expect(now.focusedHeading).toBe(true)
-      expect(now.status).toBe('Step 1 of 4: Find answers and sources')
+      expect(now.status).toBe('Welcome to Dryland Cropping Research Portal')
       expect(now.stageHidden).toBe(true)
+      await page.keyboard.press('ArrowRight')
+      // Settled once the new heading has the focus, which follows its render by a tick.
+      await settle(
+        page,
+        () => {
+          const heading = document.querySelector('dialog[data-demo-tour] h2')
+          return heading?.textContent?.trim() === 'Find answers and sources' &&
+            document.activeElement === heading
+        },
+        'the first step',
+      )
+      now = await state()
+      expect(now.status).toBe('Step 1 of 4: Find answers and sources')
       expect(now.tryIt?.startsWith('/t/grains/ask?ask=')).toBe(true)
 
       // Tab stays inside the dialog, whichever way it goes.
@@ -129,9 +168,11 @@ describe('the guided tour', () => {
       await page.keyboard.press('ArrowRight')
       await settle(
         page,
-        () =>
-          document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Follow the evidence',
+        () => {
+          const heading = document.querySelector('dialog[data-demo-tour] h2')
+          return heading?.textContent?.trim() === 'Follow the evidence' &&
+            document.activeElement === heading
+        },
         'the second scene',
       )
       now = await state()
@@ -158,15 +199,12 @@ describe('the guided tour', () => {
         'the Graph scene',
       )
 
-      // Escape closes it and focus goes back to the control that opened it.
+      // Escape closes it and focus is back on the page, not lost to the document.
       await page.keyboard.press('Escape')
       await settle(page, dialogGone, 'closing')
       expect(
-        await page.evaluate(
-          (selector) => document.activeElement === document.querySelector(selector),
-          {
-            args: [TRIGGER],
-          },
+        await page.evaluate(() =>
+          document.activeElement !== null && document.activeElement !== document.body
         ),
       ).toBe(true)
     } finally {
@@ -178,7 +216,8 @@ describe('the guided tour', () => {
   it("'Try it' closes the tour and sends the question to Ask", async () => {
     const page = await browser.newPage(`${server.url}/t/grains`)
     try {
-      await openFromBand(page)
+      await openFromHelpMenu(page)
+      await page.keyboard.press('ArrowRight')
       await settle(
         page,
         () => document.querySelector('dialog[data-demo-tour] a[data-tour-action]') !== null,
@@ -212,7 +251,9 @@ describe('the guided tour', () => {
           await page.evaluate((next) => localStorage.setItem('rp-scheme', next), { args: [scheme] })
           await page.reload()
           await page.evaluate(() => document.documentElement.style.fontSize = '22px')
-          await openFromBand(page)
+          await page.goto(`${server.url}/t/grains?tour=1`)
+          await settle(page, dialogOpen, 'the dialog')
+          await page.keyboard.press('ArrowRight')
           await settle(
             page,
             () => document.querySelector('dialog[data-demo-tour] a[data-tour-action]') !== null,

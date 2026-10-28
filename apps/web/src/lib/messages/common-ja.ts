@@ -71,11 +71,11 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Archive, 1998 to 2004': 'アーカイブ（1998年から2004年）',
   // Manage > Behaviour: how the tour is offered.
   'Guided tour': 'ガイドツアー',
-  'Offers visitors a short guided tour from the home page, one feature per step, each with a button that opens it. With "Offered and opens on first visit", it opens by itself the first time a browser visits the home page, or on every visit if the browser blocks site storage. Unless the setting is Off, a home page link ending in ?tour=1 opens it.':
-    'ホームページから訪問者に短いガイドツアーを提供します。各ステップは一つの機能を示し、その機能を開くボタンがあります。「提供し、初回訪問時に開く」では、ブラウザが初めてホームページを開いたときに自動で開きます。サイトのストレージを拒否するブラウザでは毎回開きます。設定がオフでない限り、?tour=1 で終わるホームページへのリンクで開けます。',
+  'Puts "Take the tour" in the Help menu: a short guided tour of the portal, one feature per step, each with a button that opens it. With "Offered, and opens on first visit", it also opens by itself the first time a browser visits the home page, or on every visit if the browser blocks site storage. Unless the setting is Off, a home page link ending in ?tour=1 opens it.':
+    'ヘルプメニューに「ツアーを見る」を追加します。ポータルの短いガイドツアーで、各ステップは一つの機能を示し、その機能を開くボタンがあります。「提供し、初回訪問時に開く」では、ブラウザが初めてホームページを開いたときにも自動で開きます。サイトのストレージを拒否するブラウザでは毎回開きます。設定がオフでない限り、?tour=1 で終わるホームページへのリンクで開けます。',
   'Availability': '提供',
-  'Offered on the home page': 'ホームページで提供する',
-  'Offered and opens on first visit': '提供し、初回訪問時に開く',
+  'Offered from the Help menu': 'ヘルプメニューから提供する',
+  'Offered, and opens on first visit': '提供し、初回訪問時に開く',
   'In the configuration import, the operator sets which steps show and what they say.':
     '設定のインポートで、運用者が表示するステップとその文言を指定します。',
   'Save guided tour setting': 'ガイドツアーの設定を保存',

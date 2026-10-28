@@ -7,7 +7,7 @@ import type { ResolvedScene } from '../lib/demo-tour.ts'
 import { SceneIllustration, SceneList } from './DemoTourScenes.tsx'
 import { ExternalMark } from './LayoutLink.tsx'
 import { Button, IconButton } from './ui.tsx'
-import { ArrowLeft, ArrowRight, X } from './icons.tsx'
+import { ArrowLeft, ArrowRight, Compass, X } from './icons.tsx'
 
 /**
  * The guided tour: one dialog, a scene per step and a finish. Each scene puts its
@@ -24,18 +24,25 @@ import { ArrowLeft, ArrowRight, X } from './icons.tsx'
 
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-type Step = { kind: 'scene'; scene: ResolvedScene; index: number } | { kind: 'finish' }
+type Step = { kind: 'welcome' } | { kind: 'scene'; scene: ResolvedScene; index: number } | {
+  kind: 'finish'
+}
 
 export function DemoTourDialog({
   onClose,
   slug,
   productName,
+  heading,
+  intro,
   scenes,
   graphKinds,
 }: {
   onClose: () => void
   slug: string
   productName: string
+  /** The welcome's title and words. */
+  heading: string
+  intro: string
   scenes: ResolvedScene[]
   /** The Graph's kinds of thing, for its illustration's labels. */
   graphKinds: string[]
@@ -47,9 +54,10 @@ export function DemoTourDialog({
   const close = useRef(onClose)
   close.current = onClose
   const [at, setAt] = useState(0)
-  // The band on the home page has already said what this is, so the tour opens on its first
-  // step rather than on a welcome that says it again.
+  // The welcome is the first slide: it names the portal and its organisation, and its one
+  // button starts the steps.
   const steps: Step[] = [
+    { kind: 'welcome' },
     ...scenes.map((scene, index): Step => ({ kind: 'scene', scene, index })),
     { kind: 'finish' },
   ]
@@ -60,7 +68,11 @@ export function DemoTourDialog({
   // page's scroll, and on unmount close it and give focus back to the control that opened it.
   useEffect(() => {
     const dialog = dialogRef.current!
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // The opener, when there was one: a tour opened from a link lands with focus on the body.
+    const previous = document.activeElement instanceof HTMLElement &&
+        document.activeElement !== document.body
+      ? document.activeElement
+      : null
     const overflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     if (!dialog.open) dialog.showModal()
@@ -68,7 +80,13 @@ export function DemoTourDialog({
     return () => {
       if (dialog.open) dialog.close()
       document.body.style.overflow = overflow
-      if (previous?.isConnected && previous.getClientRects().length > 0) previous.focus()
+      // Back to the control that opened it; when that was a menu row that has since closed,
+      // back to the menu's own button, so focus never falls to the top of the document.
+      const target = previous?.isConnected && previous.getClientRects().length > 0
+        ? previous
+        : document.querySelector<HTMLElement>('[data-help-trigger]')
+      // After the browser's own focus restoration, which lands on the body when the opener is gone.
+      if (target) requestAnimationFrame(() => target.focus())
     }
   }, [])
 
@@ -112,7 +130,9 @@ export function DemoTourDialog({
     }
   }
 
-  const title = step.kind === 'finish'
+  const title = step.kind === 'welcome'
+    ? heading
+    : step.kind === 'finish'
     ? ui('Get started with {portal}', { portal: productName })
     : step.scene.title
   // Only the scenes are counted and dotted; the finish is the way out, not a step.
@@ -124,7 +144,7 @@ export function DemoTourDialog({
     <dialog
       ref={dialogRef}
       aria-labelledby={`${id}-title`}
-      aria-describedby={step.kind === 'scene' ? `${id}-body` : undefined}
+      aria-describedby={step.kind === 'finish' ? undefined : `${id}-body`}
       data-demo-tour
       className='rp-dialog rp-tour-dialog rp-anim-fade overscroll-contain text-ink'
       onCancel={(event) => {
@@ -154,10 +174,10 @@ export function DemoTourDialog({
           >
             {title}
           </h2>
-          {step.kind === 'scene'
+          {step.kind !== 'finish'
             ? (
               <p id={`${id}-body`} className='mt-3 text-base leading-relaxed text-ink-2'>
-                {step.scene.body}
+                {step.kind === 'welcome' ? intro : step.scene.body}
               </p>
             )
             : null}
@@ -204,7 +224,13 @@ export function DemoTourDialog({
                   </Button>
                 )
                 : null}
-              {step.kind === 'finish'
+              {step.kind === 'welcome'
+                ? (
+                  <Button leadingIcon={Compass} onClick={next}>
+                    {ui('Take the tour')}
+                  </Button>
+                )
+                : step.kind === 'finish'
                 ? <Button onClick={() => close.current()}>{ui('Done')}</Button>
                 : (
                   <Button trailingIcon={ArrowRight} onClick={next}>
@@ -229,7 +255,7 @@ export function DemoTourDialog({
           <div key={`${at}-${step.kind}`} className='rp-tour-reveal'>
             {step.kind === 'scene'
               ? <SceneIllustration id={step.scene.id} slug={slug} kinds={graphKinds} />
-              : <SceneList scenes={scenes} done />}
+              : <SceneList scenes={scenes} done={step.kind === 'finish'} />}
           </div>
         </div>
       </div>

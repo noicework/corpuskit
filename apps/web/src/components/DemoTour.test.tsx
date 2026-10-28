@@ -49,39 +49,12 @@ function render(config: TenantConfig): string {
 }
 
 describe('the guided tour on the home page', () => {
-  it('is offered only where the portal opts in, on Explore and on a composed home alike', () => {
-    expect(render(base)).not.toContain('data-demo-tour-entry')
-    expect(render({ ...base, demoTour: 'off' })).not.toContain('data-demo-tour-entry')
-    for (const demoTour of ['request', 'auto'] as const) {
+  it('puts nothing on the page of its own, whatever the setting', () => {
+    for (const demoTour of ['off', 'request', 'auto'] as const) {
       const html = render({ ...base, demoTour })
-      expect(html).toContain('data-demo-tour-entry')
-      expect(html).toContain('Welcome to Example Portal')
-      expect(html).toContain('curated by Example User Group. Here you can search')
-      expect(html).toContain('Take the tour')
-      // The dialog itself is not on the page until it is opened.
-      expect(html).not.toContain('data-demo-tour=')
+      expect(html).not.toContain('data-demo-tour')
+      expect(html).not.toContain('Take the tour')
+      expect(html).not.toContain('Welcome to Example Portal')
     }
-    const composed: TenantConfig = {
-      ...base,
-      demoTour: 'request',
-      branding: {
-        ...base.branding,
-        layout: { home: { sections: [{ kind: 'about', heading: 'About', body: 'Us.' }] } },
-      },
-    }
-    const html = render(composed)
-    expect(html).toContain('data-demo-tour-entry')
-    expect(html.indexOf('data-demo-tour-entry')).toBeLessThan(html.indexOf('About'))
-  })
-
-  it("takes the portal's own heading and intro", () => {
-    const html = render({
-      ...base,
-      demoTour: 'request',
-      copy: { demoTour: { heading: 'Take the tour of the talks', intro: 'Three scenes.' } },
-    })
-    expect(html).toContain('Take the tour of the talks')
-    expect(html).toContain('Three scenes.')
-    expect(html).not.toContain('Welcome to Example Portal')
   })
 })
