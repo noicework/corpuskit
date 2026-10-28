@@ -809,6 +809,7 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'insights') {
                 expect(JSON.parse(result)).toEqual({
                   ...fixture.stores.insights.summary('a'),
+                  knowledgeGaps: { month: '2026-09', questions: [], topics: null },
                   feedback: { helpful: 0, unhelpful: 0, flagged: [] },
                 })
               } else if (suffix === 'insights/usage') {

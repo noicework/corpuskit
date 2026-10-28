@@ -284,6 +284,13 @@ export interface AskInsight {
    * back to the question it answered. Absent on asks recorded before it was kept.
    */
   learningId?: string
+  /**
+   * Seconds from the portal server receiving the question to sending the first words of the
+   * answer, and to finishing it, as the portal server measured them. Null when no words were
+   * sent; absent on asks recorded before they were kept.
+   */
+  firstTokenSec?: number | null
+  answerSec?: number
 }
 
 /** The asks Insights lists: never with the answer ids feedback joins on. */

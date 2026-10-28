@@ -103,6 +103,88 @@ function Tile({ label, value, detail }: { label: string; value: string; detail?:
   )
 }
 
+/** The month's response times as percentiles: what the portal measured and what it did not. */
+function ResponseTimes({ report, month }: { report: UsageReport; month: string }) {
+  const { ui, number } = usePortalLocale()
+  const { totals } = report
+  const rows = [
+    {
+      label: ui('Time to first token'),
+      values: [totals.firstTokenP50, totals.firstTokenP90, totals.firstTokenP95],
+      count: totals.timedAnswers,
+    },
+    {
+      label: ui('Answer time'),
+      values: [totals.answerTimeP50, totals.answerTimeP90, totals.answerTimeP95],
+      count: totals.timedAnswers,
+    },
+    {
+      label: ui('Generation time (knowledge box)'),
+      values: [totals.generationTimeP50, totals.generationTimeP90, totals.generationTimeP95],
+      count: totals.generationTimed,
+    },
+  ]
+  const seconds = (value: number | null) =>
+    value === null
+      ? (
+        <>
+          <span aria-hidden='true'>-</span>
+          <span className='sr-only'>{ui('Not measured')}</span>
+        </>
+      )
+      : ui('{count}s', { count: number(value, { minimumFractionDigits: 1 }) })
+  return (
+    <section className='rp-usage-times'>
+      <h4 className='text-sm font-semibold text-ink'>{ui('Response times')}</h4>
+      <p className='mt-1 max-w-prose text-sm leading-relaxed text-ink-2'>
+        {ui(
+          "Percentiles over the month's answered questions. The portal server measures time to first token and answer time from receiving each question; answers from before it measured them have none. Generation time is the knowledge box's own report. Search response times are not measured.",
+        )}
+      </p>
+      <div
+        className='rp-focus relative mt-3 overflow-x-auto'
+        role='region'
+        aria-label={ui('Response times')}
+        tabIndex={0}
+      >
+        <table className='w-full min-w-[32rem] border-collapse text-sm'>
+          <caption className='sr-only'>{ui('Response times for {month}', { month })}</caption>
+          <thead>
+            <tr className='border-b border-line text-xs text-ink-2'>
+              <th scope='col' className='py-2 pr-3 text-left font-semibold'>{ui('Measure')}</th>
+              {['p50', 'p90', 'p95'].map((name) => (
+                <th key={name} scope='col' className='py-2 pr-3 text-right font-semibold'>
+                  {name}
+                </th>
+              ))}
+              <th scope='col' className='py-2 pr-3 text-right font-semibold'>
+                {ui('Answers timed')}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.label} className='border-b border-line last:border-0'>
+                <th scope='row' className='py-1.5 pr-3 text-left font-normal text-ink'>
+                  {row.label}
+                </th>
+                {row.values.map((value, index) => (
+                  <td key={index} className='py-1.5 pr-3 text-right tabular-nums text-ink-2'>
+                    {seconds(value)}
+                  </td>
+                ))}
+                <td className='py-1.5 pr-3 text-right tabular-nums text-ink-2'>
+                  {row.count === null ? ui('Not held') : number(row.count)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 /**
  * One month of a portal's usage as a document: the month's totals, which days each source no
  * longer holds, a row per day and what each column counts. The same markup is shown on the page
@@ -110,7 +192,10 @@ function Tile({ label, value, detail }: { label: string; value: string; detail?:
  */
 export function UsageReportDocument({ report, name }: { report: UsageReport; name: string }) {
   const { ui, number, date } = usePortalLocale()
-  const columns = USAGE_COLUMNS.filter((column) => column.key !== 'date' && column.key !== 'notes')
+  // Response times are the month's percentiles, in their own table below.
+  const columns = USAGE_COLUMNS.filter((column) =>
+    column.key !== 'date' && column.key !== 'notes' && !column.timing
+  )
   const notes = coverageNotes(report, ui, date)
   const month = monthName(report.month, date)
   const period = {
@@ -260,6 +345,8 @@ export function UsageReportDocument({ report, name }: { report: UsageReport; nam
           </tfoot>
         </table>
       </div>
+
+      <ResponseTimes report={report} month={month} />
 
       <section className='rp-usage-definitions'>
         <h4 className='text-sm font-semibold text-ink'>{ui('What each column counts')}</h4>

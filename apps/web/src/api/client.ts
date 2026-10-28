@@ -1442,9 +1442,24 @@ export interface AnswerFeedbackSummary {
   flagged: FlaggedAnswer[]
 }
 
+/** A question this month's asks could not answer well, shortened by the server. */
+export interface KnowledgeGapQuestion {
+  question: string
+  asks: number
+  unanswered: number
+  weaklyGrounded: number
+  lastAsked: string
+}
+
 export interface InsightsSummary {
   /** Absent from a server that does not keep answer feedback. */
   feedback?: AnswerFeedbackSummary
+  /**
+   * This month's questions the collection could not answer, or answered on weak grounding, most
+   * asked first. `topics` is null: the ask log cannot be mapped to topics. Absent from older
+   * servers.
+   */
+  knowledgeGaps?: { month: string; questions: KnowledgeGapQuestion[]; topics: null }
   totalAsks: number
   answered: number
   unanswered: number

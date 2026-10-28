@@ -155,6 +155,7 @@ import {
 } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
 import { buildUsageReport, usagePeriod, usageReportCsv } from './usage-report.ts'
+import { knowledgeGaps } from './knowledge-gaps.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
@@ -6096,8 +6097,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const now = opts.now?.() ?? Date.now()
+    const month = usagePeriod(
+      tenantToday(config.timezone, new Date(now)).slice(0, 7),
+      config.timezone,
+      now,
+    )!
     return c.json({
       ...insights.summary(config.slug),
+      // This month's questions the collection could not answer well: curators' eyes only.
+      knowledgeGaps: knowledgeGaps(
+        insights.asksBetween(config.slug, month.from, month.to).asks,
+        month,
+      ),
       // Readers' ratings, with the unhelpful answers joined to the questions they answered.
       feedback: feedbackSummary(
         feedback.ratings(config.slug),
@@ -6579,12 +6591,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // The answer's learning id, as the reader receives it: the ask log keeps it so a rating
       // of this answer can be joined back to its question.
       let learningId: string | undefined
+      // Response times as this server sees them (docs/USAGE-REPORTS.md): from receiving the
+      // question to the first words of the answer reaching the stream, and to its end.
+      const received = performance.now()
+      let firstWordsAt: number | undefined
       const send = (event: unknown) => {
         if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
-        const learning = event as { type?: unknown; id?: unknown } | null
+        const learning = event as { type?: unknown; id?: unknown; text?: unknown } | null
         if (learning?.type === 'learning' && typeof learning.id === 'string') {
           learningId = learning.id
         }
+        if (
+          firstWordsAt === undefined && (learning?.type === 'delta' || learning?.type === 'done') &&
+          typeof learning.text === 'string' && learning.text.trim()
+        ) firstWordsAt = performance.now()
         return stream.writeSSE({ data: JSON.stringify(publicSseEvent(event, 'ask')) })
       }
       // A follow-up that asks for the earlier answers in another shape
@@ -8117,6 +8137,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
           groundedness: record.groundedness,
           contextRelevance: record.contextRelevance,
           ...(learningId ? { learningId } : {}),
+          firstTokenSec: firstWordsAt === undefined
+            ? null
+            : Math.round(firstWordsAt - received) / 1000,
+          answerSec: Math.round(performance.now() - received) / 1000,
         })
       } catch {
         // insights are best-effort - never fail the answer over them

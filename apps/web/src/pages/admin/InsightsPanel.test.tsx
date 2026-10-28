@@ -3,7 +3,7 @@ import { expect } from '@std/expect'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router-dom'
 import type { AnswerFeedbackSummary } from '../../api/client.ts'
-import { UnhelpfulAnswers } from './InsightsPanel.tsx'
+import { MonthKnowledgeGaps, UnhelpfulAnswers } from './InsightsPanel.tsx'
 
 function render(feedback: AnswerFeedbackSummary): string {
   return renderToStaticMarkup(
@@ -48,5 +48,40 @@ describe('Insights: answers marked unhelpful', () => {
     const markup = render({ helpful: 1, unhelpful: 0, flagged: [] })
     expect(markup).toContain('0 of 1 rated answer marked unhelpful')
     expect(markup).toContain('No answer has been marked unhelpful in the last 90 days.')
+  })
+})
+
+describe("Insights: this month's knowledge gaps", () => {
+  it('lists the questions answered worst with their counts, and says topics are not mapped', () => {
+    const markup = renderToStaticMarkup(
+      <MonthKnowledgeGaps
+        gaps={{
+          month: '2026-10',
+          questions: [{
+            question: 'Where are the oyster leases? <b>',
+            asks: 3,
+            unanswered: 2,
+            weaklyGrounded: 1,
+            lastAsked: now,
+          }],
+          topics: null,
+        }}
+      />,
+    )
+    expect(markup).toContain('Top knowledge gaps in October 2026')
+    expect(markup).toContain('Where are the oyster leases? &lt;b&gt;')
+    expect(markup).toContain('3 asks')
+    expect(markup).toContain('2 unanswered · 1 weakly grounded · just now')
+    expect(markup).toContain('never exported')
+    expect(markup).toContain('Evidence coverage by topic')
+    expect(markup).toContain('Not available: the ask log keeps')
+  })
+
+  it('says so when the month has none', () => {
+    expect(
+      renderToStaticMarkup(
+        <MonthKnowledgeGaps gaps={{ month: '2026-10', questions: [], topics: null }} />,
+      ),
+    ).toContain('No knowledge gaps this month.')
   })
 })

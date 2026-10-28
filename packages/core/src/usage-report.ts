@@ -12,6 +12,8 @@ export const UsageMonthSchema = z.string().regex(/^20\d{2}-(?:0[1-9]|1[0-2])$/)
 
 const UsageDateSchema = z.string().regex(/^20\d{2}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])$/)
 const Count = z.number().int().nonnegative().nullable()
+/** A response time in seconds, to one decimal place; null when none was measured. */
+const Seconds = z.number().nonnegative().nullable()
 
 const UsageCountsSchema = z.object({
   questions: Count,
@@ -24,6 +26,17 @@ const UsageCountsSchema = z.object({
   ratings: Count,
   unhelpfulRatings: Count,
   documentsAdded: Count,
+  timedAnswers: Count,
+  firstTokenP50: Seconds,
+  firstTokenP90: Seconds,
+  firstTokenP95: Seconds,
+  answerTimeP50: Seconds,
+  answerTimeP90: Seconds,
+  answerTimeP95: Seconds,
+  generationTimed: Count,
+  generationTimeP50: Seconds,
+  generationTimeP90: Seconds,
+  generationTimeP95: Seconds,
 }).strict()
 export type UsageCounts = z.infer<typeof UsageCountsSchema>
 
@@ -76,6 +89,11 @@ export interface UsageColumn {
    */
   definition: string
   source?: UsageSource
+  /**
+   * A response time column: the printable report shows the month's times in a table of their
+   * own rather than a column per day.
+   */
+  timing?: true
 }
 
 export const USAGE_COLUMNS: readonly UsageColumn[] = Object.freeze(
@@ -162,6 +180,98 @@ export const USAGE_COLUMNS: readonly UsageColumn[] = Object.freeze(
       definition:
         'Library documents added that day that the knowledge box still holds; drafts and help pages and failed imports are not counted',
       source: 'documents',
+    },
+    {
+      key: 'timedAnswers',
+      heading: 'timed_answers',
+      label: 'Timed answers',
+      definition:
+        'Answered questions whose response times the portal server measured; it has measured them since the release that added these columns',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'firstTokenP50',
+      heading: 'first_token_p50',
+      label: 'Time to first token p50',
+      definition:
+        'Median seconds from the portal server receiving a question to sending the first words of its answer; over timed answers',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'firstTokenP90',
+      heading: 'first_token_p90',
+      label: 'Time to first token p90',
+      definition: 'The 90th percentile of the time to first token in seconds',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'firstTokenP95',
+      heading: 'first_token_p95',
+      label: 'Time to first token p95',
+      definition: 'The 95th percentile of the time to first token in seconds',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'answerTimeP50',
+      heading: 'answer_time_p50',
+      label: 'Answer time p50',
+      definition:
+        'Median seconds from the portal server receiving a question to finishing its answer; over timed answers',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'answerTimeP90',
+      heading: 'answer_time_p90',
+      label: 'Answer time p90',
+      definition: 'The 90th percentile of the answer time in seconds',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'answerTimeP95',
+      heading: 'answer_time_p95',
+      label: 'Answer time p95',
+      definition: 'The 95th percentile of the answer time in seconds',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'generationTimed',
+      heading: 'generation_timed',
+      label: 'Generation timed',
+      definition: 'Answered questions with a generation time reported by the knowledge box',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'generationTimeP50',
+      heading: 'generation_time_p50',
+      label: 'Generation time p50',
+      definition:
+        "Median seconds the knowledge box reports spending to generate an answer; it leaves out the portal's own routing and checks and the network to the reader",
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'generationTimeP90',
+      heading: 'generation_time_p90',
+      label: 'Generation time p90',
+      definition: 'The 90th percentile of the generation time in seconds',
+      source: 'asks',
+      timing: true,
+    },
+    {
+      key: 'generationTimeP95',
+      heading: 'generation_time_p95',
+      label: 'Generation time p95',
+      definition: 'The 95th percentile of the generation time in seconds',
+      source: 'asks',
+      timing: true,
     },
     {
       key: 'notes',

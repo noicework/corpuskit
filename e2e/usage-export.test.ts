@@ -44,6 +44,17 @@ function seededInsights(): { insights: InsightsStore; directory: string } {
   ask('03', true, 4)
   ask('03', true, 2)
   ask('04', false, null)
+  // This month: a question the collection could not answer, for Insights' knowledge gaps.
+  insights.record('marine', {
+    ts: new Date().toISOString(),
+    question: 'Which seagrass beds recovered after the 2022 floods?',
+    answered: false,
+    citations: 0,
+    durationSec: null,
+    answerRelevance: null,
+    groundedness: null,
+    contextRelevance: null,
+  })
   return { insights, directory }
 }
 
@@ -119,7 +130,7 @@ Deno.test('a portal administrator downloads the month as CSV and prints the repo
     expect(file!.name).toBe(`usage-marine-${MONTH}.csv`)
     expect(file!.text.startsWith('# CorpusKit usage report\r\n# Portal: marine\r\n')).toBe(true)
     expect(file!.text).toContain(`"${MONTH}-03","2","2","0","1","1","2","3.0"`)
-    expect(file!.text).toContain(`"${MONTH}-04","1","0","1","0","1","0","","0","0","1",""`)
+    expect(file!.text).toContain(`"${MONTH}-04","1","0","1","0","1","0","","0","0","1","0",`)
     expect(file!.text).toContain('"total","3","2","1","1","2","2","3.0"')
     // Counts only: the question never leaves in the file.
     expect(file!.text).not.toContain('abalone')
@@ -212,6 +223,12 @@ Deno.test('a curator reads Insights but is never offered or sent the usage repor
     await page.waitForSelector('[data-admin-insights]')
     await page.waitForFunction(() => !document.querySelector('main .rp-shimmer'))
     expect(await page.$('[data-usage-report-panel]')).toBeNull()
+    // Curators read this month's knowledge gaps in the portal.
+    const gaps = await page.evaluate(() =>
+      document.querySelector('[data-month-gaps]')?.textContent ?? ''
+    )
+    expect(gaps).toContain('Which seagrass beds recovered after the 2022 floods?')
+    expect(gaps).toContain('Evidence coverage by topic')
     expect(server.requests.some((r) => r.path.includes('/insights/usage'))).toBe(false)
     const denied = await page.evaluate(
       async (month) => (await fetch(`/api/admin/t/marine/insights/usage?month=${month}`)).status,

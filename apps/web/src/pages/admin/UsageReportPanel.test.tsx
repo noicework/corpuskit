@@ -17,6 +17,17 @@ const counts = {
   ratings: null,
   unhelpfulRatings: null,
   documentsAdded: 2,
+  timedAnswers: 2,
+  firstTokenP50: 1.2,
+  firstTokenP90: 2.5,
+  firstTokenP95: 2.5,
+  answerTimeP50: 6.4,
+  answerTimeP90: 9,
+  answerTimeP95: 9,
+  generationTimed: 0,
+  generationTimeP50: null,
+  generationTimeP90: null,
+  generationTimeP95: null,
 }
 
 const report: UsageReport = {
@@ -72,10 +83,11 @@ describe('Usage report', () => {
   it('is a table with column and row headers, a caption and a total row', () => {
     const markup = render(report)
     expect(markup).toContain('<caption class="sr-only">Usage by day for July 2026')
-    const columns = USAGE_COLUMNS.filter((c) => c.key !== 'notes')
-    expect(markup.match(/<th scope="col"/g)).toHaveLength(columns.length)
-    // One row header per day and one for the total.
-    expect(markup.match(/<th scope="row"/g)).toHaveLength(3)
+    const daily = USAGE_COLUMNS.filter((c) => c.key !== 'notes' && !c.timing)
+    // The daily table's columns, then the response times table's measure, p50 to p95 and count.
+    expect(markup.match(/<th scope="col"/g)).toHaveLength(daily.length + 5)
+    // One row header per day and one for the total, then one per response time.
+    expect(markup.match(/<th scope="row"/g)).toHaveLength(3 + 3)
     expect(markup).toMatch(/<tfoot>.*<th scope="row"[^>]*>Total<\/th>/)
     expect(markup).toContain('role="region"')
     expect(markup).toContain('aria-label="Usage by day"')
@@ -100,6 +112,16 @@ describe('Usage report', () => {
     for (const column of USAGE_COLUMNS.filter((c) => c.key !== 'notes')) {
       expect(markup).toContain(column.definition.replaceAll("'", '&#x27;'))
     }
+  })
+
+  it('gives the month response times as percentiles, and says what is not measured', () => {
+    const markup = render(report)
+    expect(markup).toContain('<caption class="sr-only">Response times for July 2026</caption>')
+    expect(markup).toMatch(/Time to first token<\/th><td[^>]*>1\.2s<\/td><td[^>]*>2\.5s<\/td>/)
+    expect(markup).toMatch(/Answer time<\/th><td[^>]*>6\.4s<\/td><td[^>]*>9\.0s<\/td>/)
+    // No generation time was reported: not measured, not zero.
+    expect(markup).toContain('<span class="sr-only">Not measured</span>')
+    expect(markup).toContain('Search response times are not measured.')
   })
 
   it('says so when the knowledge box could not be read', () => {

@@ -79,4 +79,53 @@ export const USAGE_JA: Readonly<Record<string, string>> = {
     'その日に寄せられた評価のうち、回答を「役に立たない」としたもの',
   'Library documents added that day that the knowledge box still holds; drafts and help pages and failed imports are not counted':
     'その日に追加され、現在もナレッジボックスにあるライブラリの資料。下書き、ヘルプページ、取り込みに失敗したものは数えません',
+  // Response times, and Insights' knowledge gaps for the month.
+  'Response times': '応答時間',
+  "Percentiles over the month's answered questions. The portal server measures time to first token and answer time from receiving each question; answers from before it measured them have none. Generation time is the knowledge box's own report. Search response times are not measured.":
+    'この月の回答済みの質問を対象としたパーセンタイルです。最初のトークンまでの時間と回答時間は、ポータルのサーバーが各質問を受け取った時点から測定しています。測定を始める前の回答にはありません。生成時間はナレッジボックス自身の報告です。検索の応答時間は測定していません。',
+  'Response times for {month}': '{month}の応答時間',
+  'Measure': '項目',
+  'Answers timed': '測定した回答',
+  'Time to first token': '最初のトークンまでの時間',
+  'Answer time': '回答時間',
+  'Generation time (knowledge box)': '生成時間（ナレッジボックス）',
+  'Not measured': '測定なし',
+  'Timed answers': '時間を測定した回答',
+  'Time to first token p50': '最初のトークンまでの時間 p50',
+  'Time to first token p90': '最初のトークンまでの時間 p90',
+  'Time to first token p95': '最初のトークンまでの時間 p95',
+  'Answer time p50': '回答時間 p50',
+  'Answer time p90': '回答時間 p90',
+  'Answer time p95': '回答時間 p95',
+  'Generation timed': '生成時間のある回答',
+  'Generation time p50': '生成時間 p50',
+  'Generation time p90': '生成時間 p90',
+  'Generation time p95': '生成時間 p95',
+  'Answered questions whose response times the portal server measured; it has measured them since the release that added these columns':
+    'ポータルのサーバーが応答時間を測定した回答済みの質問。これらの列を追加したリリース以降に測定しています',
+  'Median seconds from the portal server receiving a question to sending the first words of its answer; over timed answers':
+    'ポータルのサーバーが質問を受け取ってから回答の最初の文字を送るまでの秒数の中央値。時間を測定した回答が対象です',
+  'The 90th percentile of the time to first token in seconds':
+    '最初のトークンまでの時間（秒）の90パーセンタイル',
+  'The 95th percentile of the time to first token in seconds':
+    '最初のトークンまでの時間（秒）の95パーセンタイル',
+  'Median seconds from the portal server receiving a question to finishing its answer; over timed answers':
+    'ポータルのサーバーが質問を受け取ってから回答を終えるまでの秒数の中央値。時間を測定した回答が対象です',
+  'The 90th percentile of the answer time in seconds': '回答時間（秒）の90パーセンタイル',
+  'The 95th percentile of the answer time in seconds': '回答時間（秒）の95パーセンタイル',
+  'Answered questions with a generation time reported by the knowledge box':
+    'ナレッジボックスが生成時間を報告した回答済みの質問',
+  "Median seconds the knowledge box reports spending to generate an answer; it leaves out the portal's own routing and checks and the network to the reader":
+    'ナレッジボックスが報告する回答の生成にかかった秒数の中央値。ポータル自体の振り分けや確認と読者までの通信時間は含みません',
+  'The 90th percentile of the generation time in seconds': '生成時間（秒）の90パーセンタイル',
+  'The 95th percentile of the generation time in seconds': '生成時間（秒）の95パーセンタイル',
+  'Top knowledge gaps in {month}': '{month}に多かった不足している資料分野',
+  'The questions asked most this month that the collection could not answer, or answered on weak grounding. Questions can hold personal data, so they are shortened, shown only to curators and administrators, and never exported.':
+    '今月多く尋ねられた質問のうち、資料から回答できなかったもの、または根拠が弱い回答となったものです。質問には個人情報が含まれる場合があるため、短縮して資料管理者と管理者にのみ表示し、エクスポートには含めません。',
+  'No knowledge gaps this month.': '今月は不足している資料分野はありません。',
+  '{count} unanswered': '未回答{count}件',
+  '{count} weakly grounded': '根拠が弱い回答{count}件',
+  'Evidence coverage by topic': 'トピック別の根拠の網羅状況',
+  "Not available: the ask log keeps each question's text but not its topic, and an unanswered question has no cited source to take a topic from.":
+    '利用できません。質問ログには質問文は残りますがトピックは記録されず、未回答の質問にはトピックを判断できる引用元もありません。',
 }

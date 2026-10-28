@@ -115,16 +115,7 @@ export interface UsageSources {
   documents: { created: readonly string[]; readBackTo: string | null } | null
 }
 
-type AskCounts = Pick<
-  UsageCounts,
-  | 'questions'
-  | 'answered'
-  | 'unanswered'
-  | 'weaklyGrounded'
-  | 'knowledgeGaps'
-  | 'scoredAnswers'
-  | 'averageGroundedness'
->
+type AskCounts = Omit<UsageCounts, 'ratings' | 'unhelpfulRatings' | 'documentsAdded'>
 type RatingCounts = Pick<UsageCounts, 'ratings' | 'unhelpfulRatings'>
 
 /** The question and answer counts of some asks; all null when they are not held. */
@@ -138,6 +129,17 @@ function askCounts(asks: readonly AskInsight[] | null): AskCounts {
       knowledgeGaps: null,
       scoredAnswers: null,
       averageGroundedness: null,
+      timedAnswers: null,
+      firstTokenP50: null,
+      firstTokenP90: null,
+      firstTokenP95: null,
+      answerTimeP50: null,
+      answerTimeP90: null,
+      answerTimeP95: null,
+      generationTimed: null,
+      generationTimeP50: null,
+      generationTimeP90: null,
+      generationTimeP95: null,
     }
   }
   const answered = asks.filter((ask) => ask.answered)
@@ -146,6 +148,10 @@ function askCounts(asks: readonly AskInsight[] | null): AskCounts {
     typeof score === 'number' && score >= 0 && score <= 5
   )
   const weak = scores.filter((score) => score <= WEAK_GROUNDEDNESS).length
+  // Response times of answered questions only: a decline's speed says nothing about answering.
+  const firstToken = timesOf(answered.map((ask) => ask.firstTokenSec))
+  const answerTime = timesOf(answered.map((ask) => ask.answerSec))
+  const generation = timesOf(answered.map((ask) => ask.durationSec))
   return {
     questions: asks.length,
     answered: answered.length,
@@ -156,7 +162,35 @@ function askCounts(asks: readonly AskInsight[] | null): AskCounts {
     averageGroundedness: scores.length
       ? Math.round((scores.reduce((sum, score) => sum + score, 0) / scores.length) * 10) / 10
       : null,
+    timedAnswers: answerTime.length,
+    firstTokenP50: percentile(firstToken, 50),
+    firstTokenP90: percentile(firstToken, 90),
+    firstTokenP95: percentile(firstToken, 95),
+    answerTimeP50: percentile(answerTime, 50),
+    answerTimeP90: percentile(answerTime, 90),
+    answerTimeP95: percentile(answerTime, 95),
+    generationTimed: generation.length,
+    generationTimeP50: percentile(generation, 50),
+    generationTimeP90: percentile(generation, 90),
+    generationTimeP95: percentile(generation, 95),
   }
+}
+
+/** The measured times among some values, in ascending order. */
+function timesOf(values: readonly (number | null | undefined)[]): number[] {
+  return values.filter((value): value is number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0
+  ).sort((a, b) => a - b)
+}
+
+/**
+ * The nearest-rank percentile of ascending values, to one decimal place: the smallest value at or
+ * above `p` per cent of them. Null when there are none.
+ */
+export function percentile(sorted: readonly number[], p: number): number | null {
+  if (sorted.length === 0) return null
+  const rank = Math.max(1, Math.ceil((p / 100) * sorted.length))
+  return Math.round(sorted[rank - 1]! * 10) / 10
 }
 
 function ratingCounts(ratings: readonly FeedbackRating[] | null): RatingCounts {
@@ -286,6 +320,7 @@ export function usageCoverageNotes(report: UsageReport): string[] {
           : `read back to ${documents.from}; earlier days are blank`
       }`
       : 'Documents added: the knowledge box could not be read; the column is blank',
+    "Response times: time to first token and answer time are measured by the portal server for each answered question and recorded from this release on; generation time is the knowledge box's own report; search times are not measured; percentiles are nearest-rank",
     'Topics of unanswered questions are not recorded; question text is left out because it can hold personal data',
   ]
 }
@@ -311,7 +346,10 @@ const comment = (text: string) => `# ${text.replace(/[,"\r\n]/g, ' ')}`.trimEnd(
 
 function cell(value: string | number | null, key: string): string {
   if (value === null) return auditCsvCell('')
-  return auditCsvCell(key === 'averageGroundedness' ? Number(value).toFixed(1) : value)
+  // Scores and seconds keep their one decimal place: 4.0, not 4.
+  return auditCsvCell(
+    key === 'averageGroundedness' || /P(?:50|90|95)$/.test(key) ? Number(value).toFixed(1) : value,
+  )
 }
 
 /**

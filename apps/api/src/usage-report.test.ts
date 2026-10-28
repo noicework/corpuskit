@@ -13,6 +13,7 @@ import {
 import { DURABLE_ASKS_KEPT } from '../../cloudflare/src/state.ts'
 import {
   buildUsageReport,
+  percentile,
   ratingsKeptSince,
   usageCoverageNotes,
   usagePeriod,
@@ -113,7 +114,7 @@ Deno.test('each day and the month total count asks on their local day', () => {
   }, NOW)
   expect(UsageReportSchema.parse(report)).toEqual(report)
   expect(report.days).toHaveLength(28)
-  expect(report.days[0]).toEqual({
+  expect(report.days[0]).toMatchObject({
     date: '2026-10-01',
     questions: 4,
     answered: 3,
@@ -130,7 +131,7 @@ Deno.test('each day and the month total count asks on their local day', () => {
   expect(report.days[3]!.averageGroundedness).toBeNull()
   expect(report.days[4]).toMatchObject({ date: '2026-10-05', questions: 1, answered: 1 })
   // The total's average is over every scored answer, not an average of daily averages.
-  expect(report.totals).toEqual({
+  expect(report.totals).toMatchObject({
     questions: 5,
     answered: 4,
     unanswered: 1,
@@ -150,6 +151,75 @@ Deno.test('each day and the month total count asks on their local day', () => {
   // The report carries counts only: no question leaves in it.
   expect(JSON.stringify(report)).not.toContain('heatwave')
   expect(usageReportCsv(report)).not.toContain('heatwave')
+})
+
+Deno.test('percentiles are nearest-rank, to one decimal place', () => {
+  const sorted = [0.6, 1.2, 1.9, 2.4, 3.05, 3.5, 4.2, 4.8, 7.1, 12.34]
+  expect(percentile(sorted, 50)).toBe(3.1)
+  expect(percentile(sorted, 90)).toBe(7.1)
+  expect(percentile(sorted, 95)).toBe(12.3)
+  expect(percentile([2.25], 95)).toBe(2.3)
+  expect(percentile([], 50)).toBeNull()
+})
+
+Deno.test('response times are percentiles over the timed answers of each day and the month', () => {
+  const period = usagePeriod('2026-10', MELBOURNE, NOW)!
+  const timed = (ts: string, firstTokenSec: number | null, answerSec: number) =>
+    ask(ts, { firstTokenSec, answerSec, durationSec: answerSec - 1 })
+  const report = buildUsageReport('marine', period, {
+    ...none,
+    asks: {
+      keptSince: null,
+      asks: [
+        timed('2026-10-01T01:00:00Z', 1.1, 5),
+        timed('2026-10-01T02:00:00Z', 1.5, 7),
+        timed('2026-10-01T03:00:00Z', 3.2, 12),
+        // No words reached the reader: an answer time, but no time to first token.
+        timed('2026-10-02T01:00:00Z', null, 9),
+        // A decline is fast, and says nothing about answering.
+        ask('2026-10-02T02:00:00Z', {
+          answered: false,
+          firstTokenSec: 0.2,
+          answerSec: 0.4,
+          durationSec: null,
+        }),
+        // Recorded before the portal measured times: the knowledge box's time only.
+        ask('2026-10-03T01:00:00Z', { durationSec: 6 }),
+      ],
+    },
+  }, NOW)
+  expect(report.days[0]).toMatchObject({
+    timedAnswers: 3,
+    firstTokenP50: 1.5,
+    firstTokenP95: 3.2,
+    answerTimeP50: 7,
+    answerTimeP90: 12,
+    generationTimed: 3,
+    generationTimeP50: 6,
+  })
+  expect(report.days[1]).toMatchObject({ timedAnswers: 1, firstTokenP50: null, answerTimeP50: 9 })
+  expect(report.days[2]).toMatchObject({
+    timedAnswers: 0,
+    answerTimeP50: null,
+    generationTimed: 1,
+    generationTimeP50: 6,
+  })
+  // A day with no answers has counts of zero and no times.
+  expect(report.days[3]).toMatchObject({ timedAnswers: 0, firstTokenP50: null })
+  // The month's percentiles are over every timed answer, not an average of the days'.
+  expect(report.totals).toMatchObject({
+    timedAnswers: 4,
+    firstTokenP50: 1.5,
+    firstTokenP90: 3.2,
+    answerTimeP50: 7,
+    answerTimeP90: 12,
+    answerTimeP95: 12,
+    generationTimed: 5,
+    generationTimeP50: 6,
+  })
+  const csv = usageReportCsv(report)
+  expect(csv).toContain('# timed_answers: ')
+  expect(csv).toContain('search times are not measured')
 })
 
 Deno.test('ratings count on the day they were given, and only for answers the ask log holds', () => {
@@ -202,7 +272,7 @@ Deno.test('ratings past their retention are reported as not held, never as zero'
     '# Ratings: kept for 90 days and at most 500 per portal; held from 2026-07-31',
   )
   expect(csv).toContain(
-    '"2026-07-30","0","0","0","0","0","0","","","","0","ratings past retention"',
+    '"2026-07-30","0","0","0","0","0","0","","","","0","0","","","","","","","0","","","","ratings past retention"',
   )
   expect(csv).toContain('"rating totals from 2026-07-31"')
 
@@ -278,8 +348,11 @@ Deno.test('the CSV quotes every cell, neutralises formulas and keeps its comment
   }
   expect(rows[0]).toBe(USAGE_COLUMNS.map((column) => `"${column.heading}"`).join(','))
   expect(rows).toHaveLength(1 + 30 + 1)
-  expect(rows[3]).toBe('"2026-09-03","1","1","0","0","0","1","4.0","0","0","0",""')
-  expect(rows.at(-1)).toBe('"total","1","1","0","0","0","1","4.0","0","0","0",""')
+  // The answer has a generation time from the knowledge box, but no portal server timings.
+  const cells =
+    '"1","1","0","0","0","1","4.0","0","0","0","0","","","","","","","1","4.0","4.0","4.0",""'
+  expect(rows[3]).toBe(`"2026-09-03",${cells}`)
+  expect(rows.at(-1)).toBe(`"total",${cells}`)
   for (const row of rows) {
     expect(row.split(',').every((cell) => /^"[^"]*"$/.test(cell))).toBe(true)
   }
