@@ -1,11 +1,28 @@
 /** Application-owned interface copy only; source content never enters this catalog. */
 export const COMMON_JA: Readonly<Record<string, string>> = {
   // The guided tour on the home page.
-  'See what this platform does': 'このプラットフォームでできること',
-  'Answers here cite their sources and say when the research collection has no direct evidence.':
-    'ここでの回答は出典を示し、研究コレクションに直接の根拠がないときはその旨を伝えます。',
+  'Welcome to {portal}': '{portal}へようこそ',
+  'This platform brings together research published and curated by {organisation}{partners}. Here you can search, ask questions of, and make connections within the collection.':
+    'このプラットフォームは{organisation}{partners}が発行・編集した研究をまとめたものです。コレクションを検索し、質問し、そのつながりを見つけることができます。',
+  ' and its research partners': 'とその研究パートナー',
   'Take the tour': 'ツアーを見る',
-  'Choose where to start': '始める場所を選ぶ',
+  'Get started with {portal}': '{portal}を始める',
+  'Explore the Graph': 'グラフを見る',
+  'Find answers and sources': '回答と出典を見つける',
+  '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material. You can also use conventional search, or browse the collection through the Graph and the Library.':
+    '{portal}は質問に回答し、主張には出典を付けて、該当する資料へ直接リンクします。通常の検索を使うことも、グラフやライブラリからコレクションを見て回ることもできます。',
+  'Follow the evidence': '根拠をたどる',
+  'When an answer provides a citation, you can jump straight into the source document, view the passage, and ask further questions there.':
+    '回答に出典が付いていれば、元の資料にすぐ移動して該当箇所を読み、そこでさらに質問できます。',
+  'View a publication': '資料を見る',
+  'Visualise connections': 'つながりを可視化する',
+  'The Graph maps links between {kinds}.': 'グラフは{kinds}のつながりを示します。',
+  '{most} and {last}': '{most}、{last}',
+  'topics, entities and the documents that connect them': 'テーマ、項目、それらを結ぶ資料',
+  'Open Graph': 'グラフを開く',
+  'Bring your own tools': '自分のツールを使う',
+  'You can connect your own AI agent to {portal} through its Model Context Protocol (MCP) connector for powerful, granular queries.':
+    'Model Context Protocol（MCP）コネクタを通じて、自分のAIエージェントを{portal}に接続し、きめ細かな問い合わせができます。',
   'Step {n} of {total}': 'ステップ {n} / {total}',
   'Next': '次へ',
   'Example': '例',

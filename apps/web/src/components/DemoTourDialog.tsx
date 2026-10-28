@@ -29,11 +29,16 @@ type Step = { kind: 'scene'; scene: ResolvedScene; index: number } | { kind: 'fi
 export function DemoTourDialog({
   onClose,
   slug,
+  productName,
   scenes,
+  graphKinds,
 }: {
   onClose: () => void
   slug: string
+  productName: string
   scenes: ResolvedScene[]
+  /** The Graph's kinds of thing, for its illustration's labels. */
+  graphKinds: string[]
 }) {
   const { ui } = usePortalLocale()
   const id = useId()
@@ -107,7 +112,9 @@ export function DemoTourDialog({
     }
   }
 
-  const title = step.kind === 'finish' ? ui('Choose where to start') : step.scene.title
+  const title = step.kind === 'finish'
+    ? ui('Get started with {portal}', { portal: productName })
+    : step.scene.title
   // Only the scenes are counted and dotted; the finish is the way out, not a step.
   const position = step.kind === 'scene'
     ? ui('Step {n} of {total}', { n: step.index + 1, total: scenes.length })
@@ -163,7 +170,7 @@ export function DemoTourDialog({
                 {[
                   { href: '/ask', label: ui('Ask a question') },
                   { href: '/library', label: ui('Browse the Library') },
-                  { href: '/graph', label: ui('Explore the graph') },
+                  { href: '/graph', label: ui('Explore the Graph') },
                 ].map((link) => (
                   <Link
                     key={link.href}
@@ -221,7 +228,7 @@ export function DemoTourDialog({
             : null}
           <div key={`${at}-${step.kind}`} className='rp-tour-reveal'>
             {step.kind === 'scene'
-              ? <SceneIllustration id={step.scene.id} slug={slug} />
+              ? <SceneIllustration id={step.scene.id} slug={slug} kinds={graphKinds} />
               : <SceneList scenes={scenes} done />}
           </div>
         </div>

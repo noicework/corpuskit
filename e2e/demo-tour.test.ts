@@ -103,9 +103,9 @@ describe('the guided tour', () => {
       // The band already said what this is, so the tour opens on its first step.
       let now = await state()
       expect(now.modal).toBe(true)
-      expect(now.heading).toBe('Get a cited answer')
+      expect(now.heading).toBe('Find answers and sources')
       expect(now.focusedHeading).toBe(true)
-      expect(now.status).toBe('Step 1 of 5: Get a cited answer')
+      expect(now.status).toBe('Step 1 of 4: Find answers and sources')
       expect(now.stageHidden).toBe(true)
       expect(now.tryIt?.startsWith('/t/grains/ask?ask=')).toBe(true)
 
@@ -131,13 +131,12 @@ describe('the guided tour', () => {
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'See where an answer came from',
+            'Follow the evidence',
         'the second scene',
       )
       now = await state()
-      expect(now.status).toBe('Step 2 of 5: See where an answer came from')
+      expect(now.status).toBe('Step 2 of 4: Follow the evidence')
       expect(now.focusedHeading).toBe(true)
-      await page.keyboard.press('ArrowRight')
       await page.keyboard.press('ArrowRight')
       await page.keyboard.press('ArrowRight')
       await settle(
@@ -148,15 +147,15 @@ describe('the guided tour', () => {
           ) === '/t/grains/tools',
         'the MCP scene',
       )
-      expect((await state()).status).toBe(`Step 5 of 5: ${(await state()).heading}`)
+      expect((await state()).status).toBe('Step 4 of 4: Bring your own tools')
       await page.keyboard.press('ArrowLeft')
       await settle(
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] a.rp-btn-primary')?.getAttribute(
             'href',
-          ) === '/t/grains/ask',
-        'the gaps scene',
+          ) === '/t/grains/graph',
+        'the Graph scene',
       )
 
       // Escape closes it and focus goes back to the control that opened it.

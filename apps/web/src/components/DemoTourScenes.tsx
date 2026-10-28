@@ -307,6 +307,62 @@ function CitedPageScene({ slug }: { slug: string }) {
   )
 }
 
+/** A few nodes and the links between them, drawn in the portal's own marks. */
+function GraphScene({ kinds }: { kinds: string[] }) {
+  const labels = (kinds.length > 0 ? kinds : ['Topic', 'Organisation', 'Region', 'Author'])
+    .slice(0, 4)
+  const nodes = [
+    { x: 150, y: 70, r: 26 },
+    { x: 60, y: 160, r: 20 },
+    { x: 250, y: 150, r: 22 },
+    { x: 160, y: 230, r: 18 },
+  ]
+  const edges: [number, number][] = [[0, 1], [0, 2], [0, 3], [1, 3], [2, 3]]
+  return (
+    <div className='rp-card p-4'>
+      <svg
+        viewBox='0 0 320 280'
+        className='mx-auto block h-auto w-full max-w-[22rem]'
+        aria-hidden='true'
+      >
+        {edges.map(([a, b], index) => (
+          <g key={index} className='rp-tour-reveal' style={{ animationDelay: `${index * 90}ms` }}>
+            <line
+              x1={nodes[a]!.x}
+              y1={nodes[a]!.y}
+              x2={nodes[b]!.x}
+              y2={nodes[b]!.y}
+              stroke='var(--rp-line-2)'
+              strokeWidth={2}
+            />
+          </g>
+        ))}
+        {nodes.map((node, index) => (
+          <g key={index} className='rp-tour-reveal' style={{ animationDelay: `${index * 120}ms` }}>
+            <circle
+              cx={node.x}
+              cy={node.y}
+              r={node.r}
+              fill='var(--rp-wash)'
+              stroke={index === 0 ? 'var(--rp-accent-line)' : 'var(--rp-brand-fg)'}
+              strokeWidth={index === 0 ? 3 : 2}
+            />
+            <text
+              x={node.x}
+              y={node.y + node.r + 16}
+              textAnchor='middle'
+              fontSize='13'
+              fill='var(--rp-ink-2)'
+            >
+              {labels[index] ?? ''}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  )
+}
+
 function McpScene({ slug }: { slug: string }) {
   const { ui } = usePortalLocale()
   const origin = globalThis.location?.origin ?? 'https://portal.example.org'
@@ -410,7 +466,9 @@ export function SceneList({ scenes, done }: { scenes: ResolvedScene[]; done: boo
   )
 }
 
-export function SceneIllustration({ id, slug }: { id: DemoTourSceneId; slug: string }) {
+export function SceneIllustration(
+  { id, slug, kinds }: { id: DemoTourSceneId; slug: string; kinds: string[] },
+) {
   switch (id) {
     case 'federated':
       return <FederatedScene slug={slug} />
@@ -418,6 +476,8 @@ export function SceneIllustration({ id, slug }: { id: DemoTourSceneId; slug: str
       return <ProvenanceScene />
     case 'cited-page':
       return <CitedPageScene slug={slug} />
+    case 'graph':
+      return <GraphScene kinds={kinds} />
     case 'mcp':
       return <McpScene slug={slug} />
     case 'participation':

@@ -55,7 +55,8 @@ describe('the guided tour on the home page', () => {
     for (const demoTour of ['request', 'auto'] as const) {
       const html = render({ ...base, demoTour })
       expect(html).toContain('data-demo-tour-entry')
-      expect(html).toContain('See what this platform does')
+      expect(html).toContain('Welcome to Example Portal')
+      expect(html).toContain('curated by Example User Group. Here you can search')
       expect(html).toContain('Take the tour')
       // The dialog itself is not on the page until it is opened.
       expect(html).not.toContain('data-demo-tour=')
@@ -81,6 +82,6 @@ describe('the guided tour on the home page', () => {
     })
     expect(html).toContain('Take the tour of the talks')
     expect(html).toContain('Three scenes.')
-    expect(html).not.toContain('See what this platform does')
+    expect(html).not.toContain('Welcome to Example Portal')
   })
 })

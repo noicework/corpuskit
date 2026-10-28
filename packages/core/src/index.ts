@@ -415,6 +415,7 @@ export const DEMO_TOUR_SCENE_IDS = [
   'federated',
   'provenance',
   'cited-page',
+  'graph',
   'mcp',
   'participation',
   'gaps',

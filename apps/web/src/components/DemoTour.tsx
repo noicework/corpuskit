@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { demoTourMode, type TenantConfig } from '@research-portal/core'
 import { getCatalog } from '../api/client.ts'
 import {
+  federatedAsk,
   isTourDone,
   markTourDone,
   needsFirstPdf,
@@ -60,10 +61,15 @@ export function DemoTour({ config }: { config: TenantConfig }) {
   const firstPdfId = catalogue.data?.items
     .find((item) => item.status === 'processed' && item.type === 'pdf')?.id ?? null
   const scenes = resolveScenes(config, firstPdfId, ui)
-  const heading = copy?.heading ?? ui('See what this platform does')
+  const portal = config.branding.productName
+  const heading = copy?.heading ?? ui('Welcome to {portal}', { portal })
   const intro = copy?.intro ??
     ui(
-      'Answers here cite their sources and say when the research collection has no direct evidence.',
+      'This platform brings together research published and curated by {organisation}{partners}. Here you can search, ask questions of, and make connections within the collection.',
+      {
+        organisation: config.branding.organisation,
+        partners: federatedAsk(config) ? ui(' and its research partners') : '',
+      },
     )
 
   function closeTour() {
@@ -94,7 +100,9 @@ export function DemoTour({ config }: { config: TenantConfig }) {
           <DemoTourDialog
             onClose={closeTour}
             slug={slug}
+            productName={portal}
             scenes={scenes}
+            graphKinds={config.entityTypes.map((type) => type.label)}
           />
         )
         : null}

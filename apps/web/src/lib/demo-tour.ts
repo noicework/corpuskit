@@ -4,6 +4,7 @@ import {
   type DemoTourSceneId,
   type TenantConfig,
 } from '@research-portal/core'
+import type { MessageValues } from './locale-messages.ts'
 
 /**
  * The guided tour's script: which scenes a portal shows, what each says and where its button
@@ -11,22 +12,28 @@ import {
  */
 
 /**
- * The scenes a portal gets when its copy lists none: the evidence arc first (an answer, its
- * sources, the cited page, what happens without evidence), then the connector, whose audience
- * is narrowest. Participation is off until it is built.
+ * The scenes a portal gets when its copy lists none. Participation, provenance and the gaps
+ * scene stay available to a portal that lists them.
  */
 export const DEFAULT_SCENE_IDS: readonly DemoTourSceneId[] = [
   'federated',
-  'provenance',
   'cited-page',
-  'gaps',
+  'graph',
   'mcp',
 ]
+
+/** The portal's own words, with `{name}` values filled in: the locale's `ui`. */
+export type TourUi = (english: string, values?: MessageValues) => string
+
+/** What the script needs to know about the portal it introduces. */
+export type TourConfig = Pick<TenantConfig, 'suggestedQuestions' | 'copy' | 'entityTypes'> & {
+  branding: Pick<TenantConfig['branding'], 'productName' | 'organisation'>
+}
 
 type SceneTarget = { kind: 'ask'; question: string } | {
   kind: 'link'
   href: string
-  /** What the button says, where the page's name alone would not do ("Open a PDF"). */
+  /** What the button says, where the page's name alone would not do ("View a publication"). */
   label?: string
 }
 
@@ -36,26 +43,56 @@ export function askHref(question: string): string {
 }
 
 /**
+ * Whether this portal takes part in federated ask, so the welcome may say its collection is
+ * joined by its research partners'. The setting is being built alongside the agent page; until
+ * it reaches `main` no portal does, so the clause stays out everywhere.
+ */
+export function federatedAsk(_config: TourConfig): boolean {
+  return false
+}
+
+/** "Topic", "Research Method" and "EEG" read mid-sentence as "topic", "research method", "EEG". */
+function midSentence(label: string): string {
+  return label.split(' ').map((word) => {
+    const second = word.charAt(1)
+    return second && second === second.toLowerCase() ? word.toLowerCase() : word
+  }).join(' ')
+}
+
+/** "a, b and c": the Graph's kinds of thing as the portal configured them. */
+export function graphKinds(config: Pick<TenantConfig, 'entityTypes'>, ui: TourUi): string {
+  const labels = config.entityTypes.map((type) => midSentence(type.label)).filter(Boolean)
+  if (labels.length === 0) return ui('topics, entities and the documents that connect them')
+  if (labels.length === 1) return labels[0]!
+  return ui('{most} and {last}', {
+    most: labels.slice(0, -1).join(', '),
+    last: labels[labels.length - 1]!,
+  })
+}
+
+/**
  * A scene's built-in words and target. The words promise only what the button then shows: a
  * portal without a suggested question opens Ask empty rather than sending a question the
- * reader never saw, and the gaps scene asks nothing unless the portal sets a question it
- * knows the collection cannot answer. The first scene becomes the agent page's composed
- * answer, through its copy, once that page exists.
+ * reader never saw, and a collection without a PDF opens the Library.
  */
 function builtIn(
   id: DemoTourSceneId,
-  config: Pick<TenantConfig, 'suggestedQuestions'>,
+  config: TourConfig,
   firstPdfId: string | null,
-  ui: (english: string) => string,
+  ui: TourUi,
 ): { title: string; body: string; target: SceneTarget } {
+  const portal = config.branding.productName
   const suggested = config.suggestedQuestions.map((question) => question.text)
   const ask = (text: string | undefined): SceneTarget =>
     text ? { kind: 'ask', question: text } : { kind: 'link', href: '/ask' }
   switch (id) {
     case 'federated':
       return {
-        title: ui('Get a cited answer'),
-        body: ui('Ask in your own words. Each numbered citation links to its source.'),
+        title: ui('Find answers and sources'),
+        body: ui(
+          '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material. You can also use conventional search, or browse the collection through the Graph and the Library.',
+          { portal },
+        ),
         target: ask(suggested[0]),
       }
     case 'provenance':
@@ -68,25 +105,32 @@ function builtIn(
       }
     case 'cited-page':
       return {
-        title: ui('Check the page behind a citation'),
+        title: ui('Follow the evidence'),
         body: ui(
-          'When a citation points to a page in a PDF, it opens the PDF at that page with the matched passage highlighted and quoted.',
+          'When an answer provides a citation, you can jump straight into the source document, view the passage, and ask further questions there.',
         ),
         target: firstPdfId
           ? {
             kind: 'link',
             href: `/library/${encodeURIComponent(firstPdfId)}`,
-            label: ui('Open a PDF'),
+            label: ui('View a publication'),
           }
-          : { kind: 'link', href: '/library' },
+          : { kind: 'link', href: '/library', label: ui('Browse the Library') },
+      }
+    case 'graph':
+      return {
+        title: ui('Visualise connections'),
+        body: ui('The Graph maps links between {kinds}.', { kinds: graphKinds(config, ui) }),
+        target: { kind: 'link', href: '/graph', label: ui('Open Graph') },
       }
     case 'mcp':
       return {
-        title: ui('Connect a research tool'),
+        title: ui('Bring your own tools'),
         body: ui(
-          'If your research tool supports MCP, it can search this collection and request cited answers. The Tools page has the connection details and says whether you need an access key.',
+          'You can connect your own AI agent to {portal} through its Model Context Protocol (MCP) connector for powerful, granular queries.',
+          { portal },
         ),
-        target: { kind: 'link', href: '/tools' },
+        target: { kind: 'link', href: '/tools', label: ui('Open Tools') },
       }
     case 'participation':
       return {
@@ -125,10 +169,7 @@ export type ResolvedScene = {
  * The button's words name what it does and where: "Ask this question", "Open Tools". A portal
  * path the tour knows gets its page's name; any other link is simply opened.
  */
-export function actionLabel(
-  target: SceneTarget,
-  ui: (english: string) => string,
-): string {
+export function actionLabel(target: SceneTarget, ui: TourUi): string {
   if (target.kind === 'ask') return ui('Ask this question')
   if (target.label) return target.label
   const path = target.href.split(/[?#]/)[0] ?? ''
@@ -146,9 +187,9 @@ export function actionLabel(
  * built-in target.
  */
 export function resolveScenes(
-  config: Pick<TenantConfig, 'suggestedQuestions' | 'copy'>,
+  config: TourConfig,
   firstPdfId: string | null,
-  ui: (english: string) => string,
+  ui: TourUi,
 ): ResolvedScene[] {
   const listed: readonly DemoTourScene[] = config.copy?.demoTour?.scenes ??
     DEFAULT_SCENE_IDS.map((id) => ({ id }))

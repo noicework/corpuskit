@@ -1240,14 +1240,16 @@ hero's suggestions take.
 | Scene | What it shows | Built-in "Try it" |
 | --- | --- | --- |
 | `federated` | A cited answer, with its confidence label (the agent page's composed answer, once it exists) | Ask, with the portal's first suggested question; Ask itself when the portal has none |
-| `provenance` | The stages an answer passes through, then Show retrieved sources and Journey through the context | Ask, with the portal's second suggested question |
 | `cited-page` | A citation opening its PDF at the page, with the matched passage highlighted | The collection's first PDF in the Library; the Library itself until there is one |
-| `gaps` | A question the collection cannot answer, declined with the closest matches | Ask itself, unless the portal sets a question it knows the collection cannot answer |
+| `graph` | The Graph's links between the portal's entity types | `/graph` |
 | `mcp` | The MCP connector an external research tool uses | `/tools` |
+| `provenance` | The stages an answer passes through, then Show retrieved sources and Journey through the context | Ask, with the portal's second suggested question |
+| `gaps` | A question the collection cannot answer, declined with the closest matches | Ask itself, unless the portal sets a question it knows the collection cannot answer |
 | `participation` | Which collections an answer used | `/agent` |
 
-Without further configuration the tour shows every scene but `participation`, in that order,
-in the portal's language, and every illustration is labelled as an example. `copy.demoTour`, set through the configuration import, replaces the
+Without further configuration the tour shows `federated`, `cited-page`, `graph` and `mcp`, in
+that order, in the portal's language, and every illustration is labelled as an example. The
+welcome names the portal and its organisation from the branding. `copy.demoTour`, set through the configuration import, replaces the
 heading and intro and says which scenes show, in what order and in what words:
 
 ```json
