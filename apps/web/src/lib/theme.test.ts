@@ -19,6 +19,7 @@ import {
   DESKTOP_TEXT_SCALE_FACTOR,
   fontStack,
   googleFontsUrl,
+  heroVeilVars,
   PAIRING_IDS,
   paletteMode,
   paletteVars,
@@ -824,6 +825,57 @@ describe('accent marks', () => {
     expect(rule('.rp-field.rp-hero-field')).toContain('border-color: var(--rp-hero-field-edge);')
     const explore = await Deno.readTextFile(new URL('../pages/ExplorePage.tsx', import.meta.url))
     expect(explore).toMatch(/'rp-field rp-hero-field /)
+  })
+})
+
+describe('hero over a photo', () => {
+  const share = (value: string) => Number.parseFloat(value) / 100
+
+  it('veils a photo enough that both hero text tiers read on any pixel of it', () => {
+    const portals = [
+      { primary: '#1C1C1C', accent: '#00B14E', heroFrom: '#00B14E', heroTo: '#7FD8A6' },
+      { ...DEFAULT_PORTAL_COLOURS },
+      { primary: '#143669', accent: '#00B8A5', heroFrom: '#0b2247', heroTo: '#0e5f6b' },
+    ]
+    for (const colours of portals) {
+      const vars = paletteVars(branding({ colours, paletteId: 'default' }))
+      for (
+        const [endpoint, veil] of [
+          [colours.heroFrom.toLowerCase(), vars['--rp-hero-veil-from']!],
+          [colours.heroTo.toLowerCase(), vars['--rp-hero-veil-to']!],
+        ] as const
+      ) {
+        for (const pixel of ['#ffffff', '#000000']) {
+          const ground = mixHex(endpoint, pixel, share(veil))
+          for (const ink of [vars['--rp-on-hero']!, vars['--rp-on-hero-2']!]) {
+            expect(contrastRatio(ink, ground), `${endpoint} ${veil} ${pixel} ${ink}`)
+              .toBeGreaterThanOrEqual(4.5)
+          }
+        }
+      }
+    }
+  })
+
+  it('keeps the drawn veil where it already holds and never thins it', () => {
+    const vars = heroVeilVars('#000000', '#000000', ['#ffffff', '#ffffff'])
+    expect(vars['--rp-hero-veil-from']).toBe('85%')
+    expect(vars['--rp-hero-veil-to']).toBe('60%')
+    // The default portal's light text over a white photo needed far more than 60% at the end.
+    const own = paletteVars(branding({ colours: { ...DEFAULT_PORTAL_COLOURS } }))
+    expect(share(own['--rp-hero-veil-to']!)).toBeGreaterThan(0.6)
+  })
+
+  it('lightens the foot of the photo under dark hero text and darkens it under light text', () => {
+    expect(heroVeilVars('#7fd8a6', '#7fd8a6', ['#000000'])['--rp-hero-scrim']).toBe('255 255 255')
+    expect(heroVeilVars('#141d2b', '#27364b', ['#ffffff'])['--rp-hero-scrim']).toBe('10 10 12')
+    expect(heroVeilVars('navy', '#27364b', ['#ffffff'])).toEqual({
+      '--rp-hero-veil-from': '85%',
+      '--rp-hero-veil-to': '60%',
+      '--rp-hero-scrim': '10 10 12',
+    })
+    expect(styles).toContain('var(--rp-hero-veil-from, 85%)')
+    expect(styles).toContain('var(--rp-hero-veil-to, 60%)')
+    expect(rule('.rp-scrim-bottom')).toContain('rgb(var(--rp-hero-scrim, 10 10 12) / 0.55)')
   })
 })
 

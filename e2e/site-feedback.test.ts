@@ -276,7 +276,7 @@ describe('reader feedback', () => {
     const page = await browser.newPage(`${server.url}/t/marine/library`)
     try {
       await page.setViewportSize({ width: 390, height: 844 })
-      await page.waitForSelector('button[aria-controls="mobile-nav-sheet"]')
+      await page.waitForSelector('button.rp-navtoggle')
       // The header keeps its circle for wider screens; on a phone the menu carries it.
       expect(
         await page.evaluate(
@@ -285,7 +285,7 @@ describe('reader feedback', () => {
         ),
       ).toBe(0)
       await page.evaluate(() =>
-        document.querySelector<HTMLButtonElement>('button[aria-controls="mobile-nav-sheet"]')!
+        document.querySelector<HTMLButtonElement>('button.rp-navtoggle')!
           .click()
       )
       await settle(page, () => document.querySelector('#mobile-nav-sheet') !== null, 'the menu')
@@ -317,11 +317,12 @@ describe('reader feedback', () => {
       expect(
         await page.evaluate(() => ({
           overflow: document.body.style.overflow,
-          focus: document.activeElement?.getAttribute('aria-controls'),
-          expanded: document.querySelector('button[aria-controls="mobile-nav-sheet"]')
+          // The toggle names the sheet in aria-controls only while it is mounted.
+          focus: document.activeElement?.classList.contains('rp-navtoggle'),
+          expanded: document.querySelector('button.rp-navtoggle')
             ?.getAttribute('aria-expanded'),
         })),
-      ).toEqual({ overflow: '', focus: 'mobile-nav-sheet', expanded: 'false' })
+      ).toEqual({ overflow: '', focus: true, expanded: 'false' })
     } finally {
       await page.close()
     }
@@ -341,9 +342,9 @@ describe('reader feedback', () => {
           await page.reload()
           await page.evaluate(() => document.documentElement.style.fontSize = '22px')
           if (width < 640) {
-            await page.waitForSelector('button[aria-controls="mobile-nav-sheet"]')
+            await page.waitForSelector('button.rp-navtoggle')
             await page.evaluate(() =>
-              document.querySelector<HTMLButtonElement>('button[aria-controls="mobile-nav-sheet"]')!
+              document.querySelector<HTMLButtonElement>('button.rp-navtoggle')!
                 .click()
             )
             await settle(

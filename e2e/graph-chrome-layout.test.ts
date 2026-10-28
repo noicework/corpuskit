@@ -388,7 +388,7 @@ Deno.test('graph fits below compact chrome and recovers mobile navigation only a
             const returned = await page.evaluate(() => {
               const home = document.querySelector('.rp-tenant > header a[href]')!
                 .getBoundingClientRect()
-              const menu = document.querySelector('[aria-controls=mobile-nav-sheet]')!
+              const menu = document.querySelector('button.rp-navtoggle')!
                 .getBoundingClientRect()
               return {
                 homeTop: home.top,

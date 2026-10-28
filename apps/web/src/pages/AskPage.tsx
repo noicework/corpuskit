@@ -2808,7 +2808,14 @@ export function AskPage() {
       ? (lastMessage.rateLimited
         ? ui('The portal is busy - retrying shortly')
         : ui('Answer unavailable'))
-      : ui('Answer complete')
+      // Said once, when the answer settles - never per streamed chunk - with what came back,
+      // so a screen reader hears the sources and citations that appear with it (WCAG 4.1.3).
+      : `${ui('Answer complete')} ${
+        ui('{retrieved} sources retrieved, {cited} cited.', {
+          retrieved: lastMessage.sources.length,
+          cited: lastMessage.citations.length,
+        })
+      }`
     : ''
 
   return (
@@ -2882,6 +2889,11 @@ export function AskPage() {
         <div
           ref={scrollWrapRef}
           className='rp-scroll flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain lg:overflow-visible'
+          // A control reached by Tab scrolls into view above the pinned composer, not under it
+          // (WCAG 2.4.11): at 200% zoom the bar takes about a third of the screen.
+          style={isCompact
+            ? { scrollPaddingBottom: composerHeight + keyboardInset + 12 }
+            : undefined}
         >
           {
             /* The title and Export bar. It lives INSIDE the scroll container
@@ -3187,6 +3199,7 @@ export function AskPage() {
               </label>
               <textarea
                 id='ask-composer'
+                aria-describedby='ask-composer-hint'
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={handleKeyDown}
@@ -3220,9 +3233,14 @@ export function AskPage() {
             {
               /* Physical-keyboard guidance. On a phone there is no Shift+Enter
               * to give, and the row would cost the thread its own height in a
-              * bar that is already pinned over it. */
+              * bar that is already pinned over it. A fine pointer keeps it at any
+              * width, so a desktop reader zoomed to 200% still sees it (WCAG
+              * 3.3.2); the field names it as its description either way. */
             }
-            <p className='mt-1.5 hidden px-1 text-xs text-ink-3 lg:block'>
+            <p
+              id='ask-composer-hint'
+              className='mt-1.5 hidden px-1 text-xs text-ink-3 lg:block pointer-fine:block'
+            >
               {ui('Enter to send · Shift+Enter for a new line')}
             </p>
           </form>

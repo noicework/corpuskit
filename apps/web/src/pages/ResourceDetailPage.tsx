@@ -1,5 +1,6 @@
 import { ResourceProvenanceLabel } from '../components/ResourceProvenanceLabel.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { usePageSubject } from '../lib/page-subject.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import {
   type CSSProperties,
@@ -1692,6 +1693,9 @@ export function ResourceDetailPage() {
     retry: (failureCount, err) =>
       !(err instanceof ApiError && err.status === 404) && failureCount < 1,
   })
+
+  // The tab names the document, not just "Document" (WCAG 2.4.2).
+  usePageSubject(resource?.title)
 
   const { data: content, isLoading: contentLoading } = useQuery({
     queryKey: ['resource-content', config.slug, id],

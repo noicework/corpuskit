@@ -146,10 +146,15 @@ export function HelpMarkdown({
               </blockquote>
             )
           case 'code':
+            // A long line scrolls sideways; the block takes focus so the keyboard can scroll it
+            // too (WCAG 2.1.1), as the tables below do.
             return (
               <pre
                 key={index}
-                className='overflow-x-auto rounded-[var(--rp-radius)] bg-surface-2 p-3 text-xs leading-relaxed text-ink-2'
+                tabIndex={0}
+                role='region'
+                aria-label={ui('Code example')}
+                className='rp-focus overflow-x-auto rounded-[var(--rp-radius)] bg-surface-2 p-3 text-xs leading-relaxed text-ink-2'
               >
                 <code>{block.text}</code>
               </pre>

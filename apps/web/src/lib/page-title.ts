@@ -53,12 +53,19 @@ export function surfaceName(pathname: string, ui: TitleUi = englishTitle): strin
   return surface ? ui(surface) : undefined
 }
 
-/** "Library | Southern Waters Research Portal", or the product name on the home page. */
+/**
+ * "Library | Southern Waters Research Portal", or the product name on the home page. A page's
+ * own subject (a document's title, the library's search and filters) goes in front, so tabs of
+ * the same surface differ: "Kelp forest recovery | Document | Southern Waters Research Portal".
+ */
 export function pageTitle(
   pathname: string,
   productName: string,
   ui: TitleUi = englishTitle,
+  subject?: string | null,
 ): string {
   const surface = surfaceName(pathname, ui)
-  return surface ? `${surface} | ${productName}` : productName
+  const named = surface ? `${surface} | ${productName}` : productName
+  const lead = subject?.trim()
+  return lead ? `${lead} | ${named}` : named
 }

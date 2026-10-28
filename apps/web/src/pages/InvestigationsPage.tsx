@@ -129,11 +129,16 @@ function CreateInvestigationForm({ slug }: { slug: string }) {
     <form onSubmit={onSubmit} className='rp-card flex flex-col gap-4 p-5 lg:p-6'>
       <div>
         <label htmlFor='investigation-name' className='mb-1.5 block text-sm font-medium text-ink'>
-          {ui('Name')}
+          {ui('Investigation name')}
         </label>
+        {
+          /* The investigation's name, not the reader's: the label says so, and the browser
+            is told not to offer the person's own name (WCAG 1.3.5 applies to personal data). */
+        }
         <input
           id='investigation-name'
           type='text'
+          autoComplete='off'
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder={copy.investigationExample}
