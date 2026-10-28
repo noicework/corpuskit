@@ -175,7 +175,9 @@ Composing (`mode: "orchestrated"`):
    no passage supports is removed, and the markers are renumbered by first appearance. The step's
    `reason` says what was removed. Collection labels and their words are allowed attribution
    terms, so they are not required to appear in the cited passage as claim entities. Figures
-   remain independently checked, including `%` and `per cent` spellings. An answer left with no
+   remain independently checked, including `%` and `per cent` spellings. Allowing a collection
+   label never exempts its claim's figures: `12.9 billion dollars` can support `$12.9 billion`,
+   while a changed value such as `12.8` is rejected. An answer left with no
    supported citation is declined using the existing wording, followed by one closest retrieved
    title per collection. `done.text` contains that complete decline even after a long provisional
    answer has already streamed; these closest sources are not emitted as verified citations.
