@@ -126,7 +126,7 @@ function AddPortalContent() {
                 className='rp-input'
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder={ui('e.g. Soil Research Hub')}
+                placeholder={ui('e.g. AgriFutures Research Hub')}
                 autoComplete='off'
                 required
                 minLength={2}
