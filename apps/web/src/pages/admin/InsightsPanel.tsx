@@ -262,6 +262,26 @@ function InsightsPanelContent({ slug }: { slug: string }) {
 
       {isError && <p className='text-sm text-ink-3'>{ui('Could not load insights.')}</p>}
 
+      {data?.guardrails && (
+        <dl
+          className='grid grid-cols-[repeat(auto-fit,minmax(min(9rem,100%),1fr))] gap-3'
+          data-guardrail-counts
+        >
+          <StatTile
+            label={ui('Questions refused by policy')}
+            value={String(data.guardrails.questionsRefused)}
+          />
+          <StatTile
+            label={ui('Answers withheld for blocked terms')}
+            value={String(data.guardrails.answersWithheld)}
+          />
+          <StatTile
+            label={ui('Answers withheld for length')}
+            value={String(data.guardrails.lengthWithheld)}
+          />
+        </dl>
+      )}
+
       {data && data.totalAsks === 0 && (
         <div className='rounded-[var(--rp-radius)] border border-dashed border-line bg-surface-2 p-6'>
           <p className='text-sm font-semibold text-ink'>{ui('No questions asked yet')}</p>
