@@ -34,6 +34,7 @@ import type { DocPage } from '@research-portal/core'
 import type {
   AskOptions,
   CatalogOptions,
+  ExportResource,
   ListResourcesOptions,
   RetrievalProvider,
   SearchOptions,
@@ -58,6 +59,7 @@ import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
 import { dedupeNames, isNoiseEntity, keepEntity, preferredSpelling } from './entity-filter.ts'
 import { rankSuggestedQuestions } from './suggest-ranking.ts'
+import { exportResource } from './portal-export.ts'
 import {
   catalogFilterExpression,
   matchesCatalogFilters,
@@ -1431,6 +1433,31 @@ export class AragProvider implements RetrievalProvider {
     options: ListResourcesOptions = {},
   ): Promise<ResourceSummary[]> {
     return (await this.loadCatalogue(tenant, options.bounded === true)).resources
+  }
+
+  /** Administrative export uses fresh provider pages, with no reader visibility filters. */
+  async *exportResources(tenant: TenantConfig, signal: AbortSignal): AsyncIterable<ExportResource> {
+    const client = this.client(tenant)
+    const seen = new Set<string>()
+    for (let page = 0;; page++) {
+      signal.throwIfAborted()
+      const catalog = await client.getJson<{ resources: Record<string, RawResource> }>(
+        `/catalog?page_number=${page}&page_size=100&show=basic&show=extra&show=origin&show=values`,
+        { signal },
+      )
+      if (!catalog.resources || typeof catalog.resources !== 'object') {
+        throw new Error('Incomplete export inventory')
+      }
+      const batch = Object.entries(catalog.resources)
+      for (const [id, raw] of batch) {
+        signal.throwIfAborted()
+        // A changing page must fail visibly instead of producing a duplicate or looping forever.
+        if (seen.has(id)) throw new Error('Export inventory changed during pagination')
+        seen.add(id)
+        yield exportResource(this.toSummary(id, raw), raw)
+      }
+      if (batch.length < 100) return
+    }
   }
 
   /**
