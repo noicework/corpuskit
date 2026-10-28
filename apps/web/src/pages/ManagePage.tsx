@@ -1,3 +1,4 @@
+import { EvaluationsPanel } from './admin/EvaluationsPanel.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -38,6 +39,7 @@ const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'taxonomy', label: 'Taxonomy', permission: 'taxonomy.write' },
   { id: 'graph', label: 'Knowledge graph', permission: 'graph.write' },
   { id: 'appearance', label: 'Appearance', permission: 'appearance.write' },
+  { id: 'evaluations', label: 'Evaluations', permission: 'behaviour.write' },
   { id: 'behaviour', label: 'Behaviour', permission: 'behaviour.write' },
   { id: 'extraction', label: 'Extraction', permission: 'content.write' },
   { id: 'details', label: 'Details', permission: 'appearance.write' },
@@ -373,6 +375,7 @@ function ManageContent() {
             {tab === 'appearance' && can('appearance.write') && (
               <AppearancePanel slug={slug} branding={config.branding} />
             )}
+            {tab === 'evaluations' && <EvaluationsPanel slug={slug} />}
             {tab === 'behaviour' && can('behaviour.write') && <BehaviourPanel slug={slug} />}
             {tab === 'extraction' && can('content.write') && <ExtractionPanel slug={slug} />}
             {tab === 'details' && can('appearance.write') && (

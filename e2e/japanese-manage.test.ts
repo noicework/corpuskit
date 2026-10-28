@@ -30,6 +30,7 @@ const tabs = [
   'taxonomy',
   'graph',
   'appearance',
+  'evaluations',
   'behaviour',
   'extraction',
   'details',
