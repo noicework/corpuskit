@@ -46,8 +46,7 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   '1 step': 'ステップ1件',
   '{count} steps': 'ステップ{count}件',
   'Waiting for the first step.': '最初のステップを待っています。',
-  'Each step appears here as the portal works on your question.':
-    'ポータルが質問に取り組むにつれて、各ステップがここに表示されます。',
+  'No steps ran.': 'ステップは実行されませんでした。',
   'Preparing': '準備',
   'Searching': '検索',
   'Summarising': '要約',
@@ -61,8 +60,7 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'Research collections searched': '検索した研究コレクション',
   'Passages from {found} of {total}': '{total}件中{found}件から本文',
   'Waiting for the list of collections to search.': '検索するコレクションの一覧を待っています。',
-  'Each collection searched appears here with the passages it returned.':
-    '検索した各コレクションと、返された本文がここに表示されます。',
+  'No collections were searched.': '検索したコレクションはありません。',
   'federated partner': '連携パートナー',
   'partner over MCP': 'MCP経由のパートナー',
   'Untitled passage': '無題の本文',

@@ -77,9 +77,7 @@ export function AgentSteps(
       {steps.length === 0
         ? (
           <p className='mt-2 text-sm leading-relaxed text-ink-2'>
-            {status === 'streaming'
-              ? ui('Waiting for the first step.')
-              : ui('Each step appears here as the portal works on your question.')}
+            {status === 'streaming' ? ui('Waiting for the first step.') : ui('No steps ran.')}
           </p>
         )
         : runs.map((run, runIndex) => (

@@ -296,7 +296,7 @@ export function AgentSources(
           <p className='mt-2 text-sm leading-relaxed text-ink-2'>
             {status === 'streaming'
               ? ui('Waiting for the list of collections to search.')
-              : ui('Each collection searched appears here with the passages it returned.')}
+              : ui('No collections were searched.')}
           </p>
         )
         : (

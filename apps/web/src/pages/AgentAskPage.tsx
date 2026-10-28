@@ -290,29 +290,37 @@ export function AgentAskPage() {
               </section>
             )}
 
-          <div className='mt-8'>
-            <AgentSources
-              sources={state.sources}
-              steps={state.steps}
-              status={state.status}
-              citations={state.citations}
-              numbers={numbers}
-            />
-          </div>
+          {started
+            ? (
+              <div className='mt-8'>
+                <AgentSources
+                  sources={state.sources}
+                  steps={state.steps}
+                  status={state.status}
+                  citations={state.citations}
+                  numbers={numbers}
+                />
+              </div>
+            )
+            : null}
         </div>
 
-        <aside
-          aria-label={ui('Steps and collections searched')}
-          className='rp-agent-rail min-w-0 space-y-6'
-          data-agent-rail
-        >
-          <AgentSteps
-            steps={state.steps}
-            status={state.status}
-            now={agent.elapsedMs + startedAtOf(agent)}
-            total={stepTotal(state)}
-          />
-        </aside>
+        {started
+          ? (
+            <aside
+              aria-label={ui('Steps and collections searched')}
+              className='rp-agent-rail min-w-0 space-y-6'
+              data-agent-rail
+            >
+              <AgentSteps
+                steps={state.steps}
+                status={state.status}
+                now={agent.elapsedMs + startedAtOf(agent)}
+                total={stepTotal(state)}
+              />
+            </aside>
+          )
+          : null}
       </div>
     </main>
   )
