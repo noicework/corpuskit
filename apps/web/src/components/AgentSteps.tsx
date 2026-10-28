@@ -5,7 +5,6 @@ import {
   type AgentPhase,
   type AgentStep,
   durationLabel,
-  PHASE_ORDER,
 } from '../lib/agent-ask-state.ts'
 import { AlertCircle, Check } from './icons.tsx'
 
@@ -18,17 +17,21 @@ const PHASE_LABELS: Record<AgentPhase, string> = {
 }
 
 /**
- * The steps by phase, phases in the order the work happens and steps in arrival order within
- * each, so a second search of a source sits with the searches rather than after the summaries.
- * A phase with no step yet is left out: nothing is claimed that has not started.
+ * The steps by phase: phases in the order the work reached them, steps in arrival order within
+ * each. A second search of a source sits with the searches rather than after the summaries, and
+ * a composed answer, which writes before it verifies, keeps that order. A phase with no step
+ * yet is not shown: nothing is claimed that has not started.
  */
 export function phaseGroups(
   steps: readonly AgentStep[],
 ): { phase: AgentPhase; steps: AgentStep[] }[] {
-  return PHASE_ORDER.flatMap((phase) => {
-    const own = steps.filter((step) => step.phase === phase)
-    return own.length > 0 ? [{ phase, steps: own }] : []
-  })
+  const groups: { phase: AgentPhase; steps: AgentStep[] }[] = []
+  for (const step of steps) {
+    const group = groups.find((item) => item.phase === step.phase)
+    if (group) group.steps.push(step)
+    else groups.push({ phase: step.phase, steps: [step] })
+  }
+  return groups
 }
 
 /**
