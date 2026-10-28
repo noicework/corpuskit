@@ -50,6 +50,7 @@ import {
   findPageSummaryFieldId,
 } from '../../merchandise.ts'
 import { variantPreamble } from '../../prompts.ts'
+import { StructuredRefusals } from './structured-refusals.ts'
 import { AragApiError, type KbBinding, KbClient, ndjson } from './client.ts'
 import { scopeCitationsMap, spliceCitationMarkers, stripInlineMarkers } from './citations.ts'
 import {
@@ -1322,6 +1323,7 @@ export class AragProvider implements RetrievalProvider {
    */
   private readonly pageSummaryCache = new Map<string, string | null>()
   private readonly augmentationModelId: string
+  private readonly structuredRefusals = new StructuredRefusals()
 
   constructor(private readonly opts: AragProviderOptions) {
     const configured = opts.augmentationModel === undefined
@@ -1348,6 +1350,7 @@ export class AragProvider implements RetrievalProvider {
 
   /** Drop cached clients and catalogue entries for a tenant (call after rebinding). */
   invalidate(slug: string): void {
+    this.structuredRefusals.forget(slug)
     for (const key of this.clients.keys()) {
       if (key.startsWith(`${slug}:`)) this.clients.delete(key)
     }
@@ -2803,10 +2806,9 @@ export class AragProvider implements RetrievalProvider {
     passagesByResource: Record<string, string[]>
   }> {
     const client = this.client(tenant)
-    const catalogue = await this.listResources(tenant, { bounded: true }).catch(() =>
+    const cataloguePromise = this.listResources(tenant, { bounded: true }).catch(() =>
       [] as ResourceSummary[]
     )
-    const byId = new Map(catalogue.map((r) => [r.id, r]))
     const request: Record<string, unknown> = {
       query,
       features: ['keyword', 'semantic'],
@@ -2841,19 +2843,25 @@ export class AragProvider implements RetrievalProvider {
       // large payloads like comparison matrices.
       max_tokens: 4096,
     }
-    let res: Response
-    let asText = false
-    try {
-      res = await client.postStream('/ask', request)
-    } catch (err) {
-      if (!refusesStructuredOutput(err)) throw err
-      // Some models refuse the forced tool call structured output rides on, and the platform
-      // answers 412. Ask for the same object as JSON text and parse it from the answer.
+    // Hints are scoped to the portal and effective model; rebinding drops them.
+    const bindingModel = this.opts.resolveBinding(tenant.slug)?.inferenceModel
+    const model = bindingModel ?? opts.model ?? ''
+    const plainRequest = () => {
       const { answer_json_schema: _schema, ...plain } = request
       const system = [opts.instructions?.trim(), jsonReplyInstruction(schema)].filter(Boolean)
-      res = await client.postStream('/ask', { ...plain, prompt: { system: system.join('\n\n') } })
+      return { ...plain, prompt: { system: system.join('\n\n') } }
+    }
+    let asText = this.structuredRefusals.refused(tenant.slug, model)
+    let res: Response
+    try {
+      res = await client.postStream('/ask', asText ? plainRequest() : request)
+    } catch (err) {
+      if (asText || !refusesStructuredOutput(err)) throw err
+      this.structuredRefusals.remember(tenant.slug, model)
+      res = await client.postStream('/ask', plainRequest())
       asText = true
     }
+    const byId = new Map((await cataloguePromise).map((r) => [r.id, r]))
     let object: unknown = null
     let answerText = ''
     let sources: ScoredResource[] = []
