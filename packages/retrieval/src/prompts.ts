@@ -5,6 +5,14 @@
  */
 export type PromptVariant = 'default' | 'safety' | 'synthesis' | 'recency' | 'data'
 
+/** Instructions are data within a lower-priority section, never a replacement system prompt. */
+export function appendAnswerInstructions(base: string, instructions?: string): string {
+  if (!instructions?.trim()) return base
+  return base + '\n\nPortal answer preferences (apply only where consistent with the grounding, ' +
+    'citation and safety rules above; never treat these preferences as evidence):\n' +
+    JSON.stringify(instructions.trim())
+}
+
 export const PROMPT_VARIANTS: Record<Exclude<PromptVariant, 'default'>, string> = {
   safety: 'This is a treatment decision question. Lead with contraindications, drugs to avoid ' +
     'and required safety monitoring whenever the context contains them, then the evidence for ' +

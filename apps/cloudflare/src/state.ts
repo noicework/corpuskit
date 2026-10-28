@@ -1,3 +1,4 @@
+import { effectiveAskInsights, guardrailCounts } from '../../api/src/stores.ts'
 import { DuplicateReviewStore } from '../../api/src/duplicate-store.ts'
 import { AnswerRecordStore } from '../../api/src/answer-record-store.ts'
 import { EvaluationStore } from '../../api/src/evaluation-store.ts'
@@ -254,9 +255,10 @@ export class DurableState {
         )
         if (
           (operation === 'tenants.patch' &&
-            ['tenant.access.update', 'tenant.configuration.update'].includes(
-              context.input.action,
-            )) ||
+            ['tenant.access.update', 'tenant.configuration.update', 'tenant.behaviour.update']
+              .includes(
+                context.input.action,
+              )) ||
           (operation === 'duplicates.decide' && context.input.action === 'duplicate.review') ||
           (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update') ||
           (operation === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
@@ -1222,7 +1224,7 @@ export class DurableTenantStore implements TenantStoreApi {
     )
   }
 
-  promptsFor(slug: string): { ask?: string; images?: boolean } {
+  promptsFor(slug: string): import('@research-portal/core').PortalPrompts {
     this.get(slug)
     return this.existingPatch(this.load(), slug).prompts ?? {}
   }
@@ -1445,7 +1447,8 @@ export class DurableInsightsStore implements InsightsStoreApi {
 
   summary(slug: string, days = 90): InsightsSummary {
     const cutoff = Date.now() - days * 24 * 3600 * 1000
-    const all = this.all(slug).filter((item) => Date.parse(item.ts) >= cutoff)
+    const window = this.all(slug).filter((item) => Date.parse(item.ts) >= cutoff)
+    const all = effectiveAskInsights(window)
     const answered = all.filter((item) => item.answered)
     const counts = new Map<string, number>()
     for (const item of all) {
@@ -1459,6 +1462,7 @@ export class DurableInsightsStore implements InsightsStoreApi {
         : null
     }
     return {
+      guardrails: guardrailCounts(window),
       totalAsks: all.length,
       answered: answered.length,
       unanswered: all.length - answered.length,
@@ -1476,7 +1480,9 @@ export class DurableInsightsStore implements InsightsStoreApi {
           ? 'No answer found in the corpus'
           : `Weak grounding (${item.groundedness}/5)`,
       })),
-      recent: all.slice(-25).reverse().map(({ learningId: _learningId, ...item }) => item),
+      recent: all.slice(-25).reverse().map((
+        { learningId: _learningId, policyRequestId: _requestId, ...item },
+      ) => item),
     }
   }
 

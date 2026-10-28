@@ -155,7 +155,9 @@ export class AnswerRecorder {
     this.value.generation.images = options.images ?? false
     this.value.generation.topK = options.topK ?? null
     this.value.generation.maxTokens = options.maxTokens ?? null
-    for (const prompt of [options.systemPrompt, options.promptAddendum]) {
+    for (
+      const prompt of [options.systemPrompt, options.answerInstructions, options.promptAddendum]
+    ) {
       if (!prompt) continue
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(prompt))
       const hash = [...new Uint8Array(digest)].map((v) => v.toString(16).padStart(2, '0')).join('')
