@@ -10,6 +10,7 @@
 // refused rather than followed; and every path, JSON-RPC method and tool is
 // checked against an allowlist before anything is sent.
 // ---------------------------------------------------------------------------
+import { COMPOSE_PASSAGE_CHARS, COMPOSE_PASSAGES_PER_SOURCE } from '../../compose.ts'
 import {
   FEDERATION_EXCLUDE_LABEL,
   FEDERATION_ZONE,
@@ -44,7 +45,7 @@ export const PEER_MCP_METHODS = ['initialize', 'notifications/initialized', 'too
 export const PEER_MCP_TOOLS = ['search_documents', 'get_document', 'batch_get_documents'] as const
 const PROTOCOL_VERSION = '2025-06-18'
 /** Passages kept from one peer. */
-export const PEER_PASSAGES = 8
+export const PEER_PASSAGES = COMPOSE_PASSAGES_PER_SOURCE
 
 type PeerAddress = Pick<FederationPeer, 'kind' | 'zone' | 'kbId'>
 
@@ -178,7 +179,7 @@ async function searchPeerKb(
         passages.push({
           resourceId,
           title: text(raw.title) || 'Untitled document',
-          text: text(paragraph.text),
+          text: text(paragraph.text).slice(0, COMPOSE_PASSAGE_CHARS),
           ...(origin ? { originUrl: origin } : {}),
           score: typeof paragraph.score === 'number' ? paragraph.score : 0,
         })
@@ -261,26 +262,44 @@ export class PeerMcpSession {
 
 /** The JSON-RPC response with `id`, from a JSON body or a server-sent event stream. */
 async function rpcMessage(res: Response, id: number): Promise<unknown> {
-  const body = await res.text()
   if (!(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
-    try {
-      return JSON.parse(body)
-    } catch {
-      return undefined
-    }
+    return await res.json().catch(() => undefined)
   }
-  for (const event of body.split(/\r?\n\r?\n/)) {
+  const reader = res.body?.getReader()
+  if (!reader) return undefined
+  const decoder = new TextDecoder()
+  const messageFrom = (event: string): unknown => {
     const data = event.split(/\r?\n/).filter((line) => line.startsWith('data:'))
       .map((line) => line.slice(5).trimStart()).join('\n')
-    if (!data) continue
+    if (!data) return undefined
     try {
       const message = JSON.parse(data)
       if (isRecord(message) && message.id === id) return message
     } catch {
-      // Not a message: skipped.
+      // A comment, notification or non-JSON frame is not this request's answer.
     }
+    return undefined
   }
-  return undefined
+  let buffer = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) return messageFrom(buffer)
+      buffer += decoder.decode(value, { stream: true })
+      for (;;) {
+        const boundary = /\r?\n\r?\n/.exec(buffer)
+        if (!boundary) break
+        const frame = buffer.slice(0, boundary.index)
+        buffer = buffer.slice(boundary.index + boundary[0].length)
+        const message = messageFrom(frame)
+        // Streamable HTTP may keep its connection open after the result. Do not await EOF.
+        if (message !== undefined) return message
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
 }
 
 /** `arag-mcp`: the box's MCP server, `search_documents`. */
@@ -313,7 +332,7 @@ async function searchPeerMcp(
     passages.push({
       resourceId: text(meta.parent) || text(meta.paragraph_id) || `passage-${passages.length}`,
       title: text(meta.resource_title) || 'Untitled document',
-      text: text(item.text),
+      text: text(item.text).slice(0, COMPOSE_PASSAGE_CHARS),
     })
     if (passages.length === PEER_PASSAGES) break
   }

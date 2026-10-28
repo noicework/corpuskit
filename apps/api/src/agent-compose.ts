@@ -2,7 +2,7 @@
  * Agent ask without an agent (docs/AGENT-ASK.md). The portal searches each collection itself,
  * each within a time limit, composes one answer from the passages they returned on the host
  * portal's own generation path, and checks every citation against its passage with the same
- * deterministic binding the Ask answer uses before the reader sees it.
+ * deterministic binding the Ask answer uses to finalise the streamed text.
  *
  * It streams the agent ask events an agent would, with `mode: 'orchestrated'`, so a view can say
  * the portal composed the answer and never present it as an agent's. A collection that fails or
@@ -19,9 +19,13 @@ import type {
 import {
   AgentAskError,
   type AgentAskOptions,
+  COMPOSE_MAX_PASSAGES,
+  COMPOSE_PASSAGE_CHARS,
+  COMPOSE_PASSAGES_PER_SOURCE,
   type ComposePassage,
   type RetrievalProvider,
 } from '@research-portal/retrieval'
+import { composeDeadline, ComposeTimedOut } from './compose-deadline.ts'
 import { bindSentences, renderBound, sentenceFeatures } from './citation-binding.ts'
 import { agentRecordVerification } from './agent-record-verification.ts'
 
@@ -30,9 +34,9 @@ export const SOURCE_TIMEOUT_MS = 20_000
 /** How long composing the answer may take. */
 export const COMPOSE_TIMEOUT_MS = 90_000
 /** Passages kept from each collection, and the weakest match kept. */
-const PASSAGES_PER_SOURCE = 4
+const PASSAGES_PER_SOURCE = COMPOSE_PASSAGES_PER_SOURCE
 const MIN_RELEVANCE = 0.3
-const PASSAGE_CHARS = 1200
+const PASSAGE_CHARS = COMPOSE_PASSAGE_CHARS
 
 /** Said when the collections answered but none had a passage on the question. */
 export const NO_PASSAGES =
@@ -88,35 +92,6 @@ export function portalSource(config: TenantConfig): AgentSource {
   }
 }
 
-class TimedOut extends Error {}
-
-/** The promise's result, or a rejection once `ms` pass or the signal aborts. */
-function within<T>(promise: Promise<T>, ms: number, signal?: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    if (signal?.aborted) return reject(signal.reason)
-    const settle = () => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', abort)
-    }
-    const timer = setTimeout(() => {
-      settle()
-      reject(new TimedOut())
-    }, ms)
-    const abort = () => {
-      settle()
-      reject(signal?.reason)
-    }
-    signal?.addEventListener('abort', abort, { once: true })
-    promise.then((value) => {
-      settle()
-      resolve(value)
-    }, (error) => {
-      settle()
-      reject(error)
-    })
-  })
-}
-
 /**
  * The host portal's agent when it has one, otherwise the portal's own composition across
  * `portals`. The agent is used when it starts: a throw before its first event (no agent
@@ -135,7 +110,7 @@ export async function* agentAnswer(options: AgentAnswerOptions): AsyncGenerator<
       })[Symbol.asyncIterator]()
       first = await events.next()
     } catch (error) {
-      if (!provider.compose || options.signal?.aborted) throw error
+      if ((!provider.compose && !provider.composeStream) || options.signal?.aborted) throw error
       if (!(error instanceof AgentAskError && error.code === 'not_configured')) {
         console.error(`[agent-ask] agent unavailable, composing instead: ${String(error)}`)
       }
@@ -147,7 +122,7 @@ export async function* agentAnswer(options: AgentAnswerOptions): AsyncGenerator<
       return
     }
   }
-  if (!provider.compose) {
+  if (!provider.compose && !provider.composeStream) {
     throw new AgentAskError('not_configured', 'This portal has neither an agent nor a composer')
   }
   yield* composeAcross(options)
@@ -159,7 +134,11 @@ export async function* composeAcross(
 ): AsyncGenerator<AgentAskEvent> {
   const { provider, host, question, signal } = options
   const compose = provider.compose?.bind(provider)
-  if (!compose) throw new AgentAskError('not_configured', 'This portal cannot compose answers')
+  const composeStream = provider.composeStream?.bind(provider)
+  if (!compose && !composeStream) {
+    throw new AgentAskError('not_configured', 'This portal cannot compose answers')
+  }
+  if (signal?.aborted) return
   const now = options.now ?? Date.now
   const started = now()
   const sourceTimeout = options.sourceTimeoutMs ?? SOURCE_TIMEOUT_MS
@@ -168,97 +147,110 @@ export async function* composeAcross(
     ...options.portals.map((config) => ({
       source: portalSource(config),
       slug: config.slug,
-      search: async (query: string) =>
+      search: async (query: string, signal: AbortSignal) =>
         chunksFrom(
           config.slug,
-          (await provider.search(config, query, { pageSize: 8 })).resources.filter((resource) =>
-            config.slug === host.slug || !resource.federationExcluded
-          ),
+          (await provider.search(config, query, { pageSize: 8, passagesOnly: true, signal }))
+            .resources.filter((resource) =>
+              config.slug === host.slug || !resource.federationExcluded
+            ),
         ),
     })),
     ...(options.peers ?? []).map((peer) => ({ source: peer.source, search: peer.search })),
   ]
   const sources = searches.map((entry) => entry.source)
-  yield { type: 'agent-start', mode: 'orchestrated', sources }
-
-  // Every collection is searched at once, and reported in the order they answer.
-  const stepId = (source: AgentSource) => `source/${source.id}`
-  for (const source of sources) {
-    yield {
-      type: 'agent-step',
-      id: stepId(source),
-      module: 'search',
-      title: `Searching ${source.label}`,
-      status: 'started',
-    }
-  }
   type Failure = 'timeout' | 'unauthorised' | 'error'
-  type Lookup = { index: number; chunks?: AgentChunk[]; failure?: Failure }
+  type Lookup = { index: number; elapsedMs: number; chunks?: AgentChunk[]; failure?: Failure }
   const pending = new Map<number, Promise<Lookup>>()
-  const limits: AbortController[] = []
+  const limits: ReturnType<typeof composeDeadline>[] = []
+  const sourceStarted: number[] = []
   searches.forEach((entry, index) => {
-    // Aborted at the time limit, so a peer's request is cut off rather than left running.
-    const limit = new AbortController()
+    const limit = composeDeadline(sourceTimeout, signal)
     limits.push(limit)
-    const abort = () => limit.abort(signal?.reason)
-    signal?.addEventListener('abort', abort, { once: true })
+    sourceStarted[index] = now()
     pending.set(
       index,
-      within(entry.search(question, limit.signal), sourceTimeout, signal).then(
-        (chunks): Lookup => ({ index, chunks }),
+      limit.run(() => entry.search(question, limit.signal)).then(
+        (chunks): Lookup => ({
+          index,
+          chunks,
+          elapsedMs: Math.max(0, Math.round(now() - sourceStarted[index]!)),
+        }),
         (error): Lookup => {
-          if (error instanceof TimedOut) limit.abort(error)
           return {
             index,
-            failure: error instanceof TimedOut
+            elapsedMs: Math.max(0, Math.round(now() - sourceStarted[index]!)),
+            failure: error instanceof ComposeTimedOut
               ? 'timeout'
               : (error as { failure?: unknown })?.failure === 'unauthorised'
               ? 'unauthorised'
               : 'error',
           }
         },
-      ).finally(() => signal?.removeEventListener('abort', abort)),
+      ).finally(() => limit.close()),
     )
   })
   const found: AgentChunk[][] = sources.map(() => [])
   const failed: (AgentSource & { reason: Failure })[] = []
-  while (pending.size > 0) {
-    const lookup = await Promise.race(pending.values())
-    pending.delete(lookup.index)
-    if (signal?.aborted) return
-    const source = sources[lookup.index]!
-    const elapsedMs = Math.max(0, Math.round(now() - started))
-    if (lookup.failure) {
-      failed.push({ ...source, reason: lookup.failure })
+  try {
+    yield { type: 'agent-start', mode: 'orchestrated', sources }
+
+    // Every collection is searched at once, and reported in the order they answer.
+    const stepId = (source: AgentSource) => `source/${source.id}`
+    for (const source of sources) {
       yield {
         type: 'agent-step',
         id: stepId(source),
         module: 'search',
         title: `Searching ${source.label}`,
-        status: 'failed',
-        elapsedMs,
-        reason: lookup.failure === 'timeout'
-          ? `No answer within ${
-            sourceTimeout >= 1000
-              ? countOf(Math.round(sourceTimeout / 1000), 'second')
-              : countOf(sourceTimeout, 'millisecond')
-          }.`
-          : lookup.failure === 'unauthorised'
-          ? 'The collection refused its key.'
-          : 'The collection could not be searched.',
+        status: 'started',
       }
-      continue
     }
-    found[lookup.index] = lookup.chunks!
-    yield {
-      type: 'agent-step',
-      id: stepId(source),
-      module: 'search',
-      title: `Searching ${source.label}`,
-      status: 'completed',
-      elapsedMs,
+    while (pending.size > 0) {
+      const lookup = await Promise.race(pending.values())
+      pending.delete(lookup.index)
+      if (signal?.aborted) return
+      const source = sources[lookup.index]!
+      const elapsedMs = lookup.elapsedMs
+      if (lookup.failure) {
+        failed.push({ ...source, reason: lookup.failure })
+        yield {
+          type: 'agent-step',
+          id: stepId(source),
+          module: 'search',
+          title: `Searching ${source.label}`,
+          status: 'failed',
+          elapsedMs,
+          reason: lookup.failure === 'timeout'
+            ? `No answer within ${
+              sourceTimeout >= 1000
+                ? countOf(Math.round(sourceTimeout / 1000), 'second')
+                : countOf(sourceTimeout, 'millisecond')
+            }.`
+            : lookup.failure === 'unauthorised'
+            ? 'The collection refused its key.'
+            : 'The collection could not be searched.',
+        }
+        continue
+      }
+      const chunks = lookup.chunks!.filter((chunk) => chunk.text.trim()).slice(
+        0,
+        PASSAGES_PER_SOURCE,
+      )
+        .map((chunk) => ({ ...chunk, text: chunk.text.slice(0, PASSAGE_CHARS) }))
+      found[lookup.index] = chunks
+      yield {
+        type: 'agent-step',
+        id: stepId(source),
+        module: 'search',
+        title: `Searching ${source.label}`,
+        status: 'completed',
+        elapsedMs,
+      }
+      yield { type: 'agent-sources', stepId: stepId(source), source, chunks }
     }
-    yield { type: 'agent-sources', stepId: stepId(source), source, chunks: lookup.chunks! }
+  } finally {
+    for (const limit of limits) limit.close()
   }
   // Checked again now the answer is assembled: a portal that has left federation since its
   // search began contributes nothing to it.
@@ -277,8 +269,15 @@ export async function* composeAcross(
   }
 
   // Numbered in the portals' order, so a citation number never depends on who answered first.
+  // Round-robin admission stops the first large collection crowding every other one out.
+  const admitted = new Set<AgentChunk>()
+  for (let rank = 0; rank < PASSAGES_PER_SOURCE; rank++) {
+    for (const chunks of found) {
+      if (chunks[rank] && admitted.size < COMPOSE_MAX_PASSAGES) admitted.add(chunks[rank]!)
+    }
+  }
   const gathered = sources.flatMap((source, index) =>
-    found[index]!.map((chunk) => ({ source, chunk }))
+    found[index]!.filter((chunk) => admitted.has(chunk)).map((chunk) => ({ source, chunk }))
   )
   if (gathered.length === 0) {
     if (failed.length === sources.length) {
@@ -309,15 +308,30 @@ export async function* composeAcross(
     text: chunk.text,
   }))
   let text: string
+  let firstTokenMs: number | undefined
+  const limit = composeDeadline(options.composeTimeoutMs ?? COMPOSE_TIMEOUT_MS, signal)
+  let iterator: AsyncIterator<string> | undefined
+  let streamed = false
   try {
-    text = await within(
-      compose(host, question, passages, options.context ? { context: options.context } : {}),
-      options.composeTimeoutMs ?? COMPOSE_TIMEOUT_MS,
-      signal,
-    )
+    const opts = { ...(options.context ? { context: options.context } : {}), signal: limit.signal }
+    if (composeStream) {
+      text = ''
+      iterator = composeStream(host, question, passages, opts)[Symbol.asyncIterator]()
+      for (;;) {
+        const next = await limit.run(() => iterator!.next())
+        if (next.done) break
+        if (!next.value) continue
+        firstTokenMs ??= Math.max(0, Math.round(now() - composeStarted))
+        text += next.value
+        streamed = true
+        yield { type: 'delta', text: next.value }
+      }
+    } else {
+      text = await limit.run(() => compose!(host, question, passages, opts))
+    }
   } catch (error) {
     if (signal?.aborted) return
-    const timedOut = error instanceof TimedOut
+    const timedOut = error instanceof ComposeTimedOut
     yield {
       ...composeStep,
       status: 'failed',
@@ -330,11 +344,16 @@ export async function* composeAcross(
       retryable: true,
     }
     return
+  } finally {
+    limit.close()
+    // An upstream iterator may still be settling after an abort; never wait on it indefinitely.
+    void iterator?.return?.().catch(() => {})
   }
   if (signal?.aborted) return
   yield {
     ...composeStep,
     status: 'completed',
+    ...(firstTokenMs !== undefined ? { firstTokenMs } : {}),
     elapsedMs: Math.max(0, Math.round(now() - composeStarted)),
   }
 
@@ -384,11 +403,17 @@ export async function* composeAcross(
     ...(notes.length > 0 ? { reason: `${notes.join('; ')}.` } : {}),
   }
   if (bound.citations.length === 0 || !answer.trim()) {
-    yield { type: 'delta', text: NO_SUPPORTED_ANSWER }
-    yield { type: 'done', elapsedMs: Math.max(0, Math.round(now() - started)) }
+    if (!streamed) yield { type: 'delta', text: NO_SUPPORTED_ANSWER }
+    yield {
+      type: 'done',
+      elapsedMs: Math.max(0, Math.round(now() - started)),
+      text: NO_SUPPORTED_ANSWER,
+    }
     return
   }
-  for (const paragraph of answer.split(/(?<=\n\n)/)) yield { type: 'delta', text: paragraph }
+  if (!streamed) {
+    for (const paragraph of answer.split(/(?<=\n\n)/)) yield { type: 'delta', text: paragraph }
+  }
   const byChunk = new Map(gathered.map((entry) => [entry.chunk.id, entry]))
   for (const citation of bound.citations) {
     const { source, chunk } = byChunk.get(citation.resourceId)!
@@ -401,7 +426,7 @@ export async function* composeAcross(
       ...(chunk.url ? { url: chunk.url } : {}),
     }
   }
-  yield { type: 'done', elapsedMs: Math.max(0, Math.round(now() - started)) }
+  yield { type: 'done', elapsedMs: Math.max(0, Math.round(now() - started)), text: answer }
 }
 
 /** A portal's strongest passages for the question, as chunks of its source. */
