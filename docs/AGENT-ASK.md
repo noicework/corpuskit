@@ -208,6 +208,30 @@ first-text time is the slowest admitted lookup plus the model's first delta; com
 rest of one generation and the deterministic citation check. Model speed and peer latency still
 need measurement in the intended managed deployment.
 
+### Local streaming comparison (28 October 2026)
+
+Five sequential HTTP requests to the agent stub's one-host, two-peer route, at replay speed 10,
+used `Why warming? #compose sample N` (N from 0 to 4). The client clock started before `fetch`
+and recorded the first `delta` and `done` SSE frames. The baseline was `2f857bb`; the streaming
+implementation was `6b32091`. No real retrieval or generation service was called.
+
+| Client-observed milliseconds | Before | Streaming |
+|---|---:|---:|
+| First delta p50 | 870 | 370 |
+| First delta p95 | 904 | 528 |
+| Completion p50 | 870 | 872 |
+| Completion p95 | 904 | 1046 |
+
+Percentiles here are nearest-rank over five samples, not an acceptance load test. The fixture
+keeps its original six-second generation schedule (600 ms at this speed); it now emits the
+first delta after one second of generation instead of waiting for all six. Its 2.5-second hosted
+lookup therefore puts first text near 3.5 seconds and completion near 8.5 seconds at the original
+pace, before harness overhead. The peers are in-process fixtures. Completion did not improve in
+this synthetic comparison, and the small sample on a shared development machine is insufficient
+to assess completion p95. The production provider's removed catalogue walk and schema/retry
+calls are covered by fetch-count tests; their real-world time saving remains unmeasured. The
+reported live 39 to 40 seconds was not retested because this lane uses local fixtures only.
+
 What the federated ask does today, for comparison: each portal's answer streams on its own, a
 portal that throws gets its own `error` event while the others carry on, and the stream ends with
 `estate-done`. A portal that hangs has no time limit: the stream waits on it until the reader

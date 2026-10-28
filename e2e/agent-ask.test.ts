@@ -215,6 +215,13 @@ Deno.test('composition sends generation deltas well before done, with checked fi
     expect(record.status).toBe('done')
     if (done.event.type === 'done') expect(record.text).toBe(done.event.text)
     expect(record.citations.length).toBeGreaterThan(0)
+    const insight = JSON.parse(
+      Deno.readTextFileSync(`${server.directory}/insights/${AGENT_STUB_PORTAL}.jsonl`).trim(),
+    )
+    expect(insight.answered).toBe(true)
+    expect(insight.firstTokenSec).toBeGreaterThan(0)
+    expect(insight.answerSec).toBeGreaterThan(insight.firstTokenSec)
+    expect(insight.durationSec).toBeNull()
     console.log(JSON.stringify({
       replaySpeed: 10,
       firstDeltaMs: Math.round(first.at),
