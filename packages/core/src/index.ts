@@ -3,6 +3,7 @@ import { PortalLayoutSchema } from './layout.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'
 import { FederationConfigSchema } from './agent-ask.ts'
+import { SearchSourceFailureSchema, SearchSourceSchema } from './federated-search.ts'
 
 // ---------------------------------------------------------------------------
 // Tenant configuration - the single document that drives the whole portal UI.
@@ -1032,6 +1033,9 @@ export function enrichmentList(
 }
 
 export const ScoredResourceSchema = ResourceSummarySchema.extend({
+  source: SearchSourceSchema.optional(),
+  /** Partner origin link, present only when that peer allows origin links. */
+  peerUrl: z.string().url().refine((url) => /^https?:\/\//i.test(url)).optional(),
   /** Retrieval relevance in [0, 1]. */
   relevance: z.number().min(0).max(1),
   /** How many citations in the current answer point at this resource. */
@@ -1068,6 +1072,8 @@ export type SearchLookup = z.infer<typeof SearchLookupSchema>
 
 export const SearchResultsSchema = z.object({
   query: z.string(),
+  sources: SearchSourceSchema.array().optional(),
+  failedSources: SearchSourceFailureSchema.array().optional(),
   resources: ScoredResourceSchema.array(),
   relatedQuestions: QuestionSchema.array(),
   lookup: SearchLookupSchema.optional(),
@@ -1483,3 +1489,5 @@ export * from './duplicates.ts'
 
 export * from './answer-record.ts'
 export * from './evaluations.ts'
+
+export * from './federated-search.ts'
