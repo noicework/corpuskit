@@ -334,7 +334,7 @@ export function TenantLayout() {
     [sourceConfig, locale.language],
   )
   // Routes whose page owns the full viewport height.
-  const isViewportHeightRoute = /\/(ask|graph)(\/|$)/.test(location.pathname)
+  const isViewportHeightRoute = /\/(ask|agent|graph)(\/|$)/.test(location.pathname)
 
   const { data: kbStatus } = useQuery({
     queryKey: ['kb-status', access.identityKey, slug, access.generation],

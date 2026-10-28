@@ -91,7 +91,7 @@ describe('agent ask page', () => {
         }
       })
       expect(seen.title).toBe('Agent ask | Southern Waters Research Portal')
-      expect(seen.heading).toBe('Ask across the collections')
+      expect(seen.heading).toBe('How is warming changing pests? #fast')
       expect(seen.mode).toBe("Answered by the portal's research agent")
       expect(seen.steps).toBe(12)
       expect(seen.stepStatuses).toBe(1)
@@ -240,7 +240,7 @@ describe('agent ask page', () => {
           ' ',
         ).trim(),
       }))
-      expect(seen.label).toBe('Ask')
+      expect(seen.label).toBe('Send')
       expect(seen.focused).toBe(true)
       expect(seen.steps).toBeGreaterThanOrEqual(1)
       expect(seen.notice).toContain('Stopped')
@@ -278,7 +278,7 @@ describe('agent ask page', () => {
           scrollWidth: document.documentElement.scrollWidth,
           innerWidth: innerWidth,
           small,
-          labelled: label !== null && label.getBoundingClientRect().height > 0,
+          labelled: label !== null && (label.textContent ?? '').trim().length > 0,
           describedBy: document.getElementById('agent-question')?.getAttribute('aria-describedby'),
           unreachable: controls.filter((el) => el.tabIndex < 0 && el.tagName !== 'A').length,
           expandedControls: Array.from(

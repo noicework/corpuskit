@@ -4,8 +4,6 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'Ask across the collections': 'コレクションを横断して質問',
   "Ask a question across all of this portal's collections. An answer can take up to two minutes.":
     'このポータルのすべてのコレクションに質問します。回答には最長2分ほどかかります。',
-  'Enter to send · Shift+Enter for a new line · up to 2,000 characters':
-    'Enterで送信 · Shift＋Enterで改行 · 2,000文字まで',
   'Portals to include': '含めるポータル',
   'this portal': 'このポータル',
   'Each organisation decides whether its portal takes part, so a portal selected here may be left out. The collections searched show which took part.':
@@ -17,7 +15,6 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
     '生産地域間の移動規制は何をきっかけに発動されますか？',
   'Which management changes does the research recommend for hot seasons?':
     '暑い季節に向けて、研究はどのような管理の変更を推奨していますか？',
-  'Steps and collections searched': 'ステップと検索したコレクション',
   'No answer arrived within five minutes, so the page stopped waiting. The steps and passages found so far are kept. Try again, or ask a narrower question.':
     '5分以内に回答が届かなかったため、待機を終了しました。これまでのステップと本文はそのまま残ります。もう一度試すか、質問を絞ってください。',
   "The portal could not start this answer. Try again in a moment, or use Ask for this portal's collection.":

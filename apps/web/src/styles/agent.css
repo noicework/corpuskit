@@ -13,31 +13,6 @@
   min-height: 2.75rem;
 }
 
-.rp-agent-composer {
-  min-height: 2.75rem;
-}
-
-.rp-agent-layout {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-@media (min-width: 64rem) {
-  .rp-agent-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
-    gap: 2rem;
-    align-items: start;
-  }
-}
-
-@media (min-width: 96rem) {
-  .rp-agent-layout {
-    grid-template-columns: minmax(0, 1fr) minmax(22rem, 28rem);
-    gap: 3rem;
-  }
-}
-
 /* A step that failed: the bad status pair, never a bare red. */
 .rp-agent-mark-failed {
   background-color: var(--rp-bad-bg);

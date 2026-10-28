@@ -5,8 +5,8 @@ import { useAccess } from '../components/AccessProvider.tsx'
 import { AgentAnswer } from '../components/AgentAnswer.tsx'
 import { AgentSources } from '../components/AgentSources.tsx'
 import { AgentSteps } from '../components/AgentSteps.tsx'
-import { Check, Send, X } from '../components/icons.tsx'
-import { Button, LiveStatus } from '../components/ui.tsx'
+import { ArrowRight, Check } from '../components/icons.tsx'
+import { LiveStatus } from '../components/ui.tsx'
 import { useAgentAnnouncements, useAgentAsk } from '../components/useAgentAsk.ts'
 import { getTenants } from '../api/client.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
@@ -152,68 +152,106 @@ export function AgentAskPage() {
     () => citationNumbers(state.text, state.citations),
     [state.text, state.citations],
   )
-  const askLabel = streaming ? ui('Stop') : ui('Ask')
+  // From `xl` the steps sit in a rail beside the answer, as the Ask page's sources do; below it
+  // they follow the answer in the column, so a phone never carries two copies.
+  const wide = useWideViewport()
 
   return (
     <main
       aria-label={ui('Agent ask')}
-      className='rp-agent-page rp-shell py-6 sm:py-8 lg:py-10'
+      className='rp-agent-page rp-answer-page mx-auto flex h-[calc(100dvh-var(--rp-header-h,126px))] max-w-[100rem] flex-col gap-3 px-4 pt-4 pb-0 sm:px-6 sm:pt-6 lg:flex-row lg:gap-6 lg:pb-6 2xl:gap-8'
       data-agent-page
     >
-      <LiveStatus message={announcement} />
-      <div className='rp-agent-layout'>
-        <div className='min-w-0'>
-          <div className='max-w-3xl'>
-            <h1 className='rp-display text-2xl text-ink sm:text-3xl'>
-              {ui('Ask across the collections')}
-            </h1>
-            <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
-              {ui(
-                "Ask a question across all of this portal's collections. An answer can take up to two minutes.",
+      {/* min-h-0 keeps a long answer inside the viewport-height main on a phone, as on Ask. */}
+      <div className='flex w-full min-w-0 min-h-0 flex-1 flex-col'>
+        <LiveStatus message={announcement} />
+        <div className='rp-scroll flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain lg:overflow-visible'>
+          <section
+            aria-label={ui('Answer')}
+            className='rp-scroll flex-1 pb-4 lg:overflow-y-auto'
+          >
+            {!started
+              ? (
+                <div className='space-y-6 py-4 sm:py-8'>
+                  <div className='max-w-2xl'>
+                    <h1 className='rp-display text-2xl text-ink sm:text-3xl'>
+                      {ui('Ask across the collections')}
+                    </h1>
+                    <p className='mt-2 text-sm leading-relaxed text-ink-2 sm:text-base'>
+                      {ui(
+                        "Ask a question across all of this portal's collections. An answer can take up to two minutes.",
+                      )}
+                    </p>
+                  </div>
+                  <div className='mt-4 grid gap-2.5 sm:grid-cols-2' data-agent-examples>
+                    {EXAMPLE_QUESTIONS.map((question) => (
+                      <button
+                        key={question}
+                        type='button'
+                        onClick={() => send(ui(question))}
+                        disabled={!canAsk}
+                        className='rp-suggest-card'
+                      >
+                        <span className='rp-suggest-text'>{ui(question)}</span>
+                        <ArrowRight size='sm' className='rp-suggest-arrow' />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+              : (
+                <div className='space-y-6 py-4'>
+                  {/* The question is the page's heading once asked, as on Ask. */}
+                  <h1
+                    className='rp-display rp-answer-question rp-answer-question-clamped text-xl text-ink sm:text-2xl'
+                    title={agent.question ?? undefined}
+                  >
+                    {agent.question}
+                  </h1>
+                  {agent.question !== null
+                    ? (
+                      <AgentAnswer
+                        state={state}
+                        question={agent.question}
+                        elapsedMs={agent.elapsedMs}
+                        numbers={numbers}
+                        onRetry={retry}
+                      />
+                    )
+                    : null}
+                  {!wide
+                    ? (
+                      <div className='rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-3'>
+                        <AgentSteps
+                          steps={state.steps}
+                          status={state.status}
+                          now={agent.elapsedMs + startedAtOf(agent)}
+                          total={stepTotal(state)}
+                        />
+                      </div>
+                    )
+                    : null}
+                  <AgentSources
+                    sources={state.sources}
+                    steps={state.steps}
+                    status={state.status}
+                    citations={state.citations}
+                    numbers={numbers}
+                  />
+                </div>
               )}
-            </p>
-          </div>
+          </section>
 
-          <form onSubmit={onSubmit} className='mt-6' data-agent-form>
-            <label htmlFor='agent-question' className='block text-sm font-medium text-ink'>
-              {ui('Your question')}
-            </label>
-            <div className='rp-field mt-1.5 flex flex-col gap-2 rounded-[var(--rp-radius-input)] border bg-surface p-2 sm:flex-row sm:items-end'>
-              <textarea
-                id='agent-question'
-                ref={textareaRef}
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                onKeyDown={onKeyDown}
-                rows={2}
-                maxLength={2000}
-                aria-describedby='agent-question-hint'
-                placeholder={ui('Ask a question about this research')}
-                className='rp-agent-composer min-w-0 flex-1 resize-none bg-transparent px-2 py-2 text-base text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none sm:text-sm'
-              />
-              <Button
-                type={streaming ? 'button' : 'submit'}
-                variant={streaming ? 'outline' : 'primary'}
-                leadingIcon={streaming ? X : Send}
-                onClick={streaming ? agent.stop : undefined}
-                disabled={!canAsk}
-                className='rp-agent-target shrink-0'
-                data-agent-submit
-              >
-                {askLabel}
-              </Button>
-            </div>
-            <p id='agent-question-hint' className='mt-1.5 text-xs leading-relaxed text-ink-2'>
-              {ui('Enter to send · Shift+Enter for a new line · up to 2,000 characters')}
-            </p>
-
+          <form
+            onSubmit={onSubmit}
+            className='sticky bottom-0 z-10 mt-2 shrink-0 border-t border-line bg-[var(--rp-app)] pt-2 pb-2 lg:static lg:border-t-0 lg:bg-transparent lg:pt-0 lg:pb-0'
+            data-agent-form
+          >
             {!onPortalHost && others.length > 0
               ? (
-                <fieldset className='mt-4' data-agent-collections>
-                  <legend className='text-sm font-medium text-ink'>
-                    {ui('Portals to include')}
-                  </legend>
-                  <div className='mt-2 flex flex-wrap gap-2'>
+                <fieldset className='mb-1.5 px-1' data-agent-collections>
+                  <legend className='sr-only'>{ui('Portals to include')}</legend>
+                  <div className='flex flex-wrap items-center gap-2'>
                     <span className='rp-chip rp-chip-active rp-agent-target cursor-default'>
                       <Check size='sm' />
                       <span className='min-w-0'>
@@ -242,86 +280,67 @@ export function AgentAskPage() {
                         </button>
                       )
                     })}
+                    <span className='hidden text-xs text-ink-3 lg:inline'>
+                      {ui(
+                        'Each organisation decides whether its portal takes part, so a portal selected here may be left out. The collections searched show which took part.',
+                      )}
+                    </span>
                   </div>
-                  <p className='mt-1.5 text-xs leading-relaxed text-ink-2'>
-                    {ui(
-                      'Each organisation decides whether its portal takes part, so a portal selected here may be left out. The collections searched show which took part.',
-                    )}
-                  </p>
                 </fieldset>
               )
               : null}
+            <div className='rp-field flex items-end gap-2 rounded-[calc(var(--rp-radius)+4px)] border bg-surface p-2 shadow-sm'>
+              <label htmlFor='agent-question' className='sr-only'>
+                {ui('Ask a question')}
+              </label>
+              <textarea
+                id='agent-question'
+                ref={textareaRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={onKeyDown}
+                rows={1}
+                maxLength={2000}
+                aria-describedby='agent-question-hint'
+                placeholder={ui('Ask a question about this research')}
+                className='rp-answer-composer max-h-40 min-w-0 flex-1 resize-none rounded-[var(--rp-radius)] border-0 bg-transparent px-2 py-2 text-sm text-ink placeholder:text-[var(--rp-ink-3)] focus:outline-none disabled:opacity-60 lg:px-3'
+              />
+              {/* One element for Send and Stop, so the focus never leaves it when the state flips. */}
+              <button
+                type={streaming ? 'button' : 'submit'}
+                onClick={streaming ? agent.stop : undefined}
+                disabled={!canAsk}
+                className={`rp-btn shrink-0 ${streaming ? 'rp-btn-outline' : 'rp-btn-primary'}`}
+                data-agent-submit
+              >
+                {streaming ? ui('Stop') : ui('Send')}
+              </button>
+            </div>
+            <p id='agent-question-hint' className='mt-1.5 hidden px-1 text-xs text-ink-3 lg:block'>
+              {ui('Enter to send · Shift+Enter for a new line')}
+            </p>
           </form>
-
-          {started && agent.question !== null
-            ? (
-              <div className='mt-6'>
-                <AgentAnswer
-                  state={state}
-                  question={agent.question}
-                  elapsedMs={agent.elapsedMs}
-                  numbers={numbers}
-                  onRetry={retry}
-                />
-              </div>
-            )
-            : (
-              <section aria-labelledby='agent-examples-heading' className='mt-6'>
-                <h2 id='agent-examples-heading' className='rp-eyebrow text-ink-3'>
-                  {ui('Try a question')}
-                </h2>
-                <ul className='mt-3 flex flex-wrap gap-2'>
-                  {EXAMPLE_QUESTIONS.map((question) => (
-                    <li key={question} className='min-w-0 max-w-full'>
-                      <button
-                        type='button'
-                        onClick={() => {
-                          setDraft(question)
-                          textareaRef.current?.focus()
-                        }}
-                        disabled={!canAsk}
-                        className='rp-chip rp-agent-target h-auto whitespace-normal py-1.5 text-left'
-                      >
-                        {ui(question)}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-          {started
-            ? (
-              <div className='mt-8'>
-                <AgentSources
-                  sources={state.sources}
-                  steps={state.steps}
-                  status={state.status}
-                  citations={state.citations}
-                  numbers={numbers}
-                />
-              </div>
-            )
-            : null}
         </div>
+      </div>
 
-        {started
-          ? (
-            <aside
-              aria-label={ui('Steps and collections searched')}
-              className='rp-agent-rail min-w-0 space-y-6'
-              data-agent-rail
-            >
+      {started && wide
+        ? (
+          <aside
+            aria-label={ui('Steps')}
+            className='hidden min-h-0 w-80 min-w-0 max-w-[28%] shrink-0 flex-col xl:flex 2xl:w-96'
+            data-agent-rail
+          >
+            <div className='rp-scroll min-h-0 flex-1 overflow-y-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-3'>
               <AgentSteps
                 steps={state.steps}
                 status={state.status}
                 now={agent.elapsedMs + startedAtOf(agent)}
                 total={stepTotal(state)}
               />
-            </aside>
-          )
-          : null}
-      </div>
+            </div>
+          </aside>
+        )
+        : null}
     </main>
   )
 }
@@ -329,4 +348,22 @@ export function AgentAskPage() {
 /** The clock the steps count against: the moment the question was sent. */
 function startedAtOf(agent: { elapsedMs: number }): number {
   return Date.now() - agent.elapsedMs
+}
+
+/** Tailwind's `xl` breakpoint (80rem): where the steps move from the column to the rail. */
+const XL_BREAKPOINT = '(min-width: 80rem)'
+
+function useWideViewport(): boolean {
+  const query = () =>
+    typeof globalThis.matchMedia === 'function' ? globalThis.matchMedia(XL_BREAKPOINT) : null
+  const [wide, setWide] = useState(() => query()?.matches ?? true)
+  useEffect(() => {
+    const media = query()
+    if (!media) return
+    const onChange = (event: MediaQueryListEvent) => setWide(event.matches)
+    setWide(media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
+  return wide
 }
