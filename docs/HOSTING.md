@@ -339,7 +339,7 @@ including owners, portal data keys and break-glass cannot import a configuration
 
 The required fields are `slug`, `branding`, `searchPlaceholder`, `topics`, `suggestedQuestions`,
 `entityTypes` and `relationTypes`. Optional fields are `languagePolicy`, `assessmentHeading`,
-`regionalDiscovery`, `timezone`, `copy` and `accessibility` (see
+`regionalDiscovery`, `demoTour`, `timezone`, `copy` and `accessibility` (see
 [Accessibility statement](#accessibility-statement)). `slug` must exactly match the existing
 portal.
 `branding` replaces its complete presentation document, including its optional layout; omitted
@@ -395,7 +395,8 @@ gain access through it, and a deployment without Entra refuses such an assignmen
 Portal updates accept the appearance fields (`name`, `organisation`, `tagline`, `colours`,
 `typography`, `shape`, `textScale`, `density`, `colourScheme`, `paletteId` and `layout`, see
 [Portal layout](#portal-layout)) and the behaviour fields `searchPlaceholder`,
-`regionalDiscovery` and `siteFeedback` (see [Reader feedback](#reader-feedback)). A portal follows each viewer's system light or dark setting and offers a
+`regionalDiscovery`, `siteFeedback` (see [Reader feedback](#reader-feedback)) and `demoTour` (see
+[Guided tour](#guided-tour)). A portal follows each viewer's system light or dark setting and offers a
 toggle in the header; send `{"colourScheme": "light"}` to keep it light for every viewer, sign-in
 screen included, with no toggle, and `{"colourScheme": "viewer"}` to offer both again. Manage >
 Appearance sets the same choice. The regional discovery band on Explore is off unless
@@ -1256,6 +1257,75 @@ the audit log.
 
 On the Durable Object they are rows of the `site_feedback` table; on the local server,
 `DATA_DIR/site-feedback/<slug>.json`.
+
+## Guided tour
+
+A portal's home page can offer a guided tour, "See what this platform does": a dialog of
+scenes, each illustrated with the portal's own components over made-up data, each with one
+click into the real feature. The scenes' words follow the portal vocabulary (research
+collection, cited answer, matched passage, MCP connector) and name the portal as the system
+doing the work. It is off unless the portal opts in. The setting `demoTour` takes
+one of three values:
+
+| Value | What the home page does |
+| --- | --- |
+| `off` (absent) | Nothing. |
+| `request` | Shows a band with "Take the tour", and opens the tour from a link ending in `?tour=1`. |
+| `auto` | As `request`, and also opens the tour once per browser on arrival at the home page. Only the home page ever opens it by itself, so it never opens over a page the reader is working on. `?tour=0` keeps it closed. |
+
+A portal administrator or the operator credential sends `PATCH /api/admin/tenants/<slug>` with
+`{"demoTour": "request"}` or `"auto"`, and `"off"` to turn it off again; Manage > Behaviour has
+the same choice. The setting is a behaviour field (`behaviour.write`) and travels with the
+configuration import and export.
+
+The tour knows six scenes. Each has built-in words, an illustration and a built-in target for
+its "Try it"; a scene that asks a question opens Ask with the question sent, the same path the
+hero's suggestions take.
+
+| Scene | What it shows | Built-in "Try it" |
+| --- | --- | --- |
+| `federated` | A cited answer, with its confidence label (the agent page's composed answer, once it exists) | Ask |
+| `cited-page` | A citation opening its PDF at the page, with the matched passage highlighted | The collection's first PDF in the Library; the Library itself until there is one |
+| `graph` | The Graph's links between the portal's entity types | `/graph` |
+| `mcp` | The MCP connector an external research tool uses | `/tools` |
+| `provenance` | The stages an answer passes through, then Show retrieved sources and Journey through the context | Ask |
+| `gaps` | A question the collection cannot answer, declined with the closest matches | Ask itself, unless the portal sets a question it knows the collection cannot answer |
+| `participation` | Which collections an answer used | `/agent` |
+
+Without further configuration the tour shows `federated`, `cited-page`, `graph` and `mcp`, in
+that order, in the portal's language, and every illustration is labelled as an example. The
+welcome names the portal and its organisation from the branding, "and its research partners"
+where the portal takes part in federation and has at least one peer (see
+[Federation peers](AGENT-ASK.md#federation-peers)). `copy.demoTour`, set through the configuration import, replaces the
+heading and intro and says which scenes show, in what order and in what words:
+
+```json
+{
+  "copy": {
+    "demoTour": {
+      "heading": "Take the tour",
+      "intro": "Four scenes, each one click.",
+      "scenes": [
+        { "id": "federated", "question": "What limits yield in a dry season?" },
+        { "id": "cited-page", "href": "/library/report-7?page=4" },
+        { "id": "participation" },
+        { "id": "gaps", "title": "Ask the unanswerable", "question": "What was published this week?" }
+      ]
+    }
+  }
+}
+```
+
+A listed scene keeps its built-in words unless `title` or `body` replaces them. `question`
+makes "Try it" ask that question; `href` sends it to a portal path (`/tools`,
+`/library/<id>?page=4`) or an `https://` address, which is marked as leaving the portal, and
+wins when both are set. Each scene may appear once, and the list holds at least one. Titles run
+to 80 characters, bodies to 240, questions to 300; the heading to 80 and the intro to 300. The
+illustrations themselves are fixed.
+
+The dialog is a native modal: the page behind it is inert, Escape closes it, Tab stays inside,
+each step's heading takes focus and a live region says the step, and focus returns to "Take the
+tour" when it closes. It reflows at 320px, and its animation stops under reduced motion.
 
 ## Link review and changed website pages
 

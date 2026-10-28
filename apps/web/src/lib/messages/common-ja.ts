@@ -1,5 +1,90 @@
 /** Application-owned interface copy only; source content never enters this catalog. */
 export const COMMON_JA: Readonly<Record<string, string>> = {
+  // The guided tour on the home page.
+  'Welcome to {portal}': '{portal}へようこそ',
+  'This platform brings together research published and curated by {organisation}{partners}. Here you can search, ask questions of, and make connections within the collection.':
+    'このプラットフォームは{organisation}{partners}が発行・編集した研究をまとめたものです。コレクションを検索し、質問し、そのつながりを見つけることができます。',
+  ' and its research partners': 'とその研究パートナー',
+  'Take the tour': 'ツアーを見る',
+  'Explore on my own': '自分で見て回る',
+  'Get started with {portal}': '{portal}を始める',
+  'Explore the Graph': 'グラフを見る',
+  'Find answers and sources': '回答と出典を見つける',
+  '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material.\n\nYou can also use conventional search, or browse the collection through the Graph and the Library.':
+    '{portal}は質問に回答し、主張には出典を付けて、該当する資料へ直接リンクします。\n\n通常の検索を使うことも、グラフやライブラリからコレクションを見て回ることもできます。',
+  'Follow the evidence': '根拠をたどる',
+  'When an answer provides a citation, you can jump straight into the source document, view the passage, and ask further questions there.':
+    '回答に出典が付いていれば、元の資料にすぐ移動して該当箇所を読み、そこでさらに質問できます。',
+  'View a publication': '資料を見る',
+  'Visualise connections': 'つながりを可視化する',
+  'The Graph maps links between {kinds}.': 'グラフは{kinds}のつながりを示します。',
+  '{most} and {last}': '{most}、{last}',
+  'topics, entities and the documents that connect them': 'テーマ、項目、それらを結ぶ資料',
+  'Open Graph': 'グラフを開く',
+  'Larger circles have more connections.': '円が大きいほど、つながりが多いことを示します。',
+  'Bring your own tools': '自分のツールを使う',
+  'You can connect your own AI agent to {portal} through its Model Context Protocol (MCP) connector for powerful, granular queries.':
+    'Model Context Protocol（MCP）コネクタを通じて、自分のAIエージェントを{portal}に接続し、きめ細かな問い合わせができます。',
+  'Step {n} of {total}': 'ステップ {n} / {total}',
+  'Next': '次へ',
+  'Example': '例',
+  'Ask this question': 'この質問をする',
+  'Open Tools': 'ツールを開く',
+  'Open the Library': 'ライブラリを開く',
+  'Browse the Library': 'ライブラリを見る',
+  'Open the document': '資料を開く',
+  'Open a PDF': 'PDFを開く',
+  'Open the answer page': '回答ページを開く',
+  'Open Ask': '質問ページを開く',
+  'Open Manage': '管理を開く',
+  'Open the page': 'ページを開く',
+  'Open the link': 'リンクを開く',
+  'Get a cited answer': '出典付きの回答を得る',
+  'Ask in your own words. Each numbered citation links to its source.':
+    '自分の言葉で質問してください。番号付きの各出典は元の資料にリンクしています。',
+  'See where an answer came from': '回答の出どころを見る',
+  'Under an answer, "Show retrieved sources" opens the sources that were found and the passages that matched. "Journey through the context" walks through those sources one at a time.':
+    '回答の下の「取得した出典を表示」で、見つかった資料と一致した箇所を開けます。「根拠資料をたどる」はそれらの資料を一つずつ順に案内します。',
+  'Check the page behind a citation': '引用元のページを確かめる',
+  'When a citation points to a page in a PDF, it opens the PDF at that page with the matched passage highlighted and quoted.':
+    '引用がPDFのページを指している場合、そのページでPDFが開き、一致した箇所が強調表示と引用で示されます。',
+  'Connect a research tool': '研究ツールを接続する',
+  'If your research tool supports MCP, it can search this collection and request cited answers. The Tools page has the connection details and says whether you need an access key.':
+    'お使いの研究ツールがMCPに対応していれば、このコレクションを検索し、出典付きの回答を求められます。接続情報とアクセスキーの要否は「ツール」ページにあります。',
+  'See which collections were used': '使われたコレクションを見る',
+  'An answer that draws on more than one collection also lists any it could not reach.':
+    '複数のコレクションを参照した回答には、到達できなかったコレクションも示されます。',
+  'Spot weak or missing evidence': '弱い根拠や根拠の欠如に気づく',
+  'If the research collection cannot support an answer, Ask shows "No direct evidence found" and lists the closest matches, which it did not use. Treat a low-confidence answer as a lead and check its sources.':
+    '研究コレクションが回答を裏付けられない場合、質問ページは「直接の根拠は見つかりませんでした」と表示し、使用しなかった最も近い資料を示します。信頼度の低い回答は手がかりとして扱い、出典を確認してください。',
+  '{count} sources · {cited} cited': '出典 {count} 件 · 引用 {cited} 件',
+  'p. {page}': 'p. {page}',
+  'Page {page}': '{page} ページ',
+  'From page {page}': '{page} ページより',
+  'Read-only': '読み取り専用',
+  'MCP connector': 'MCPコネクタ',
+  'Collections for this answer': 'この回答のコレクション',
+  'Used': '使用',
+  'Not reached': '到達できず',
+  'The collection has no direct evidence about playground surfaces in snow.':
+    'コレクションには雪の中の遊び場の表面に関する直接の根拠がありません。',
+  'Playground studies': '遊び場の研究',
+  'Design guidance': '設計ガイド',
+  'Archive, 1998 to 2004': 'アーカイブ（1998年から2004年）',
+  // Manage > Behaviour: how the tour is offered.
+  'Guided tour': 'ガイドツアー',
+  'Puts "Take the tour" in the Help menu: a short guided tour of the portal, one feature per step, each with a button that opens it. With "Offered, and opens on first visit", it also opens by itself the first time a browser visits the home page, or on every visit if the browser blocks site storage. Unless the setting is Off, a home page link ending in ?tour=1 opens it.':
+    'ヘルプメニューに「ツアーを見る」を追加します。ポータルの短いガイドツアーで、各ステップは一つの機能を示し、その機能を開くボタンがあります。「提供し、初回訪問時に開く」では、ブラウザが初めてホームページを開いたときにも自動で開きます。サイトのストレージを拒否するブラウザでは毎回開きます。設定がオフでない限り、?tour=1 で終わるホームページへのリンクで開けます。',
+  'Availability': '提供',
+  'Offered from the Help menu': 'ヘルプメニューから提供する',
+  'Offered, and opens on first visit': '提供し、初回訪問時に開く',
+  'In the configuration import, the operator sets which steps show and what they say.':
+    '設定のインポートで、運用者が表示するステップとその文言を指定します。',
+  'Save guided tour setting': 'ガイドツアーの設定を保存',
+  'Save the guided tour setting': 'ガイドツアーの設定を保存する',
+  'Guided tour setting saved.': 'ガイドツアーの設定を保存しました。',
+  'Could not save the guided tour setting. The previous setting still applies. Try again.':
+    'ガイドツアーの設定を保存できませんでした。以前の設定がそのまま有効です。もう一度お試しください。',
   'Agentic': 'エージェント調査',
   'Research Portal': '研究ポータル',
   'Open {name}': '{name}を開く',

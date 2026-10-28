@@ -2,7 +2,12 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
-import { acceptsSiteFeedback, type Permission, type TenantConfig } from '@research-portal/core'
+import {
+  acceptsSiteFeedback,
+  demoTourMode,
+  type Permission,
+  type TenantConfig,
+} from '@research-portal/core'
 import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
 import { retryTenantConfig } from '../api/portal-metadata.ts'
 import {
@@ -431,6 +436,8 @@ export function TenantLayout() {
 
   // Offered only where the server says this portal takes feedback and the reader may send it.
   const takesFeedback = acceptsSiteFeedback(config) && access.can('portal.ask', scope)
+  // The guided tour's way in, once the home page has stopped carrying one of its own.
+  const offersTour = demoTourMode(config) !== 'off'
   const feedbackControl = takesFeedback && (
     <span className='hidden sm:inline-flex'>
       <IconButton
@@ -519,7 +526,7 @@ export function TenantLayout() {
                     )}
                     {feedbackControl}
                     <span className='hidden sm:inline-flex'>
-                      <HelpMenu slug={config.slug} />
+                      <HelpMenu slug={config.slug} tour={offersTour} />
                     </span>
                     <span className='hidden sm:inline-flex'>
                       {accountControl}
@@ -660,7 +667,7 @@ export function TenantLayout() {
                       )}
                       {feedbackControl}
                       <span className='hidden sm:inline-flex'>
-                        <HelpMenu slug={config.slug} />
+                        <HelpMenu slug={config.slug} tour={offersTour} />
                       </span>
                       <span className='hidden sm:inline-flex'>
                         {accountControl}
@@ -878,7 +885,7 @@ export function TenantLayout() {
                     {locale.ui(scheme === 'dark' ? 'Light mode' : 'Dark mode')}
                   </Button>
                 )}
-                {helpMenuItems(config.slug).map((item) => (
+                {helpMenuItems(config.slug, { tour: offersTour }).map((item) => (
                   <NavLink
                     key={item.key}
                     to={item.href}

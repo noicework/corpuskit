@@ -73,8 +73,14 @@ describe('How this works page', () => {
       { key: 'help', href: '/t/marine/help', label: 'Help and documentation' },
       { key: 'how', href: '/t/marine/how-it-works', label: 'How this works' },
     ])
-    expect(layoutSource).toContain('<HelpMenu slug={config.slug} />')
-    expect(layoutSource).toContain('helpMenuItems(config.slug).map(')
+    // A portal that offers the guided tour gets its row last; the two surfaces share the list.
+    expect(helpMenuItems('marine', { tour: true }).at(-1)).toEqual({
+      key: 'tour',
+      href: '/t/marine?tour=1',
+      label: 'Take the tour',
+    })
+    expect(layoutSource).toContain('<HelpMenu slug={config.slug} tour={offersTour} />')
+    expect(layoutSource).toContain('helpMenuItems(config.slug, { tour: offersTour }).map(')
     expect(docsPageSource).toContain('/how-it-works`')
   })
 })
