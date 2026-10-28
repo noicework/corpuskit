@@ -187,6 +187,19 @@ function readerTopOnceSettled(page: Page) {
   })
 }
 
+/** WCAG contrast ratio of two computed `rgb()` colours. */
+function contrast(a: string, b: string): number {
+  const luminance = (colour: string) => {
+    const [r, g, bl] = (colour.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number).map((c) => {
+      const v = c / 255
+      return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4
+    })
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * bl!
+  }
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi! + 0.05) / (lo! + 0.05)
+}
+
 /** The reader's state, read from what a reader and a screen reader get. */
 function readerState(page: Page) {
   return page.evaluate(() => {
@@ -200,6 +213,12 @@ function readerState(page: Page) {
       focusOnStage: stage !== null && stage !== undefined && document.activeElement === stage,
       ringVisible: stage?.matches(':focus-visible') === true &&
         getComputedStyle(stage).boxShadow.includes('inset'),
+      // The ring's two bands, then the pane the page sits in: what the focus band is seen against.
+      ringColours: [...(stage ? getComputedStyle(stage).boxShadow : '').matchAll(/rgba?\([^)]*\)/g)]
+        .map((m) => m[0]),
+      paneColour: getComputedStyle(reader!.querySelector('.rp-library-pdf-scroll')!)
+        .backgroundColor,
+      menuControls: reader?.querySelector('[aria-haspopup="menu"]')?.getAttribute('aria-controls'),
       overflow: document.documentElement.scrollWidth - innerWidth,
       search: location.search,
     }
@@ -255,6 +274,12 @@ describe('a citation opens the PDF at the cited page', () => {
         expect(arrived.focusOnStage).toBe(true)
         // The ring is drawn inside the page, where its scroll pane cannot clip it.
         expect(arrived.ringVisible).toBe(true)
+        // WCAG 2.4.7 and 1.4.11: the focus band reads at 3:1 against both of its neighbours.
+        const [halo, ring] = arrived.ringColours
+        expect(contrast(ring!, halo!)).toBeGreaterThanOrEqual(3)
+        expect(contrast(ring!, arrived.paneColour)).toBeGreaterThanOrEqual(3)
+        // The closed menu names no element it does not show (WCAG 4.1.2).
+        expect(arrived.menuControls).toBeNull()
         expect(arrived.overflow).toBeLessThanOrEqual(1)
         // The window brings the reader to the top of the screen, under the header.
         const top = await readerTopOnceSettled(page)

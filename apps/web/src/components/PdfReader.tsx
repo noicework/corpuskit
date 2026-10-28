@@ -717,7 +717,7 @@ export function PdfReader(
             icon={Menu}
             aria-haspopup='menu'
             aria-expanded={menuOpen}
-            aria-controls={menuId}
+            aria-controls={menuOpen ? menuId : undefined}
             onClick={() => {
               menuInitialFocusRef.current = 'first'
               setMenuOpen((open) => !open)

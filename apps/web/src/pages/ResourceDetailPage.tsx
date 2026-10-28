@@ -743,12 +743,14 @@ function OriginalFileActions(
  * document itself.
  */
 function OfficeBody(
-  { slug, content, fileUrl, passage }: {
+  { slug, content, fileUrl, passage, page }: {
     slug: string
     content: ResourceContent
     fileUrl: string | undefined
-    /** The cited passage, found and highlighted in the rendition's own text. */
+    /** The cited passage, highlighted in the rendition's own text. */
     passage: string | null
+    /** The page the citation names, which the rendition opens at. */
+    page: number | null
   },
 ) {
   const { ui } = usePortalLocale()
@@ -756,8 +758,9 @@ function OfficeBody(
   const previewUrl = preview ? resourceFileUrl(slug, content.id, preview.fieldId) : undefined
 
   if (previewUrl && preview?.contentType === 'application/pdf') {
-    // The platform's page numbers count the original's pages, which a
-    // rendition need not share, so the reader finds the cited passage instead.
+    // The platform counts the original's pages, which a rendition usually
+    // shares; where it does not, the reader says the passage is not on that
+    // page and offers to find it in the document.
     return (
       <div className='space-y-4'>
         <p className='text-xs text-ink-3'>
@@ -766,7 +769,7 @@ function OfficeBody(
         <PdfReader
           fileUrl={previewUrl}
           title={content.title}
-          initialPage={null}
+          initialPage={page}
           highlight={passage}
         />
         {fileUrl ? <OriginalFileActions fileUrl={fileUrl} label={ui('Download original')} /> : null}
@@ -971,7 +974,15 @@ function ResourceViewer(
         )
         : <EmptyState title={ui('This image is not available')} />
     case 'office':
-      return <OfficeBody slug={slug} content={content} fileUrl={fileUrl} passage={passage} />
+      return (
+        <OfficeBody
+          slug={slug}
+          content={content}
+          fileUrl={fileUrl}
+          passage={passage}
+          page={page}
+        />
+      )
     default:
       // web / text / file - the structured reading pane. A downloadable file
       // (a non-office attachment) gets a download action above the reader.
