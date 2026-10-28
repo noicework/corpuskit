@@ -124,6 +124,7 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
               ask: prompts.ask,
               images: prompts.images,
               uncitedAnswers: prompts.uncitedAnswers,
+              guardrails: prompts.guardrails,
               disabled: services.tenants.isDisabled(slug),
               lifecycle: services.lifecycle.get(slug),
             },

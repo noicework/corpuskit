@@ -176,6 +176,10 @@ Deno.test('footnote instruction survives custom prompt and addendum', async () =
   })
   const prompt = f.bodies[0]?.prompt as { system: string }
   expect(prompt.system).toContain('Custom instructions')
+  expect(prompt.system).toContain('Always answer the question using the provided context.')
+  expect(prompt.system.indexOf('Custom instructions')).toBeGreaterThan(
+    prompt.system.indexOf('Always answer the question using the provided context.'),
+  )
   expect(prompt.system).toContain('Extra instructions')
   expect(prompt.system).toContain('supplied footnote protocol')
   expect(prompt.system).not.toContain('number itself does not matter')

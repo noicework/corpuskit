@@ -249,6 +249,7 @@ gives up, and `estate-done` never arrives.
 | `delta` | `text` | The next piece of the answer |
 | `citation` | `marker, sourceId, chunkId, title, url?` | What `[marker]` in the answer cites |
 | `done` | `elapsedMs, text?` | The answer is complete; `text`, when present, replaces provisional text with the checked answer |
+| `answer-record` | `answerId` | The host portal's evidence record has been saved, before the terminal event; see [Answer records](ANSWER-RECORDS.md) |
 | `error` | `code, message, retryable` | The stream ended without an answer |
 
 Guarantees a view can rely on:

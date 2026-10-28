@@ -304,6 +304,10 @@ export function isAskInsight(record: InsightRecord): record is AskInsight {
 }
 
 export interface AskInsight {
+  /** Joins a withheld result to the normal ask row without storing the generated answer. */
+  policyRequestId?: string
+  guardrailAction?: import('@research-portal/core').GuardrailAction
+  guardrailOnly?: boolean
   answerId?: string
   citedResources?: CitedUsageResource[]
   inputTokens?: number
@@ -331,7 +335,9 @@ export interface AskInsight {
 }
 
 /** The asks Insights lists: never with the answer ids feedback joins on. */
-function withoutLearningId({ learningId: _learningId, ...insight }: AskInsight): AskInsight {
+function withoutLearningId(
+  { learningId: _learningId, policyRequestId: _requestId, ...insight }: AskInsight,
+): AskInsight {
   return insight
 }
 
@@ -365,7 +371,28 @@ export interface AskWindow {
   keptSince: string | null
 }
 
+export function guardrailCounts(asks: readonly AskInsight[]) {
+  return {
+    questionsRefused: asks.filter((i) => i.guardrailAction === 'question-refused').length,
+    answersWithheld: asks.filter((i) => i.guardrailAction === 'answer-withheld').length,
+    lengthWithheld: asks.filter((i) => i.guardrailAction === 'length-withheld').length,
+  }
+}
+
+/** The answer policy runs after the trust layer logs its result. Apply its final disposition. */
+export function effectiveAskInsights(rows: readonly AskInsight[]): AskInsight[] {
+  const withheld = new Set(
+    rows.filter((row) => row.guardrailOnly).map((row) => row.policyRequestId).filter(Boolean),
+  )
+  return rows.filter((row) => !row.guardrailOnly).map((row) =>
+    row.policyRequestId && withheld.has(row.policyRequestId)
+      ? { ...row, answered: false, citations: 0 }
+      : row
+  )
+}
+
 export interface InsightsSummary {
+  guardrails?: ReturnType<typeof guardrailCounts>
   totalAsks: number
   answered: number
   unanswered: number
@@ -434,7 +461,8 @@ export class InsightsStore {
 
   summary(slug: string, days = 90): InsightsSummary {
     const cutoff = Date.now() - days * 24 * 3600 * 1000
-    const all = this.readAll(slug).filter((i) => Date.parse(i.ts) >= cutoff)
+    const window = this.readAll(slug).filter((i) => Date.parse(i.ts) >= cutoff)
+    const all = effectiveAskInsights(window)
     const answered = all.filter((i) => i.answered)
     const counts = new Map<string, number>()
     for (const i of all) {
@@ -463,6 +491,7 @@ export class InsightsStore {
           : `Weak grounding (${i.groundedness}/5)`,
       }))
     return {
+      guardrails: guardrailCounts(window),
       totalAsks: all.length,
       answered: answered.length,
       unanswered: all.length - answered.length,
@@ -490,7 +519,7 @@ export class InsightsStore {
 
 /** The asks recorded from `from` up to, not including, `to`, oldest first. */
 export function asksIn(asks: readonly AskInsight[], from: number, to: number): AskInsight[] {
-  return asks.filter((ask) => {
+  return effectiveAskInsights(asks).filter((ask) => {
     const at = Date.parse(ask.ts)
     return at >= from && at < to
   })

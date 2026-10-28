@@ -1,4 +1,5 @@
 import { z } from 'zod'
+export * from './answer-behaviour.ts'
 import { LayoutHrefSchema, PortalLayoutSchema } from './layout.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'

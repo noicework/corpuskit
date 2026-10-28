@@ -1234,14 +1234,14 @@ export function getTypeahead(
 export function getPrompts(
   slug: string,
   passcode: AdminRequestAccess,
-): Promise<{ ask?: string; images?: boolean; uncitedAnswers?: 'show' | 'refuse' }> {
+): Promise<import('@research-portal/core').PortalPrompts> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode)
 }
 
 export function savePrompts(
   slug: string,
   passcode: AdminRequestAccess,
-  prompts: { ask?: string; images?: boolean; uncitedAnswers?: 'show' | 'refuse' },
+  prompts: import('@research-portal/core').PortalPrompts,
 ): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/prompts`, passcode, {
     method: 'PUT',
@@ -1590,6 +1590,7 @@ export interface KnowledgeGapQuestion {
 }
 
 export interface InsightsSummary {
+  guardrails?: { questionsRefused: number; answersWithheld: number; lengthWithheld: number }
   usage?: import('@research-portal/core').UsageOverview
   /** Absent from a server that does not keep answer feedback. */
   feedback?: AnswerFeedbackSummary

@@ -1,5 +1,6 @@
 import { AGENT_JA } from './messages/agent-ja.ts'
 import { ANSWER_RECORD_JA } from './messages/answer-record-ja.ts'
+import { ANSWER_POLICY_JA } from './messages/answer-policy-ja.ts'
 import { EVALUATIONS_JA } from './messages/evaluations-ja.ts'
 import { LINK_HEALTH_JA } from './messages/link-health-ja.ts'
 import { COMMON_JA } from './messages/common-ja.ts'
@@ -36,6 +37,7 @@ export function combineJapaneseCatalogs(
 }
 
 export const JAPANESE_MESSAGES = combineJapaneseCatalogs(
+  ANSWER_POLICY_JA,
   ANSWER_RECORD_JA,
   COMMON_JA,
   EVALUATIONS_JA,
