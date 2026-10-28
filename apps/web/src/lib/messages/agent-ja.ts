@@ -61,7 +61,7 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'Untitled passage': '無題の本文',
   'Open in the Library': 'ライブラリで開く',
   'Open the document': '資料を開く',
-  'Not reached': '接続できません',
+  'Not reached': '到達できず',
   'Not searched yet': 'まだ検索していません',
   'Not searched': '検索していません',
   'No passages found': '本文は見つかりませんでした',
