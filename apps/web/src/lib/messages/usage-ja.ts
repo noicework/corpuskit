@@ -89,7 +89,7 @@ export const USAGE_JA: Readonly<Record<string, string>> = {
   'Time to first token': '最初のトークンまでの時間',
   'Answer time': '回答時間',
   'Generation time (knowledge box)': '生成時間（ナレッジボックス）',
-  'Not measured': '測定なし',
+  'Not measured': '未測定',
   'Timed answers': '時間を測定した回答',
   'Time to first token p50': '最初のトークンまでの時間 p50',
   'Time to first token p90': '最初のトークンまでの時間 p90',
