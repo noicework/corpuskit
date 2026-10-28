@@ -294,6 +294,9 @@ export function applyAgentAskEvent(
         steps: closeOpenSteps(state.steps, 'completed', now),
         elapsedMs: event.elapsedMs,
       }
+    case 'answer-record':
+      // Saved on the host portal before `done`; this page does not link the record yet.
+      return state
     case 'error':
       return {
         ...state,
