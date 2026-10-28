@@ -18,6 +18,7 @@ export interface Declaration {
   readonly reason?: string
   readonly portalTarget?: 'url-slug'
   readonly aggregate?: 'authorised-portals'
+  readonly feature?: 'agentAsk'
   readonly safeMetadata?: true
   readonly owned?: 'research'
   readonly operator?: true
@@ -41,6 +42,7 @@ function entry(
       | 'subActions'
       | 'detailFields'
       | 'aggregate'
+      | 'feature'
       | 'safeMetadata'
       | 'owned'
       | 'operator'
@@ -277,6 +279,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/t/:slug/branding/image/:name', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id/thumbnail', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/search', 'portal.read', 'portal'),
+  entry('http', 'POST', '/api/t/:slug/events/open', 'portal.read', 'portal'),
   entry('http', 'POST', '/api/t/:slug/route', 'portal.ask', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/extraction/methods', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/extraction/profile', 'content.write', 'portal'),
@@ -459,6 +462,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
           'agentAsk',
           'embedding',
           'siteFeedback',
+          'analyticsEnabled',
           'federation',
           'demoTour',
         ],
@@ -595,6 +599,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/t/:slug/ask', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/docs/ask', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/ask-agent', 'portal.ask', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/mcp/portals', 'keys.manage', 'portal'),
   entry('http', 'GET', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal'),
   entry('http', 'POST', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal'),
   entry('http', 'DELETE', '/api/t/:slug/mcp/keys/:id', 'keys.manage', 'portal'),
@@ -603,6 +608,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('mcp', 'MCP', 'get_document', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'browse_catalogue', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'answer_question', 'portal.ask', 'portal'),
+  entry('mcp', 'MCP', 'ask_federated', 'portal.ask', 'portal', { feature: 'agentAsk' }),
+  entry('mcp', 'MCP', 'search_federated', 'portal.ask', 'portal', { feature: 'agentAsk' }),
   // The estate MCP endpoint reaches every portal its caller may use, as a cross-portal ask does.
   entry('http', 'ALL', ESTATE_MCP_ROUTE, 'portal.read', 'portal', {
     aggregate: 'authorised-portals',
@@ -689,6 +696,8 @@ export function isAccessTightening(
  */
 export type AskUse = 'count' | 'gate'
 const ASK_FREE_ROUTES: ReadonlySet<string> = new Set([
+  // Federated retrieval requires asking permission but makes no model call.
+  'MCP search_federated',
   // Saved research and readers' feedback, on an answer or the portal, make no model call.
   'PUT /api/t/:slug/sessions/:id',
   'DELETE /api/t/:slug/sessions/:id',
@@ -826,9 +835,11 @@ export function assertRouteInventory(
 export function assertToolInventory(
   names: readonly string[],
   endpoint: 'portal' | 'estate' = 'portal',
+  agentAsk = false,
 ): void {
   const expected = DECLARATIONS.filter((item) =>
-    item.kind === 'mcp' && (item.aggregate === 'authorised-portals') === (endpoint === 'estate')
+    item.kind === 'mcp' && (!item.feature || agentAsk) &&
+    (item.aggregate === 'authorised-portals') === (endpoint === 'estate')
   ).map((item) => item.path)
   if (
     new Set(names).size !== names.length || expected.length !== names.length ||

@@ -109,6 +109,18 @@ composed answer and from any peer's results. It still answers in its own portal.
 applies to composed answers; the federated ask's per-portal answers honour portal participation
 only.
 
+## External agents over MCP
+
+An external agent can consume the same portal capability at `POST /api/t/:slug/mcp`, using
+`ask_federated` for an attributed answer or `search_federated` for attributed passages it can
+use in its own answer. Both require agent ask to be enabled and the caller's `portal.ask`
+permission. They include the host's configured peers and report sources that failed. See
+[the MCP tool contract and limits](RBAC.md#federated-portal-mcp-tools).
+
+An administrator can create and revoke keys in Manage > Access > Keys. Selecting extra portals
+creates an estate key for `/api/estate/mcp`; the portal endpoint continues to serve its own
+collection and peers. The estate endpoint serves the selected hosted portals.
+
 ## The requests
 
 One portal:

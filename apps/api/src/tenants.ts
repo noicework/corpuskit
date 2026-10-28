@@ -261,6 +261,7 @@ export interface TenantPatch {
   federation?: TenantConfig['federation']
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback?: boolean
+  analyticsEnabled?: boolean
   /** The guided tour on the home page: off, request or auto (see TenantConfigSchema). */
   demoTour?: TenantConfig['demoTour']
   branding?: TenantConfig['branding']

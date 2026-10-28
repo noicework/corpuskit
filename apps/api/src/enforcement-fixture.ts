@@ -37,6 +37,11 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['GET', '/api/t/:slug/branding/image/:name', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/resources/:id/thumbnail', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/search', 'portal.read', 'viewer'],
+  ['POST', '/api/t/:slug/events/open', 'portal.read', 'viewer', {
+    searchId: 'search-fixture',
+    resourceId: 'res-1',
+    rank: 1,
+  }],
   ['GET', '/api/t/:slug/docs/search', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/catalog', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/topics/:topicId/resources', 'portal.read', 'viewer'],
@@ -124,6 +129,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
     data: { resourceId: 'res-1' },
   }],
   ['POST', '/api/t/:slug/investigations/:id/synthesise', 'portal.investigate', 'analyst'],
+  ['GET', '/api/t/:slug/mcp/portals', 'keys.manage', 'portal-admin'],
   ['GET', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal-admin'],
   ['POST', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal-admin', {
     label: 'New client',
@@ -306,6 +312,15 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
     )
     key.commit()
     f.stores.tenants.patch('a', { siteFeedback: true })
+    if (template.endsWith('/events/open')) {
+      f.stores.insights.record('a', {
+        kind: 'search',
+        ts: new Date(f.now()).toISOString(),
+        id: 'search-fixture',
+        durationSec: 0.1,
+        resources: [{ resourceId: 'res-1', rank: 1 }],
+      })
+    }
     const id = template.includes('/sessions')
       ? 'session'
       : template.includes('/watches')
@@ -386,8 +401,12 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
     const response = await f.requestAs(session, path, init)
     const result = await response.text()
     expect(response.status, `${template}: ${result}`).toBe(
-      template === '/t/*' ? 308 : (template.endsWith('/mcp/keys') && method === 'POST') ||
-          template.endsWith('/site-feedback')
+      template.endsWith('/events/open')
+        ? 204
+        : template === '/t/*'
+        ? 308
+        : (template.endsWith('/mcp/keys') && method === 'POST') ||
+            template.endsWith('/site-feedback')
         ? 201
         : 200,
     )
@@ -397,7 +416,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       method !== 'GET' && method !== 'ALL' &&
       (template.includes('/sessions') || template.includes('/investigations') ||
         template.includes('/watches') || template.includes('/mcp/keys') ||
-        template.endsWith('/access'))
+        template.endsWith('/access') || template.endsWith('/events/open'))
     ) {
       expect(snapshot(), template).not.toEqual(baseline)
     } else if (f.providerCalls.length || calls.length) {
@@ -462,6 +481,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         '/api/t/:slug/investigations': 'Seeded investigation',
         '/api/t/:slug/investigations/:id': 'Seeded investigation',
         '/api/t/:slug/mcp/keys': 'Seeded client',
+        '/api/t/:slug/mcp/portals': 'a',
         '/api/t/:slug/mcp': 'search_corpus',
         '/api/estate/mcp': 'search_estate',
         '/api/t/:slug/site-feedback': '"ok":true',
@@ -588,6 +608,8 @@ export function createEnforcementFixture(
       | 'rateLimitEstatePerMin'
       | 'rateLimitMcpAuthPerMin'
       | 'estateSourceTimeoutMs'
+      | 'agentSourceTimeoutMs'
+      | 'peerFetch'
       | 'operatorDeleteAfterDays'
       | 'linkProvisionalBytes'
       | 'siteFeedbackNotifier'
@@ -1445,8 +1467,12 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           } else if (suffix === 'prompts') {
             expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
           } else if (suffix === 'insights') {
-            expect(JSON.parse(result)).toEqual({
+            expect(JSON.parse(result)).toMatchObject({
               ...fixture.stores.insights.summary('a'),
+              usage: {
+                month: '2026-09',
+                totals: { searches: 0, opens: 0, consumptionAnswers: 0 },
+              },
               knowledgeGaps: { month: '2026-09', questions: [], topics: null },
               feedback: { helpful: 0, unhelpful: 0, flagged: [] },
             })

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import type { AgentAskEvent, AgentSource, TenantConfig } from '@research-portal/core'
 import { getTenantConfig, streamAgentAsk, streamAsk } from '../api/client.ts'
 import { readSafePortalMetadata } from '../api/portal-metadata.ts'
+import { recordOpen } from '../api/usage-events.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { platformBranding } from '../components/PortalAccessGate.tsx'
 import { AnswerText, AuditBadge, TruncatedNotice } from '../components/AnswerInline.tsx'
@@ -301,6 +302,23 @@ function EmbedAsk({ config, view }: { config: TenantConfig; view: string | null 
                           answer.sources.find((source) => source.id === citation.resourceId),
                         )}
                         {...external}
+                        onClick={() =>
+                          recordOpen(
+                            config.slug,
+                            { answerId: answer.answerId },
+                            citation.resourceId,
+                            citation.index,
+                          )}
+                        onAuxClick={(event) => {
+                          if (event.button === 1) {
+                            recordOpen(
+                              config.slug,
+                              { answerId: answer.answerId },
+                              citation.resourceId,
+                              citation.index,
+                            )
+                          }
+                        }}
                       >
                         [{citation.index}] {citation.title}
                       </a>

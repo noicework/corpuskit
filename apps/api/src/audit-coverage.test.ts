@@ -652,9 +652,9 @@ Deno.test('actual MCP tools/list equals declarations in both directions', async 
     })
     expect(response.status).toBe(200)
     const names = (await response.json()).result.tools.map((tool: { name: string }) => tool.name)
-    assertToolInventory(names)
-    expect(() => assertToolInventory([...names, 'future_tool'])).toThrow()
-    expect(() => assertToolInventory(names.slice(1))).toThrow()
+    assertToolInventory(names, 'portal', true)
+    expect(() => assertToolInventory([...names, 'future_tool'], 'portal', true)).toThrow()
+    expect(() => assertToolInventory(names.slice(1), 'portal', true)).toThrow()
     expect(DECLARATIONS.filter((item) => item.kind === 'mcp').every((item) => !isPrivileged(item)))
       .toBe(true)
   } finally {

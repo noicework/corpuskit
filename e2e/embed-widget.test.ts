@@ -567,7 +567,23 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
         await page.keyboard.press('Tab')
         await page.keyboard.press('Enter')
         await page.waitForFunction(() => document.body.textContent?.includes('Answer ready.'))
+        const opens = () => server.requests.filter((item) => item.path.endsWith('/events/open'))
+        const beforeJump = opens().length
         await assertCitationFlow(page, false)
+        if (width === 1440 && scheme === 'light') {
+          // Focusing a source is not a document open. Activate its real link separately,
+          // cancelling navigation at the document so this browser keeps its fixture page.
+          expect(opens().length).toBe(beforeJump)
+          await page.evaluate(() => {
+            document.addEventListener('click', (event) => event.preventDefault(), { once: true })
+            document.querySelector<HTMLAnchorElement>('section ol a')!.click()
+          })
+          await waitFor(
+            async () => opens().length > beforeJump && opens().at(-1)?.status === 204,
+            'source link open recorded',
+          )
+          expect(opens().length).toBe(beforeJump + 1)
+        }
         await page.evaluate(() => document.querySelector('section')!.scrollIntoView())
         if (width !== 320) await shot(page, 'own-answer', width, scheme)
         if (width === 320) {

@@ -43,7 +43,7 @@ const summarySchema = z.object({
     PORTAL_ROLES.indexOf(row.effectiveRole) <= PORTAL_ROLES.indexOf(row.role))
 )
 export type KeySummary = z.infer<typeof summarySchema>
-export type KeyInput = { label: string; role: PortalRole; expiresAt?: string }
+export type KeyInput = { label: string; role: PortalRole; expiresAt?: string; estate?: string[] }
 export const keyUnconfirmed =
   'The change could not be confirmed. Refresh the key list before trying again.'
 export class KeyError extends Error {
@@ -122,6 +122,8 @@ export async function createKey(slug: string, input: KeyInput, options: RequestC
     label: z.string().trim().pipe(labelSchema),
     role: PortalRoleSchema,
     expiresAt: time.optional(),
+    estate: z.array(z.string().regex(/^[A-Za-z0-9_-]{1,64}$/)).min(1).max(19)
+      .refine((slugs) => new Set(slugs).size === slugs.length && !slugs.includes(slug)).optional(),
   }).strict().safeParse(input)
   if (
     !parsed.success || (parsed.data.expiresAt && Date.parse(parsed.data.expiresAt) <= Date.now()) ||
@@ -146,7 +148,10 @@ export async function createKey(slug: string, input: KeyInput, options: RequestC
         result.credential.effectiveRole !== parsed.data.role || !result.credential.upgradeable ||
         result.credential.revokedAt !== null ||
         result.credential.label !== parsed.data.label || result.credential.status !== 'active' ||
-        result.credential.legacy || result.credential.expiresAt !== (parsed.data.expiresAt ?? null)
+        result.credential.legacy ||
+        result.credential.expiresAt !== (parsed.data.expiresAt ?? null) ||
+        JSON.stringify([...(result.credential.estate ?? [])].sort()) !==
+          JSON.stringify([...(parsed.data.estate ?? [])].sort())
       ) throw new KeyError()
       return result
     },
@@ -161,4 +166,27 @@ export function revokeKey(slug: string, id: string, options: RequestContext = {}
     (value) => z.object({ ok: z.literal(true) }).strict().parse(value),
     id,
   )
+}
+
+/** Administrable portals only, including when Manage is on a portal's alias host. */
+export async function listKeyPortals(slug: string, options: RequestContext = {}) {
+  manager(slug, options)
+  const response = await authorityFetch(
+    `/api/t/${encodeURIComponent(slug)}/mcp/portals`,
+    { cache: 'no-store' },
+    options,
+  )
+  try {
+    if (!response.ok) throw new KeyError()
+    const portals = z.array(
+      z.object({
+        slug: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+        title: z.string().min(1),
+      }).strict(),
+    ).parse(await response.json())
+    assertResponseCurrent(response)
+    return portals
+  } finally {
+    finishResponse(response)
+  }
 }

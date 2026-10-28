@@ -1,5 +1,20 @@
 /** Application-owned Manage copy; authored names and technical values remain unchanged. */
+
 export const MANAGE_JA: Readonly<Record<string, string>> = {
+  'Portal access revoked': 'ポータルへのアクセスは取り消されました',
+  'Portals covered': '対象ポータル',
+  'This portal is always included. Add portals you administer for an estate key.':
+    'このポータルは常に対象です。複数ポータル用キーには、管理権限のあるポータルを追加できます。',
+  'Loading available portals...': '選択可能なポータルを読み込み中...',
+  'Could not load available portals. Refresh the key list to try again.':
+    '選択可能なポータルを読み込めませんでした。キー一覧を更新して再試行してください。',
+  'Use the estate MCP endpoint:': '複数ポータル用の MCP エンドポイントを使用してください:',
+  'Use the portal MCP endpoint:': 'このポータルの MCP エンドポイントを使用してください:',
+  'Could not copy the URL. Select it and copy it manually.':
+    'URL をコピーできませんでした。URL を選択して手動でコピーしてください。',
+  'Portal name unavailable': 'ポータル名を取得できません',
+  'Portals covered: {portals}': '対象ポータル: {portals}',
+
   ' - never checked': ' - 未確認',
   ' Sandbox copies purged: ': ' サンドボックスの複製を削除: ',
   ' added.': '件追加しました。',

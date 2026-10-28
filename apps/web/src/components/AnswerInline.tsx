@@ -1,3 +1,4 @@
+import { recordOpen } from '../api/usage-events.ts'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 /**
@@ -30,6 +31,7 @@ export interface InlineOptions {
    */
   streaming: boolean
   /** Added to a marker's tooltip, to say where else the reader finds the source. */
+  answerId?: string
   citationHint?: string
   citationTarget?: '_blank'
   /** Embedded answers can focus an in-page source card instead of leaving the frame. */
@@ -101,9 +103,25 @@ export function renderCitationMarkers(
                 card.focus({ preventScroll: true })
                 card.scrollIntoView({ block: 'nearest' })
               }
-              : undefined}
+              : () =>
+                recordOpen(
+                  slug,
+                  { answerId: options.answerId },
+                  citation.resourceId,
+                  citation.index,
+                )}
             target={options.citationTarget}
             rel={options.citationTarget ? 'noopener noreferrer' : undefined}
+            onAuxClick={(e) => {
+              if (!sourceId && e.button === 1) {
+                recordOpen(
+                  slug,
+                  { answerId: options.answerId },
+                  citation.resourceId,
+                  citation.index,
+                )
+              }
+            }}
             className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
             aria-label={ui('Source {index}, {title}', {
@@ -178,6 +196,7 @@ export function AnswerText({
   citationHint,
   citationTarget,
   citationSourceId,
+  answerId,
   bodyClassName,
 }: {
   text: string
@@ -186,6 +205,7 @@ export function AnswerText({
   slug: string
   audit?: AnswerAudit
   streaming: boolean
+  answerId?: string
   citationHint?: string
   citationTarget?: '_blank'
   citationSourceId?: InlineOptions['citationSourceId']
@@ -194,6 +214,7 @@ export function AnswerText({
   const { ui } = usePortalLocale()
   const options: InlineOptions = {
     ui,
+    answerId,
     unsupported: unsupportedFigurePattern(audit),
     streaming,
     ...(citationHint ? { citationHint } : {}),

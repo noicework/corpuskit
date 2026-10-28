@@ -1,3 +1,4 @@
+import { UsageAnalyticsCards } from './UsageAnalyticsCards.tsx'
 import { USAGE_COLUMNS, type UsageCounts, type UsageReport } from '@research-portal/core'
 import { useEffect, useId, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -109,6 +110,11 @@ function ResponseTimes({ report, month }: { report: UsageReport; month: string }
   const { totals } = report
   const rows = [
     {
+      label: ui('Search time'),
+      values: [totals.searchP50, totals.searchP90, totals.searchP95],
+      count: totals.searches,
+    },
+    {
       label: ui('Time to first token'),
       values: [totals.firstTokenP50, totals.firstTokenP90, totals.firstTokenP95],
       count: totals.timedAnswers,
@@ -138,7 +144,7 @@ function ResponseTimes({ report, month }: { report: UsageReport; month: string }
       <h4 className='text-sm font-semibold text-ink'>{ui('Response times')}</h4>
       <p className='mt-1 max-w-prose text-sm leading-relaxed text-ink-2'>
         {ui(
-          "Percentiles over the month's answered questions. The portal server measures time to first token and answer time from receiving each question; answers from before it measured them have none. Generation time is the knowledge box's own report. Search response times are not measured.",
+          "Percentiles over the month's answered questions. The portal server measures time to first token and answer time from receiving each question; answers from before it measured them have none. Generation time is the knowledge box's own report. Search times run from server receipt to response preparation and exclude the reader’s network.",
         )}
       </p>
       <div
@@ -194,7 +200,7 @@ export function UsageReportDocument({ report, name }: { report: UsageReport; nam
   const { ui, number, date } = usePortalLocale()
   // Response times are the month's percentiles, in their own table below.
   const columns = USAGE_COLUMNS.filter((column) =>
-    column.key !== 'date' && column.key !== 'notes' && !column.timing
+    column.key !== 'date' && column.key !== 'notes' && column.key !== 'topics' && !column.timing
   )
   const notes = coverageNotes(report, ui, date)
   const month = monthName(report.month, date)
@@ -211,7 +217,7 @@ export function UsageReportDocument({ report, name }: { report: UsageReport; nam
   )
   const cell = (counts: UsageCounts, key: keyof UsageCounts) => {
     const value = counts[key]
-    if (value !== null) {
+    if (value !== null && !Array.isArray(value)) {
       return key === 'averageGroundedness'
         ? number(value, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
         : number(value)
@@ -346,6 +352,7 @@ export function UsageReportDocument({ report, name }: { report: UsageReport; nam
         </table>
       </div>
 
+      <UsageAnalyticsCards totals={report.totals} headingLevel={4} />
       <ResponseTimes report={report} month={month} />
 
       <section className='rp-usage-definitions'>
@@ -456,7 +463,7 @@ function UsageReportContent(
         className='rp-manage-section-head'
         title={ui('Monthly usage report')}
         description={ui(
-          "One month of questions, answers, ratings and documents added, by day in the portal's timezone. Download it as CSV, or open the report to read or print.",
+          'Questions, citation topics, evidence coverage, reader opens, response times and answer tokens for one month, by day in the portal’s timezone. Download CSV or view and print the report.',
         )}
       />
       <div className='mt-4 flex flex-wrap items-end gap-3'>

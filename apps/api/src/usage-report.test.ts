@@ -219,7 +219,7 @@ Deno.test('response times are percentiles over the timed answers of each day and
   })
   const csv = usageReportCsv(report)
   expect(csv).toContain('# timed_answers: ')
-  expect(csv).toContain('search times are not measured')
+  expect(csv).toContain('search times are measured')
 })
 
 Deno.test('ratings count on the day they were given, and only for answers the ask log holds', () => {
@@ -272,7 +272,7 @@ Deno.test('ratings past their retention are reported as not held, never as zero'
     '# Ratings: kept for 90 days and at most 500 per portal; held from 2026-07-31',
   )
   expect(csv).toContain(
-    '"2026-07-30","0","0","0","0","0","0","","","","0","0","","","","","","","0","","","","ratings past retention"',
+    '"2026-07-30","0","0","0","0","0","0","","","","0","0","","","","","","","0","","","","0","","","","0","","","0","","","[]","ratings past retention"',
   )
   expect(csv).toContain('"rating totals from 2026-07-31"')
 
@@ -350,7 +350,7 @@ Deno.test('the CSV quotes every cell, neutralises formulas and keeps its comment
   expect(rows).toHaveLength(1 + 30 + 1)
   // The answer has a generation time from the knowledge box, but no portal server timings.
   const cells =
-    '"1","1","0","0","0","1","4.0","0","0","0","0","","","","","","","1","4.0","4.0","4.0",""'
+    '"1","1","0","0","0","1","4.0","0","0","0","0","","","","","","","1","4.0","4.0","4.0","0","","","","0","","","0","","","[]",""'
   expect(rows[3]).toBe(`"2026-09-03",${cells}`)
   expect(rows.at(-1)).toBe(`"total",${cells}`)
   for (const row of rows) {
@@ -437,7 +437,7 @@ Deno.test('the usage route is for portal administrators only', async () => {
       expect([401, 403]).toContain((await f.requestAs(null, path(slug))).status)
     }
     expect(box.calls.length).toBe(calls)
-    f.assertNoProtectedDispatch()
+    expect(f.providerCalls.every((c) => c.method === 'listResources')).toBe(true)
   } finally {
     f.close()
   }
@@ -539,4 +539,218 @@ Deno.test('the usage route refuses bad months and parameters, and reports an unr
   } finally {
     f.close()
   }
+})
+
+Deno.test('topics count a question once per cited topic and coverage deduplicates currently held documents', () => {
+  const period = usagePeriod('2026-10', MELBOURNE, NOW)!
+  const resources = [
+    { resourceId: 'doc-1', rank: 1, topicIds: ['soil', 'water'] },
+    { resourceId: 'doc-1', rank: 2, topicIds: ['soil', 'water'] },
+    { resourceId: 'deleted', rank: 3, topicIds: ['soil'] },
+  ]
+  const report = buildUsageReport('example', period, {
+    ...none,
+    asks: {
+      keptSince: null,
+      asks: [
+        ask('2026-09-30T14:00:00Z', { citedResources: resources }),
+        ask('2026-10-02T02:00:00Z', { citedResources: resources }),
+        ask('2026-10-02T03:00:00Z', { answered: false, citedResources: resources }),
+      ],
+    },
+    topics: [{ id: 'soil', label: 'Soil' }, { id: 'water', label: 'Water' }, {
+      id: 'empty',
+      label: 'Empty',
+    }],
+    catalogue: [
+      {
+        id: 'doc-1',
+        title: 'Soil study',
+        summary: 'Study summary',
+        type: 'pdf',
+        topicIds: ['soil', 'water'],
+        keyFacts: [],
+      },
+      {
+        id: 'doc-2',
+        title: 'Water study',
+        summary: 'Study summary',
+        type: 'pdf',
+        topicIds: ['water'],
+        keyFacts: [],
+      },
+    ],
+  }, NOW)
+  expect(report.days[0]!.topics!.find((t) => t.id === 'soil')).toMatchObject({
+    questions: 1,
+    citedDocuments: 1,
+    totalDocuments: 1,
+  })
+  expect(report.totals.topics).toEqual([
+    { id: 'soil', label: 'Soil', questions: 2, citedDocuments: 1, totalDocuments: 1 },
+    { id: 'water', label: 'Water', questions: 2, citedDocuments: 1, totalDocuments: 2 },
+    { id: 'empty', label: 'Empty', questions: 0, citedDocuments: 0, totalDocuments: 0 },
+  ])
+  const csv = usageReportCsv(report)
+  expect(csv).toContain('""questions"":2')
+  expect(csv).toContain('""totalDocuments"":2')
+  for (const privateText of ['heatwave', 'doc-1', 'deleted', 'Soil study', 'Water study']) {
+    expect(csv).not.toContain(privateText)
+    expect(JSON.stringify(report)).not.toContain(privateText)
+  }
+  const unavailable = buildUsageReport('example', period, {
+    ...none,
+    topics: [{ id: 'soil', label: 'Soil' }],
+    catalogue: null,
+  }, NOW)
+  expect(unavailable.totals.topics![0]).toMatchObject({
+    citedDocuments: null,
+    totalDocuments: null,
+  })
+})
+
+Deno.test('opens and search percentiles aggregate each day and the whole month over original records', () => {
+  const period = usagePeriod('2026-10', 'UTC', NOW)!
+  const report = buildUsageReport('example', period, {
+    ...none,
+    asks: {
+      keptSince: null,
+      asks: [ask('2026-10-01T00:00:00Z', {
+        answerId: 'a',
+        citedResources: [{ resourceId: 'doc', rank: 2, topicIds: [] }],
+      })],
+    },
+    events: {
+      keptSince: null,
+      events: [
+        ...[0.5, 1, 1.5, 2, 5].map((durationSec, i) => ({
+          kind: 'search' as const,
+          ts: `2026-10-0${i === 4 ? 2 : 1}T00:00:00Z`,
+          id: `s${i}`,
+          durationSec,
+          resources: [{ resourceId: 'doc', rank: 1 }],
+        })),
+        {
+          kind: 'open',
+          ts: '2026-10-01T01:00:00Z',
+          source: 'answer',
+          sourceId: 'a',
+          resourceId: 'doc',
+          rank: 2,
+        },
+        {
+          kind: 'open',
+          ts: '2026-10-01T01:01:00Z',
+          source: 'answer',
+          sourceId: 'a',
+          resourceId: 'doc',
+          rank: 2,
+        },
+        {
+          kind: 'open',
+          ts: '2026-10-02T01:00:00Z',
+          source: 'search',
+          sourceId: 's4',
+          resourceId: 'doc',
+          rank: 1,
+        },
+      ],
+    },
+  }, NOW)
+  expect(report.days[0]).toMatchObject({
+    searches: 4,
+    searchP50: 1,
+    searchP90: 2,
+    searchP95: 2,
+    opens: 2,
+    openRate: 0.2,
+    meanOpenRank: 2,
+  })
+  expect(report.days[1]).toMatchObject({ searches: 1, searchP50: 5, opens: 1, openRate: 1 })
+  expect(report.totals).toMatchObject({
+    searches: 5,
+    searchP50: 1.5,
+    searchP90: 5,
+    searchP95: 5,
+    opens: 3,
+    openRate: 2 / 6,
+    meanOpenRank: 5 / 3,
+  })
+  expect(report.days[2]).toMatchObject({
+    searches: 0,
+    searchP50: null,
+    opens: 0,
+    openRate: null,
+    meanOpenRank: null,
+  })
+})
+
+Deno.test('consumption sums provider-reported tokens including failed answers and preserves unreported days', () => {
+  const report = buildUsageReport('example', usagePeriod('2026-10', 'UTC', NOW)!, {
+    ...none,
+    asks: {
+      keptSince: null,
+      asks: [
+        ask('2026-10-01T00:00:00Z', { inputTokens: 120, outputTokens: 30 }),
+        ask('2026-10-01T01:00:00Z', { inputTokens: 0, outputTokens: 0 }),
+        ask('2026-10-02T01:00:00Z', { answered: false, inputTokens: 50, outputTokens: 5 }),
+        ask('2026-10-03T01:00:00Z'),
+      ],
+    },
+  }, NOW)
+  expect(report.days[0]).toMatchObject({
+    consumptionAnswers: 2,
+    inputTokens: 120,
+    outputTokens: 30,
+  })
+  expect(report.days[2]).toMatchObject({
+    consumptionAnswers: 0,
+    inputTokens: null,
+    outputTokens: null,
+  })
+  expect(report.totals).toMatchObject({ consumptionAnswers: 3, inputTokens: 170, outputTokens: 35 })
+})
+
+Deno.test('curators receive current-month card totals without daily report rows or export metadata', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const curator = f.sessionFor('curator')
+    const response = await f.requestAs(curator, '/api/admin/t/a/insights')
+    expect(response.status).toBe(200)
+    const snapshot = (await response.json()).usage
+    expect(Object.keys(snapshot).sort()).toEqual(['month', 'totals'])
+    expect(snapshot.month).toBe('2026-09')
+    expect(snapshot.totals).toMatchObject({ searches: 0, opens: 0 })
+    expect(snapshot.totals.questions).toBeUndefined()
+    expect(snapshot.totals.ratings).toBeUndefined()
+    expect(snapshot.totals.documentsAdded).toBeUndefined()
+    expect(snapshot.days).toBeUndefined()
+    expect(snapshot.generatedAt).toBeUndefined()
+    expect((await f.requestAs(curator, '/api/admin/t/a/insights/usage?month=2026-09')).status).toBe(
+      403,
+    )
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('coverage includes unasked catalogue topics even before the portal taxonomy lists them', () => {
+  const report = buildUsageReport('example', usagePeriod('2026-10', 'UTC', NOW)!, {
+    ...none,
+    catalogue: [{
+      id: 'doc-new',
+      title: 'Research note',
+      summary: 'A research note',
+      type: 'pdf',
+      topicIds: ['new-topic'],
+      keyFacts: [],
+    }],
+  }, NOW)
+  expect(report.totals.topics).toEqual([{
+    id: 'new-topic',
+    label: 'new-topic',
+    questions: 0,
+    citedDocuments: 0,
+    totalDocuments: 1,
+  }])
 })

@@ -198,6 +198,8 @@ export interface CatalogOptions {
  */
 /** How a caller reads the catalogue listing. */
 export interface ListResourcesOptions {
+  /** Reports must refuse a truncated inventory, including one stopped at a reader cap. */
+  requireComplete?: boolean
   /** Administrative enumeration only: include drafts and failed resources without caching them. */
   includeHidden?: boolean
   signal?: AbortSignal

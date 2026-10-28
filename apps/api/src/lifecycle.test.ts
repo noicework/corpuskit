@@ -132,6 +132,7 @@ Deno.test('lifecycle and usage require platform authority including explicit-key
 
 // Independently authored: the only portal writes a read-only portal still accepts.
 const READ_ONLY_EXEMPT = new Set([
+  'POST /api/t/:slug/events/open',
   'PUT /api/t/:slug/sessions/:id',
   'DELETE /api/t/:slug/sessions/:id',
   'POST /api/t/:slug/watches',
@@ -172,6 +173,8 @@ const READ_ONLY_EXEMPT = new Set([
   'MCP get_document',
   'MCP browse_catalogue',
   'MCP answer_question',
+  'MCP ask_federated',
+  'MCP search_federated',
   'MCP search_estate',
   'MCP answer_estate',
 ])
@@ -925,6 +928,7 @@ const ASKS_COUNTED = new Set([
   'POST /api/ask-estate',
   'POST /api/ask-agent',
   'MCP answer_question',
+  'MCP ask_federated',
   'MCP answer_estate',
   'POST /api/t/:slug/generate',
   'POST /api/t/:slug/summarize',
