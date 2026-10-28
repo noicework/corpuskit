@@ -127,6 +127,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   }],
   ['DELETE', '/api/t/:slug/mcp/keys/:id', 'keys.manage', 'portal-admin'],
   ['ALL', '/api/t/:slug/mcp', 'portal.read', 'viewer'],
+  ['ALL', '/api/estate/mcp', 'portal.read', 'viewer'],
   ['PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal-admin', {
     accessMode: 'authenticated',
   }],
@@ -352,6 +353,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       '/api/tenants',
       '/api/ask-estate',
       '/api/t/:slug/config',
+      '/api/estate/mcp',
     ].includes(template)
     if (!special) {
       for (
@@ -450,6 +452,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         '/api/t/:slug/investigations/:id': 'Seeded investigation',
         '/api/t/:slug/mcp/keys': 'Seeded client',
         '/api/t/:slug/mcp': 'search_corpus',
+        '/api/estate/mcp': 'search_estate',
         '/api/t/:slug/site-feedback': '"ok":true',
       }
       expect(expected[template], `missing positive assertion ${template}`).toBeDefined()
@@ -481,6 +484,19 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         headers: { ...init.headers, authorization: `Bearer ${key.key}` },
       })
       expect(denied.status).toBe(403)
+      f.assertNoProtectedDispatch(before)
+    }
+    if (template === '/api/estate/mcp') {
+      // The one aggregate that takes a key; without a portal to reach it is refused.
+      const keyed = await f.requestAs(null, path, {
+        ...init,
+        headers: { ...init.headers, authorization: `Bearer ${key.key}` },
+      })
+      expect(keyed.status).toBe(200)
+      expect(await keyed.text()).toContain('answer_estate')
+      const before = f.providerCalls.length
+      expect((await f.requestAs(f.unassigned, path, init)).status).toBe(403)
+      expect((await f.requestAs(null, path, init)).status).toBe(401)
       f.assertNoProtectedDispatch(before)
     }
   } finally {
@@ -559,6 +575,8 @@ export function createEnforcementFixture(
       | 'rateLimitAnonPortalAskPerMin'
       | 'rateLimitAnonAddressAskPerMin'
       | 'rateLimitEstatePerMin'
+      | 'rateLimitMcpAuthPerMin'
+      | 'estateSourceTimeoutMs'
       | 'operatorDeleteAfterDays'
       | 'linkProvisionalBytes'
       | 'siteFeedbackNotifier'
@@ -714,7 +732,7 @@ export function createEnforcementFixture(
     rateLimitAnonPortalAskPerMin: options.rateLimitAnonPortalAskPerMin ?? 0,
     rateLimitAnonAddressAskPerMin: options.rateLimitAnonAddressAskPerMin ?? 0,
     rateLimitEstatePerMin: options.rateLimitEstatePerMin ?? 0,
-    rateLimitMcpAuthPerMin: 0,
+    rateLimitMcpAuthPerMin: options.rateLimitMcpAuthPerMin ?? 0,
   })
   const routeCases: EnforcementRouteCase[] = []
   return {
