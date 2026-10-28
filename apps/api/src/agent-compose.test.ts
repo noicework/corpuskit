@@ -1,8 +1,10 @@
 import { describe, it } from '@std/testing/bdd'
+import { FakeTime } from '../../../e2e/support/fake-time.ts'
 import { expect } from '@std/expect'
 import {
   type AgentAskEvent,
   AgentAskEventSchema,
+  type AgentChunk,
   type SearchResults,
   type TenantConfig,
 } from '@research-portal/core'
@@ -115,6 +117,159 @@ const answerOf = (events: AgentAskEvent[]) =>
   ofType(events, 'delta').map((event) => event.text).join('')
 
 describe('composeAcross', () => {
+  it('starts hosted and peer searches together, including their deadlines before stream backpressure', async () => {
+    using time = new FakeTime()
+    const started: string[] = []
+    const aborted: string[] = []
+    const provider = new ComposeProvider()
+    const original = provider.search.bind(provider)
+    const searching = async (id: string, signal: AbortSignal, finish: () => Promise<unknown>) => {
+      started.push(id)
+      signal.addEventListener('abort', () => aborted.push(id), { once: true })
+      await new Promise((resolve) => setTimeout(resolve, id === 'fisheries' ? 50 : 500))
+      return finish()
+    }
+    Object.assign(provider, {
+      search: (
+        config: TenantConfig,
+        query: string,
+        opts: { signal: AbortSignal; passagesOnly: boolean },
+      ) => {
+        expect(opts.passagesOnly).toBe(true)
+        return searching(config.slug, opts.signal, () => original(config, query))
+      },
+    })
+    const stream = composeAcross({
+      provider,
+      host: FISHERIES,
+      portals: [FISHERIES, GRAINS],
+      question: 'q',
+      sourceTimeoutMs: 100,
+      peers: [{
+        source: { id: 'peer:a', label: 'Peer A' },
+        search: (_q, signal) =>
+          searching('peer:a', signal, () => Promise.resolve([])) as Promise<AgentChunk[]>,
+      }],
+    })
+    expect((await stream.next()).value?.type).toBe('agent-start')
+    expect(started).toEqual(['fisheries', 'grains-col', 'peer:a'])
+    // Do not consume any further SSE events while all source clocks keep running.
+    await time.tickAsync(100)
+    expect(aborted).toContain('grains-col')
+    expect(aborted).toContain('peer:a')
+    const events = await collect({ [Symbol.asyncIterator]: () => stream })
+    expect(ofType(events, 'sources-failed')[0]!.sources.map((source) => source.reason))
+      .toEqual(['timeout', 'timeout'])
+    const hostStep = ofType(events, 'agent-step').find((event) =>
+      event.id === 'source/fisheries' && event.status === 'completed'
+    )
+    expect(hostStep?.elapsedMs).toBe(50)
+    expect(events.at(-1)?.type).toBe('done')
+    await time.tickAsync(500)
+  })
+
+  it('streams generation deltas before completion, then supplies citation-checked final text', async () => {
+    const finish = Promise.withResolvers<void>()
+    const first = Promise.withResolvers<void>()
+    const provider = Object.assign(new ComposeProvider(), {
+      composeStream: async function* () {
+        yield 'Oyster mortality events clustered after ten warm days in shallow estuaries. [1] '
+        first.resolve()
+        await finish.promise
+        yield 'Losses fell by 37% across 120 farms. [2]'
+      },
+    })
+    const events: AgentAskEvent[] = []
+    const complete = (async () => {
+      for await (
+        const event of composeAcross({
+          provider,
+          host: FISHERIES,
+          portals: [FISHERIES],
+          question: 'q',
+        })
+      ) {
+        events.push(event)
+      }
+    })()
+    await first.promise
+    expect(ofType(events, 'delta')).toHaveLength(1)
+    expect(ofType(events, 'done')).toHaveLength(0)
+    finish.resolve()
+    await complete
+    expect(answerOf(events)).toContain('37%')
+    const done = ofType(events, 'done')[0]!
+    expect(done.text).not.toContain('37%')
+    expect(done.text).toContain('Oyster mortality events')
+    expect(ofType(events, 'citation').map((event) => event.chunkId)).toEqual(['fisheries/f1'])
+    expect(
+      ofType(events, 'agent-step').find((event) =>
+        event.id === 'compose' && event.status === 'completed'
+      )?.firstTokenMs,
+    ).toBeDefined()
+  })
+
+  it('uses one composition deadline across every delta and aborts a stalled body', async () => {
+    using time = new FakeTime()
+    let signal: AbortSignal | undefined
+    const seen: AgentAskEvent[] = []
+    const provider = Object.assign(new ComposeProvider(), {
+      composeStream: async function* (
+        _host: TenantConfig,
+        _q: string,
+        _p: readonly ComposePassage[],
+        opts: { signal: AbortSignal },
+      ) {
+        signal = opts.signal
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        yield 'Oyster mortality events. [1]'
+        await new Promise((resolve) =>
+          opts.signal.addEventListener('abort', resolve, { once: true })
+        )
+      },
+    })
+    const complete = (async () => {
+      for await (
+        const event of composeAcross({
+          provider,
+          host: FISHERIES,
+          portals: [FISHERIES],
+          question: 'q',
+          composeTimeoutMs: 100,
+        })
+      ) seen.push(event)
+    })()
+    await time.tickAsync(60)
+    expect(ofType(seen, 'delta')).toHaveLength(1)
+    await time.tickAsync(40)
+    await complete
+    expect(signal?.aborted).toBe(true)
+    expect(seen.at(-1)).toMatchObject({ type: 'error', code: 'timeout' })
+  })
+
+  it('caps every source and fairly bounds the final passage list', async () => {
+    const provider = new ComposeProvider()
+    const peers = Array.from(
+      { length: 8 },
+      (_, i) => ({
+        source: { id: `peer:${i}`, label: `Peer ${i}` },
+        search: async () =>
+          Array.from(
+            { length: 20 },
+            (_, j) => ({ id: `${i}/${j}`, title: 'Long passage', text: 'p'.repeat(5000) }),
+          ),
+      }),
+    )
+    const events = await run(provider, { peers })
+    expect(
+      ofType(events, 'agent-sources').every((event) =>
+        event.chunks.length <= 4 && event.chunks.every((chunk) => chunk.text.length <= 1200)
+      ),
+    ).toBe(true)
+    expect(provider.composed[0]!.passages).toHaveLength(16)
+    expect(new Set(provider.composed[0]!.passages.map((p) => p.source)).size).toBe(11)
+  })
+
   it('is labelled orchestrated and names each portal, by slug and label, as a source', async () => {
     const events = await run(new ComposeProvider())
     expect(events[0]).toEqual({

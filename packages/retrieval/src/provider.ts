@@ -13,6 +13,10 @@ import type {
 } from '@research-portal/core'
 
 export interface SearchOptions {
+  /** Cancel the source search, including its retries. */
+  signal?: AbortSignal
+  /** Retrieval for composition needs passages, without fetching display-only summaries. */
+  passagesOnly?: boolean
   mode?: RetrievalMode
   /** Topic ids (labels in the 'topic' labelset) to filter by. */
   topicIds?: string[]
@@ -261,8 +265,15 @@ export interface RetrievalProvider {
     tenant: TenantConfig,
     question: string,
     passages: readonly ComposePassage[],
-    opts?: Pick<AgentAskOptions, 'context'>,
+    opts?: Pick<AgentAskOptions, 'context' | 'signal'>,
   ): Promise<string>
+  /** Generation deltas as received, before the caller checks the final text and citations. */
+  composeStream?(
+    tenant: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts?: Pick<AgentAskOptions, 'context' | 'signal'>,
+  ): AsyncIterable<string>
   catalog(tenant: TenantConfig, opts?: CatalogOptions): Promise<CatalogPage>
   /** Top resources filed under one topic (Explore's topic rows) - via the classification index, not per-resource topicIds. */
   topicResources(tenant: TenantConfig, topicId: string, limit?: number): Promise<ResourceSummary[]>

@@ -9,8 +9,10 @@
 //   deno task dev:stub                 recorded pace (about 90 s an answer)
 //   deno task dev:stub --speed=10      ten times faster; --speed=0 is instant
 //   deno task dev:stub --port=8795     first port to try (8791 by default)
+//   deno task dev:stub --primary=#1C1C1C --accent=#00B14E   the host in these colours
 // ---------------------------------------------------------------------------
 import type { ResourceSummary, SearchResults, TenantConfig } from '@research-portal/core'
+import type { AgentAskOptions, ComposePassage } from '@research-portal/retrieval'
 import { peerKeyName } from '../../apps/api/src/bindings.ts'
 import { agentFixturePassages, agentScenarioFor, pause } from './agent-replay.ts'
 import { aragPeerFetch, type PeerBox } from './arag-peer-double.ts'
@@ -68,6 +70,25 @@ export class AgentStubProvider extends DoubleProvider {
         matchedPassage: passage.text,
       })),
       relatedQuestions: [],
+    }
+  }
+
+  /** Same six-second generation schedule as compose, with the first delta after one second. */
+  async *composeStream(
+    host: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts: Pick<AgentAskOptions, 'context' | 'signal'> = {},
+  ): AsyncIterable<string> {
+    const answer = await super.compose(host, question, passages)
+    const deltas = answer.match(/[\s\S]{1,48}/g) ?? []
+    const speed = agentScenarioFor(question).fast ? 0 : this.agentReplaySpeed
+    const started = performance.now()
+    for (let i = 0; i < deltas.length; i++) {
+      const at = 1000 + i * 5000 / Math.max(1, deltas.length - 1)
+      if (speed > 0) await pause(at / speed - (performance.now() - started), opts.signal)
+      opts.signal?.throwIfAborted()
+      yield deltas[i]!
     }
   }
 
@@ -213,6 +234,22 @@ if (import.meta.main) {
   const speed = Number(flag('speed') ?? Deno.env.get('AGENT_STUB_SPEED') ?? 1)
   if (!Number.isFinite(speed) || speed < 0) throw new Error('--speed must be 0 or more')
   const server = await startAgentStub({ speed })
+  // `--primary=#1C1C1C --accent=#00B14E` shows the host in a chosen pair of colours (a neutral
+  // theme for screenshots, say); the hero takes the primary so nothing stays in the seed's blue.
+  const primary = flag('primary')
+  const accent = flag('accent')
+  if (primary || accent) {
+    const host = server.tenants.get(AGENT_STUB_PORTAL)
+    if (!host) throw new Error('The stub host is missing')
+    const colours = {
+      ...host.branding.colours,
+      ...(primary ? { primary, heroFrom: primary, heroTo: primary } : {}),
+      ...(accent ? { accent } : {}),
+    }
+    server.tenants.patch(AGENT_STUB_PORTAL, {
+      branding: { ...host.branding, colours, paletteId: 'default' },
+    })
+  }
   const slugs = server.portals.map((portal) => portal.slug)
   const post = (path: string, body: unknown) =>
     `curl -N -X POST ${server.url}${path} -H 'content-type: application/json' -d '${

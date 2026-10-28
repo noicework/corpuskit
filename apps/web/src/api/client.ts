@@ -50,6 +50,7 @@ import type {
 import {
   AdminTenantOverviewSchema,
   AgentAskEventSchema,
+  type DemoTourMode,
   KnowledgeBoxStatusSchema,
   MigrationEventSchema,
 } from '@research-portal/core'
@@ -1080,6 +1081,19 @@ export function updatePortalAppearance(
     colourScheme?: ColourSchemeId
     paletteId?: PaletteChoice
   },
+): Promise<{ ok: boolean }> {
+  return adminRequest(`/api/admin/tenants/${encodeURIComponent(slug)}`, passcode, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
+/** Save a portal behaviour setting the same PATCH carries: today, how the guided tour is offered. */
+export function updatePortalBehaviour(
+  slug: string,
+  passcode: AdminRequestAccess,
+  input: { demoTour?: DemoTourMode },
 ): Promise<{ ok: boolean }> {
   return adminRequest(`/api/admin/tenants/${encodeURIComponent(slug)}`, passcode, {
     method: 'PATCH',

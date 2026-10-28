@@ -876,8 +876,12 @@ describe('independent admin route permission matrix', () => {
               } else if (suffix === 'prompts') {
                 expect(JSON.parse(result)).toEqual(fixture.stores.tenants.promptsFor('a'))
               } else if (suffix === 'insights') {
-                expect(JSON.parse(result)).toEqual({
+                expect(JSON.parse(result)).toMatchObject({
                   ...fixture.stores.insights.summary('a'),
+                  usage: {
+                    month: '2026-09',
+                    totals: { searches: 0, opens: 0, consumptionAnswers: 0 },
+                  },
                   knowledgeGaps: { month: '2026-09', questions: [], topics: null },
                   feedback: { helpful: 0, unhelpful: 0, flagged: [] },
                 })
@@ -2346,6 +2350,25 @@ describe('appearance (typography, shape, branding fonts)', () => {
     expect(config.branding.shape).toBe('soft')
     expect((config.branding as Record<string, unknown>).regionalDiscovery).toBeUndefined()
     expect((await patchSlug(app, 'marine', { regionalDiscovery: 'yes' })).status).toBe(400)
+  })
+
+  it('offers the guided tour on request or by itself, and takes nothing but its modes', async () => {
+    const tenants = freshTenants()
+    const created = tenants.add({ name: 'Estuary notes' })
+    const app = buildApp({ provider: new StubProvider(), tenants, adminPasscode: passcode })
+    expect((await configOf(app, created.slug)).demoTour).toBeUndefined()
+    expect((await configOf(app, 'marine')).demoTour).toBeUndefined()
+    expect((await patchSlug(app, created.slug, { demoTour: 'request' })).status).toBe(200)
+    const config = await configOf(app, created.slug)
+    expect(config.demoTour).toBe('request')
+    expect((config.branding as Record<string, unknown>).demoTour).toBeUndefined()
+    expect((await patchSlug(app, created.slug, { demoTour: 'auto' })).status).toBe(200)
+    expect((await configOf(app, created.slug)).demoTour).toBe('auto')
+    expect((await patchSlug(app, created.slug, { demoTour: 'off' })).status).toBe(200)
+    expect((await configOf(app, created.slug)).demoTour).toBe('off')
+    for (const demoTour of [true, 'yes']) {
+      expect((await patchSlug(app, created.slug, { demoTour })).status).toBe(400)
+    }
   })
 
   it('refuses to give a portal a palette made for another organisation', async () => {

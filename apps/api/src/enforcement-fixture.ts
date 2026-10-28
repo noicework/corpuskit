@@ -311,6 +311,15 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
     )
     key.commit()
     f.stores.tenants.patch('a', { siteFeedback: true })
+    if (template.endsWith('/events/open')) {
+      f.stores.insights.record('a', {
+        kind: 'search',
+        ts: new Date(f.now()).toISOString(),
+        id: 'search-fixture',
+        durationSec: 0.1,
+        resources: [{ resourceId: 'res-1', rank: 1 }],
+      })
+    }
     const id = template.includes('/sessions')
       ? 'session'
       : template.includes('/watches')
@@ -391,8 +400,12 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
     const response = await f.requestAs(session, path, init)
     const result = await response.text()
     expect(response.status, `${template}: ${result}`).toBe(
-      template === '/t/*' ? 308 : (template.endsWith('/mcp/keys') && method === 'POST') ||
-          template.endsWith('/site-feedback')
+      template.endsWith('/events/open')
+        ? 204
+        : template === '/t/*'
+        ? 308
+        : (template.endsWith('/mcp/keys') && method === 'POST') ||
+            template.endsWith('/site-feedback')
         ? 201
         : 200,
     )
@@ -402,7 +415,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       method !== 'GET' && method !== 'ALL' &&
       (template.includes('/sessions') || template.includes('/investigations') ||
         template.includes('/watches') || template.includes('/mcp/keys') ||
-        template.endsWith('/access'))
+        template.endsWith('/access') || template.endsWith('/events/open'))
     ) {
       expect(snapshot(), template).not.toEqual(baseline)
     } else if (f.providerCalls.length || calls.length) {
@@ -1452,6 +1465,10 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           } else if (suffix === 'insights') {
             expect(JSON.parse(result)).toMatchObject({
               ...fixture.stores.insights.summary('a'),
+              usage: {
+                month: '2026-09',
+                totals: { searches: 0, opens: 0, consumptionAnswers: 0 },
+              },
               knowledgeGaps: { month: '2026-09', questions: [], topics: null },
               feedback: { helpful: 0, unhelpful: 0, flagged: [] },
             })
