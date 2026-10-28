@@ -234,6 +234,7 @@ corpuskit/
 | `docs/CLOUDFLARE.md` | The production and Entra runbook. |
 | `docs/TEST-FRAMEWORK.md` | The testing bar and how to run each suite. |
 | `docs/PERSONAS.md` | The people the portal is built for. |
+| `docs/USAGE-REPORTS.md` | The monthly per-portal usage report: its route, columns, retention and CSV format. |
 | `CHANGELOG.md` | What changed in each release, with upgrade notes for anyone running a deployment. Also at [corpuskit.org/docs/release-notes](https://corpuskit.org/docs/release-notes). |
 | `docs/RELEASING.md` | How a release is versioned, noted, tagged and published. |
 | `CONTRIBUTING.md` | How to work on this. |

@@ -2,6 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentAskEvent } from '@research-portal/core'
 import { ApiError, streamAgentAsk, streamAgentAskAcross } from '../api/client.ts'
 import {
+  type AgentAnswerRecord,
+  applyAgentEvent,
+  emptyAgentAnswer,
+} from '../lib/agent-answer-export.ts'
+import {
   activeStep,
   type AgentAskState,
   applyAgentAskEvent,
@@ -26,6 +31,8 @@ export interface AgentAskRun {
 
 export interface UseAgentAsk {
   state: AgentAskState
+  /** The same stream as the evidence brief's record, for the Export control; null before the first ask. */
+  record: AgentAnswerRecord | null
   /** The question being answered, or the last one; null before the first ask. */
   question: string | null
   /** Milliseconds since the question was sent, ticking each second while the stream runs. */
@@ -49,6 +56,7 @@ export function useAgentAsk(options: {
 }): UseAgentAsk {
   const { slug, canAsk, messages } = options
   const [state, setState] = useState<AgentAskState>(initialAgentAskState)
+  const [record, setRecord] = useState<AgentAnswerRecord | null>(null)
   const [question, setQuestion] = useState<string | null>(null)
   const [startedAt, setStartedAt] = useState<number | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -95,6 +103,7 @@ export function useAgentAsk(options: {
     setStartedAt(sentAt)
     setNow(sentAt)
     setState({ ...initialAgentAskState(), status: 'streaming' })
+    setRecord(emptyAgentAnswer(run.query))
 
     const current = () => abortRef.current === controller && !controller.signal.aborted
     const end = (
@@ -116,6 +125,7 @@ export function useAgentAsk(options: {
     const onEvent = (event: AgentAskEvent) => {
       if (!current() || !canAsk()) return
       setState((prev) => applyAgentAskEvent(prev, event, Date.now()))
+      setRecord((prev) => prev ? applyAgentEvent(prev, event) : prev)
       if (event.type === 'done' || event.type === 'error') clearTimer()
     }
     const body = { query: run.query }
@@ -142,7 +152,7 @@ export function useAgentAsk(options: {
   }, [slug, canAsk, messages.timeout, messages.unavailable, messages.dropped, messages.notOffered])
 
   const elapsedMs = startedAt === null ? 0 : Math.max(0, now - startedAt)
-  return { state, question, elapsedMs, streaming, ask, stop }
+  return { state, record, question, elapsedMs, streaming, ask, stop }
 }
 
 /**

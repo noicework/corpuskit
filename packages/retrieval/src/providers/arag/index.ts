@@ -147,6 +147,12 @@ const CATALOG_MAX_PAGES = 40
 /** A catalogue page that has not answered in this long is given up on, ending the walk there. */
 const CATALOG_PAGE_TIMEOUT_MS = 10_000
 /**
+ * Reading back when documents were added, for a usage report: at most 50 pages (10,000 documents
+ * added since the period began), and no new page once this long has passed.
+ */
+const ADDED_MAX_PAGES = 50
+const ADDED_READ_BUDGET_MS = 20_000
+/**
  * The longest a reader's request (search, Ask, typeahead, the Library) waits on a catalogue walk.
  * After it the request goes on with the cached listing, or what the walk has read so far, and the
  * walk carries on for the requests after it.
@@ -174,6 +180,15 @@ class CatalogueTimeoutError extends Error {
     super('The knowledge box took too long to list its catalogue')
     this.name = 'CatalogueTimeoutError'
   }
+}
+
+/**
+ * A platform timestamp in epoch milliseconds. The platform keeps time in UTC, so a date and time
+ * without a zone is read as UTC, not in the server's own timezone.
+ */
+export function platformTime(value: string | undefined): number {
+  if (!value) return NaN
+  return Date.parse(/T[^Z+-]*$/i.test(value) ? `${value}Z` : value)
 }
 
 /** Run a read that is given up on, and aborted, after `ms`, whether or not it honours the abort. */
@@ -457,6 +472,31 @@ export function isPurgeEligible(raw: DisplayabilityInput): boolean {
  * independent of search's, even though today the two agree.
  */
 export const MIN_GENERATE_GROUNDING = 0.1
+
+/** A 412 the platform gives when the model refuses the forced tool call behind structured output. */
+function refusesStructuredOutput(err: unknown): boolean {
+  return err instanceof AragApiError && err.status === 412 &&
+    /LLM exception|error received from LLM/i.test(err.message)
+}
+
+/** The system-prompt line that asks for the structured answer as JSON text instead. */
+function jsonReplyInstruction(schema: { name: string; description: string; parameters: unknown }) {
+  return `Reply with only one JSON object and no other text: ${schema.name}, ${schema.description}. ` +
+    `It must match this JSON Schema: ${JSON.stringify(schema.parameters)}`
+}
+
+/** The JSON object in a text answer, with or without a code fence; null when there is none. */
+function parseJsonObject(text: string): unknown {
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start < 0 || end <= start) return null
+  try {
+    const value = JSON.parse(text.slice(start, end + 1))
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value : null
+  } catch {
+    return null
+  }
+}
 
 /** The structured answer `compose` asks for: the composed text, citations inline. */
 const COMPOSE_SCHEMA = {
@@ -1714,6 +1754,62 @@ export class AragProvider implements RetrievalProvider {
     })
   }
 
+  /**
+   * When each library document the box still holds was added, for those added from `from` up to
+   * `to` (ISO times). Drafts, in-app documentation and failed imports are left out, as the library
+   * leaves them out. The catalogue is read newest first until it passes `from`. A read that stops
+   * short of `from`, at a failed page or the page or time budget, gives `readBackTo`, the earliest
+   * addition it reached: documents added before then are not listed. A failed first page throws.
+   */
+  async addedBetween(
+    tenant: TenantConfig,
+    from: string,
+    to: string,
+  ): Promise<{ created: string[]; readBackTo: string | null }> {
+    const start = Date.parse(from)
+    const end = Date.parse(to)
+    const client = this.client(tenant)
+    const began = Date.now()
+    const created: string[] = []
+    let oldest: number | undefined
+    const stopped = () => ({
+      created,
+      readBackTo: new Date(oldest === undefined ? end : Math.max(oldest, start)).toISOString(),
+    })
+    for (let page = 0; page < ADDED_MAX_PAGES; page++) {
+      if (page > 0 && Date.now() - began > ADDED_READ_BUDGET_MS) return stopped()
+      let batch: (RawResource & { hidden?: boolean })[]
+      try {
+        const catalog = await within(
+          CATALOG_PAGE_TIMEOUT_MS,
+          (signal) =>
+            client.getJson<{ resources?: Record<string, RawResource & { hidden?: boolean }> }>(
+              `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=origin&sort_field=created&sort_order=desc&hidden=false`,
+              { signal },
+            ),
+        )
+        batch = Object.values(catalog.resources ?? {})
+      } catch (error) {
+        if (page === 0) throw error
+        return stopped()
+      }
+      let passed = false
+      for (const raw of batch) {
+        const at = platformTime(raw.created)
+        if (!Number.isFinite(at)) continue
+        oldest = Math.min(oldest ?? at, at)
+        if (at < start) passed = true
+        else if (
+          at < end && raw.hidden !== true && isDisplayableResource(raw) &&
+          !isDocumentationResource(raw)
+        ) created.push(new Date(at).toISOString())
+      }
+      // Newest first: once one page reaches past `from`, every later page is older still.
+      if (passed || batch.length < CATALOG_PAGE_SIZE) return { created, readBackTo: null }
+    }
+    return stopped()
+  }
+
   async uploadFile(
     tenant: TenantConfig,
     input: {
@@ -2711,7 +2807,7 @@ export class AragProvider implements RetrievalProvider {
       [] as ResourceSummary[]
     )
     const byId = new Map(catalogue.map((r) => [r.id, r]))
-    const res = await client.postStream('/ask', {
+    const request: Record<string, unknown> = {
       query,
       features: ['keyword', 'semantic'],
       answer_json_schema: schema,
@@ -2744,8 +2840,22 @@ export class AragProvider implements RetrievalProvider {
       // The default cap triggers 412 "Error generating json: max_tokens" on
       // large payloads like comparison matrices.
       max_tokens: 4096,
-    })
+    }
+    let res: Response
+    let asText = false
+    try {
+      res = await client.postStream('/ask', request)
+    } catch (err) {
+      if (!refusesStructuredOutput(err)) throw err
+      // Some models refuse the forced tool call structured output rides on, and the platform
+      // answers 412. Ask for the same object as JSON text and parse it from the answer.
+      const { answer_json_schema: _schema, ...plain } = request
+      const system = [opts.instructions?.trim(), jsonReplyInstruction(schema)].filter(Boolean)
+      res = await client.postStream('/ask', { ...plain, prompt: { system: system.join('\n\n') } })
+      asText = true
+    }
     let object: unknown = null
+    let answerText = ''
     let sources: ScoredResource[] = []
     const passagesByResource: Record<string, string[]> = {}
     for await (const line of ndjson(res)) {
@@ -2788,8 +2898,11 @@ export class AragProvider implements RetrievalProvider {
           .slice(0, 12)
       } else if (item.type === 'answer_json' && item.object !== undefined) {
         object = item.object
+      } else if (asText && item.type === 'answer' && typeof item.text === 'string') {
+        answerText += item.text
       }
     }
+    if (asText && object === null) object = parseJsonObject(answerText)
     const grounded = sources.filter((s) => s.relevance >= MIN_GENERATE_GROUNDING)
     if (opts.requireGrounding && grounded.length === 0) {
       return { object: null, sources: grounded, insufficientGrounding: true, passagesByResource }
@@ -4113,16 +4226,45 @@ export class AragProvider implements RetrievalProvider {
         `[${index + 1}] ${passage.source} | ${passage.title}\n${passage.text.slice(0, 1200)}`
       ),
     ].join('\n')
-    const result = await this.askStructured(tenant, COMPOSE_SCHEMA, prompt, {
-      instructions: COMPOSE_INSTRUCTIONS +
-        (tenant.languagePolicy ? '' : ' Use Australian English.'),
-      topK: 1,
-    })
-    const answer = (result.object as { answer?: unknown } | null)?.answer
+    const instructions = COMPOSE_INSTRUCTIONS +
+      (tenant.languagePolicy ? '' : ' Use Australian English.')
+    let answer: unknown
+    try {
+      const result = await this.askStructured(tenant, COMPOSE_SCHEMA, prompt, {
+        instructions,
+        topK: 1,
+      })
+      answer = (result.object as { answer?: unknown } | null)?.answer
+    } catch {
+      // Some models refuse the forced tool call structured output rides on, and the platform
+      // answers 412. The same prompt as a plain answer still composes.
+      answer = await this.composePlain(tenant, prompt, instructions.replace('in `answer` ', ''))
+    }
     if (typeof answer !== 'string' || !answer.trim()) {
       throw new Error('The platform returned no composed answer')
     }
     return answer.trim()
+  }
+
+  /** `compose` without a schema: the same prompt and instructions, the answer read as text. */
+  private async composePlain(
+    tenant: TenantConfig,
+    prompt: string,
+    instructions: string,
+  ): Promise<string> {
+    const res = await this.client(tenant).postStream('/ask', {
+      query: prompt,
+      features: ['keyword', 'semantic'],
+      prompt: { system: instructions },
+      top_k: 1,
+      max_tokens: 4096,
+    })
+    let text = ''
+    for await (const line of ndjson(res)) {
+      const item = (line as { item?: { type?: string; text?: unknown } }).item
+      if (item?.type === 'answer' && typeof item.text === 'string') text += item.text
+    }
+    return text
   }
 
   async *ask(

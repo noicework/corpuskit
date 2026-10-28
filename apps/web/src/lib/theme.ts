@@ -395,6 +395,52 @@ export function accentMarkVars(
   return vars
 }
 
+/** The duotone's shares of each hero endpoint over a hero photo, as the stylesheet draws it. */
+const HERO_VEIL = { from: 0.85, to: 0.6 } as const
+
+/**
+ * A hero photo shows through the duotone, so the hero's text is only as legible as the lightest
+ * or darkest pixel a photo can put behind it. `--rp-hero-veil-from` / `-to` raise each
+ * endpoint's share, in 5% steps from the drawn default, until the hero's text (`texts`, both
+ * tiers) reads at 4.5:1 over a white and a black pixel alike (WCAG 1.4.3); the photo stays as
+ * visible as that allows. `--rp-hero-scrim` darkens the foot of a photo hero under light text
+ * and lightens it under dark text, so it helps whichever text sits there instead of eroding it.
+ * Colours this cannot measure keep the drawn defaults.
+ */
+export function heroVeilVars(
+  heroFrom: string,
+  heroTo: string,
+  texts: readonly string[],
+): Record<string, string> {
+  const from = normaliseHex(heroFrom)
+  const to = normaliseHex(heroTo)
+  const inks = texts.map(normaliseHex)
+  const vars: Record<string, string> = {
+    '--rp-hero-veil-from': `${HERO_VEIL.from * 100}%`,
+    '--rp-hero-veil-to': `${HERO_VEIL.to * 100}%`,
+    '--rp-hero-scrim': '10 10 12',
+  }
+  if (!from || !to || inks.some((ink) => ink === null)) return vars
+  const reads = (endpoint: string, share: number) =>
+    ['#ffffff', '#000000'].every((pixel) =>
+      (inks as string[]).every((ink) => contrastRatio(ink, mixHex(endpoint, pixel, share)) >= 4.5)
+    )
+  const veil = (endpoint: string, start: number) => {
+    for (let share = start; share < 1; share = Math.round((share + 0.05) * 100) / 100) {
+      if (reads(endpoint, share)) return share
+    }
+    return 1
+  }
+  vars['--rp-hero-veil-from'] = `${Math.round(veil(from, HERO_VEIL.from) * 100)}%`
+  vars['--rp-hero-veil-to'] = `${Math.round(veil(to, HERO_VEIL.to) * 100)}%`
+  // Dark text (it reads better on white than on black) gets a light scrim.
+  const ink = inks[0]!
+  if (contrastRatio(ink, '#ffffff') > contrastRatio(ink, '#000000')) {
+    vars['--rp-hero-scrim'] = '255 255 255'
+  }
+  return vars
+}
+
 /** Hue in degrees and chroma (0 to 1) of a hex colour. */
 function hueAndChroma(hex: string): { hue: number; chroma: number } {
   const [r, g, b] = (hexToRgb(hex) ?? [0, 0, 0]).map((c) => c / 255) as [number, number, number]
@@ -472,12 +518,17 @@ function foundationRoleVars(
   }
   const palette = resolvePalette(branding)
   const surface2 = roles['--rp-surface-2'] ?? HOUSE_LIGHT_SUITE.surface2
+  const onHero2 = secondaryInk(roles['--rp-on-hero']!, [
+    roles['--rp-hero-from']!,
+    roles['--rp-hero-to']!,
+  ])
   return {
     ...accentMarkVars(roles, [surface, paper, surface2]),
     '--rp-on-primary-2': secondaryInk(roles['--rp-on-primary']!, [primary]),
-    '--rp-on-hero-2': secondaryInk(roles['--rp-on-hero']!, [
-      roles['--rp-hero-from']!,
-      roles['--rp-hero-to']!,
+    '--rp-on-hero-2': onHero2,
+    ...heroVeilVars(roles['--rp-hero-from']!, roles['--rp-hero-to']!, [
+      roles['--rp-on-hero']!,
+      onHero2,
     ]),
     '--rp-control': control,
     '--rp-on-control': textOn([control], 4.5),

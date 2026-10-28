@@ -243,21 +243,59 @@ data: {"type":"done","elapsedMs":18030}
 `/t/:slug/agent` (`apps/web/src/pages/AgentAskPage.tsx`) is where a reader asks and watches. It
 is in the portal's navigation as "Agent ask" wherever `agentAsk` is on. `?q=<question>` prefills
 the question and `&run=1` sends it at once (the demo tour links this way); `run` is consumed so a
-refresh does not ask again, and `q` stays so the address names the question.
+refresh does not ask again, and `q` stays so the address names the question. The page shares the
+Ask page's frame: the question becomes the heading once asked, the composer is pinned at the foot
+of the scrolling column, and the steps sit in a right rail from `xl` up.
 
-- On the platform host with a directory, the page offers the other portals as collections to
-  search and uses `POST /api/ask-agent`; with nowhere else to search (an anonymous reader, or a
-  portal's own host) it asks the one-portal route, which composes over the portal and its peers.
-- The rail shows every step as the agent opens it, with its time and reason, and every source
-  from `agent-start` with the question put to it and the passages it returned; a peer is marked
-  "federated partner" or "partner over MCP", and its passages and citations carry no link.
-- The answer card says who wrote the answer (`Retrieval agent`, or `Composed by CorpusKit across
-  N collections`), shows the `sources-failed` notice above the answer, numbers the markers by
-  first appearance, keeps the reasoning under the answer, and keeps whatever arrived when the
-  stream ends early (stopped, failed, or past the page's own five-minute limit).
-- Assistive technology hears one polite status line: the step the agent is on (at most one every
-  few seconds), the failed-source notice once, and the answer's completion; never the answer text
-  as it streams. Errors are an alert in the card.
+- On the platform host with a directory, the page offers the other portals to include and uses
+  `POST /api/ask-agent`; with nowhere else to search (an anonymous reader, or a portal's own
+  host) it asks the one-portal route, which composes over the portal and its peers.
+- The steps rail shows every step as it opens, grouped by phase, with its time; a failed step
+  carries its reason. Under the answer, every source from `agent-start` is a section with the
+  question put to it and the passages it returned as the Ask page's source cards; a peer is
+  marked "federated partner" or "partner over MCP", and its passages and citations carry no link.
+- The answer card says who wrote the answer ("Answered by the portal's research agent", or
+  "Composed by CorpusKit from N collections", counting the collections that returned passages),
+  shows the `sources-failed` notice above the answer, numbers the markers by first appearance and
+  places them after punctuation, keeps the working notes under the answer (closed by default),
+  and keeps whatever arrived when the stream ends early (stopped, failed, or past the page's own
+  five-minute limit).
+- Assistive technology hears one polite status line: the step the portal is on (at most one
+  every few seconds), the failed-source notice once, and the answer's completion; never the
+  answer text as it streams. Errors are an alert in the card.
+
+## Saving an answer as an evidence brief
+
+The Ask page's "Export" saves a research trail as a Word document. The agent ask page does the
+same through `AgentAnswerExportButton` (`apps/web/src/components/AgentAnswerExport.tsx`), which
+writes an evidence brief: each turn's question, who answered it (`agent-start.mode`), what every
+collection gave, the answer with its markers renumbered `[1]`, `[2]`... by first appearance
+whatever the writer used, and the references grouped by collection in the order `agent-start`
+announced them, followed by the collections `sources-failed` named and why.
+
+The page keeps one `AgentAnswerRecord` per turn (`apps/web/src/lib/agent-answer-export.ts`):
+`emptyAgentAnswer(question)`, then `applyAgentEvent(record, event)` for each event
+`streamAgentAsk()` delivers, so the record is whatever the stream has said so far. Only a finished
+turn with text exports (`hasExportableAnswer`). Mount the control with the turns and the portal:
+
+```tsx
+<AgentAnswerExportButton
+  slug={config.slug}
+  portalName={config.branding.productName}
+  turns={turns}
+  busy={isStreaming}
+/>
+```
+
+It renders nothing for a reader without `portal.export`, is disabled while an answer streams, and
+confirms the saved file with the same status line the Ask export uses. A reference links to the
+passage's own `url` when the stream gave one, else to `/t/<portal>/library/<resourceId>` when the
+collection is a portal of this deployment; a passage with neither (a federated partner's, with
+origin links off) is quoted under its title instead. A peer collection is headed "federated
+partner", or "partner over MCP" when its transport is `mcp`, and one that refused its key is
+listed as "this partner could not be reached". Everything the
+stream authored (labels, titles, answer text) is escaped; the brief's own copy goes through the
+portal locale.
 
 ## The stub server
 

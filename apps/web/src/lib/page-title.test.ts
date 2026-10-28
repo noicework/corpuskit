@@ -43,6 +43,19 @@ describe('per-route page titles (D6-14)', () => {
     )
   })
 
+  it("puts a page's own subject in front, so two documents or library views differ", () => {
+    expect(pageTitle('/t/neuro/library/doc-1', 'Neurology Research Portal', undefined, 'Kelp'))
+      .toBe('Kelp | Document | Neurology Research Portal')
+    expect(
+      pageTitle('/t/neuro/library', 'Neurology Research Portal', undefined, '“seizure”, Imaging'),
+    ).toBe('“seizure”, Imaging | Library | Neurology Research Portal')
+    // No subject, or a blank one, leaves the surface title as it was.
+    for (const subject of [undefined, null, '', '  ']) {
+      expect(pageTitle('/t/neuro/library', 'Neurology Research Portal', undefined, subject))
+        .toBe('Library | Neurology Research Portal')
+    }
+  })
+
   it('localises only fixed surface labels and keeps authored known keys and braces verbatim', () => {
     const { ui } = createPortalLocale('ja')
     expect(pageTitle('/t/neuro/library', 'Summary {name}', ui)).toBe('ライブラリ | Summary {name}')

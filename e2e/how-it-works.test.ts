@@ -181,9 +181,9 @@ describe('How this works', () => {
       ])
 
       await page.setViewportSize({ width: 390, height: 844 })
-      await page.waitForSelector('button[aria-controls="mobile-nav-sheet"]')
+      await page.waitForSelector('button.rp-navtoggle')
       await page.evaluate(() => {
-        document.querySelector<HTMLButtonElement>('button[aria-controls="mobile-nav-sheet"]')
+        document.querySelector<HTMLButtonElement>('button.rp-navtoggle')
           ?.click()
       })
       await settle(page, () => document.getElementById('mobile-nav-sheet') !== null)

@@ -3,6 +3,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { AgentAnswer } from '../components/AgentAnswer.tsx'
+import { AgentAnswerExportButton } from '../components/AgentAnswerExport.tsx'
 import { AgentSources } from '../components/AgentSources.tsx'
 import { AgentSteps } from '../components/AgentSteps.tsx'
 import { ArrowRight, Check } from '../components/icons.tsx'
@@ -201,13 +202,26 @@ export function AgentAskPage() {
               )
               : (
                 <div className='space-y-6 py-4'>
-                  {/* The question is the page's heading once asked, as on Ask. */}
-                  <h1
-                    className='rp-answer-question rp-display text-xl text-ink lg:text-3xl'
-                    title={agent.question ?? undefined}
-                  >
-                    {agent.question}
-                  </h1>
+                  {/* The question is the page's heading once asked, with Export beside it, as on Ask. */}
+                  <div className='flex flex-wrap items-start justify-between gap-3'>
+                    <h1
+                      className='rp-answer-question rp-display min-w-0 flex-1 text-xl text-ink lg:text-3xl'
+                      title={agent.question ?? undefined}
+                    >
+                      {agent.question}
+                    </h1>
+                    {agent.record
+                      ? (
+                        <AgentAnswerExportButton
+                          slug={config.slug}
+                          portalName={config.branding.productName}
+                          turns={[agent.record]}
+                          busy={streaming}
+                          className='shrink-0'
+                        />
+                      )
+                      : null}
+                  </div>
                   {agent.question !== null
                     ? (
                       <AgentAnswer

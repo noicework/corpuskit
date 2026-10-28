@@ -177,6 +177,8 @@ import {
   withLayout,
 } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
+import { buildUsageReport, usagePeriod, usageReportCsv } from './usage-report.ts'
+import { knowledgeGaps } from './knowledge-gaps.ts'
 import { BindingStore, type BindingStoreApi, peerKeyName } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
@@ -6363,8 +6365,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
   app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const now = opts.now?.() ?? Date.now()
+    const month = usagePeriod(
+      tenantToday(config.timezone, new Date(now)).slice(0, 7),
+      config.timezone,
+      now,
+    )!
     return c.json({
       ...insights.summary(config.slug),
+      // This month's questions the collection could not answer well: curators' eyes only.
+      knowledgeGaps: knowledgeGaps(
+        insights.asksBetween(config.slug, month.from, month.to).asks,
+        month,
+      ),
       // Readers' ratings, with the unhelpful answers joined to the questions they answered.
       feedback: feedbackSummary(
         feedback.ratings(config.slug),
@@ -6372,6 +6385,58 @@ export function buildApp(opts: BuildAppOptions): Hono {
         (learningIds) => feedback.comments(config.slug, learningIds),
       ),
     })
+  })
+
+  /**
+   * One portal's usage for a calendar month in its timezone (docs/USAGE-REPORTS.md), as JSON for
+   * the printable report or, with `format=csv`, as a CSV download. Counts come from the ask log,
+   * readers' ratings and the knowledge box; a day a record no longer covers is reported as not
+   * held, never as zero. Question text never leaves in it.
+   */
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/insights/usage'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    c.header('Cache-Control', 'private, no-store')
+    const params = new URL(c.req.url).searchParams
+    const format = params.get('format') ?? 'json'
+    const now = opts.now?.() ?? Date.now()
+    const period = usagePeriod(params.get('month') ?? '', config.timezone, now)
+    if (
+      [...params.keys()].some((key) =>
+        !['month', 'format'].includes(key) || params.getAll(key).length !== 1
+      ) || !['json', 'csv'].includes(format) || !period
+    ) {
+      return c.json({
+        error: 'invalid_request',
+        message: 'Name a month as YYYY-MM, no later than this one, and a format of json or csv.',
+      }, 400)
+    }
+    const ratings = feedback.ratings(config.slug)
+    const asked = insights.questions(config.slug, ratings.map((rating) => rating.learningId))
+    let documents: { created: string[]; readBackTo: string | null } | null = null
+    if (management) {
+      try {
+        documents = await management.addedBetween(
+          config,
+          new Date(period.from).toISOString(),
+          new Date(period.to).toISOString(),
+        )
+      } catch {
+        // The report says the knowledge box could not be read rather than counting nothing.
+      }
+    }
+    const report = buildUsageReport(config.slug, period, {
+      asks: insights.asksBetween(config.slug, period.from, period.to),
+      ratings: { records: ratings, matched: new Set(Object.keys(asked)) },
+      documents,
+    }, now)
+    if (format === 'json') return c.json(report)
+    c.header('Content-Type', 'text/csv; charset=utf-8')
+    c.header(
+      'Content-Disposition',
+      `attachment; filename="usage-${config.slug}-${period.month}.csv"`,
+    )
+    return c.body(usageReportCsv(report))
   })
 
   app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/:id/hidden'), async (c) => {
@@ -6809,12 +6874,20 @@ export function buildApp(opts: BuildAppOptions): Hono {
       // The answer's learning id, as the reader receives it: the ask log keeps it so a rating
       // of this answer can be joined back to its question.
       let learningId: string | undefined
+      // Response times as this server sees them (docs/USAGE-REPORTS.md): from receiving the
+      // question to the first words of the answer reaching the stream, and to its end.
+      const received = performance.now()
+      let firstWordsAt: number | undefined
       const send = (event: unknown) => {
         if (cancelled()) throw new DOMException('Request cancelled', 'AbortError')
-        const learning = event as { type?: unknown; id?: unknown } | null
+        const learning = event as { type?: unknown; id?: unknown; text?: unknown } | null
         if (learning?.type === 'learning' && typeof learning.id === 'string') {
           learningId = learning.id
         }
+        if (
+          firstWordsAt === undefined && (learning?.type === 'delta' || learning?.type === 'done') &&
+          typeof learning.text === 'string' && learning.text.trim()
+        ) firstWordsAt = performance.now()
         return write(publicSseEvent(event, 'ask'))
       }
       // A follow-up that asks for the earlier answers in another shape
@@ -8347,6 +8420,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
           groundedness: record.groundedness,
           contextRelevance: record.contextRelevance,
           ...(learningId ? { learningId } : {}),
+          firstTokenSec: firstWordsAt === undefined
+            ? null
+            : Math.round(firstWordsAt - received) / 1000,
+          answerSec: Math.round(performance.now() - received) / 1000,
         })
       } catch {
         // insights are best-effort - never fail the answer over them

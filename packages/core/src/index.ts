@@ -1473,6 +1473,7 @@ export type AskEvent = z.infer<typeof AskEventSchema>
 // ---------------------------------------------------------------------------
 export * from './docs.ts'
 export * from './palettes.ts'
+export * from './usage-report.ts'
 export * from './study-design.ts'
 export * from './rbac.ts'
 export * from './lifecycle.ts'

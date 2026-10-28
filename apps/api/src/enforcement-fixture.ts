@@ -1029,6 +1029,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['GET', 'corpus-health', 'content.write'],
   ['POST', 'purge-failed', 'content.write', { dryRun: false }],
   ['GET', 'insights', 'content.write'],
+  ['GET', 'insights/usage', 'audit.export'],
   ['GET', 'site-feedback', 'content.write'],
   ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
   ['DELETE', 'resources/:id', 'content.write'],
@@ -1088,6 +1089,7 @@ const expectedDispatch: Record<string, string> = {
   'labelsets/:id': 'updateLabelset',
   reingest: 'deleteResource',
   'corpus-health': 'corpusHealth',
+  'insights/usage': 'addedBetween',
   'purge-failed': 'purgeFailedResources',
   'resources/:id/hidden': 'setResourceHidden',
   'DELETE resources/:id': 'deleteResource',
@@ -1134,6 +1136,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       counters: () => ({ resources: 1 }),
       resourceCount: () => 1,
       recentResources: () => [matrixResource],
+      addedBetween: () => ({ created: ['2026-09-11T23:00:00.000Z'], readBackTo: null }),
       createText: () => ({ id: 'created' }),
       createLink: () => ({ id: 'created' }),
       uploadFile: () => ({ id: 'created' }),
@@ -1374,7 +1377,9 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
               : suffix.includes('labelsets')
               ? 'topic'
               : 'res-1',
-          ) + (suffix === 'crawl' ? '?url=https://example.test/news' : '')
+          ) +
+        (suffix === 'crawl' ? '?url=https://example.test/news' : '') +
+        (suffix === 'insights/usage' ? '?month=2026-09' : '')
       const session = fixture.sessionFor(
         role === 'wrong-portal' ? 'portal-admin' : role as Role,
         role === 'wrong-portal' ? 'b' : 'a',
@@ -1442,7 +1447,15 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           } else if (suffix === 'insights') {
             expect(JSON.parse(result)).toEqual({
               ...fixture.stores.insights.summary('a'),
+              knowledgeGaps: { month: '2026-09', questions: [], topics: null },
               feedback: { helpful: 0, unhelpful: 0, flagged: [] },
+            })
+          } else if (suffix === 'insights/usage') {
+            expect(JSON.parse(result)).toMatchObject({
+              slug: 'a',
+              month: '2026-09',
+              through: '2026-09-12',
+              totals: { questions: 0, documentsAdded: 1 },
             })
           } else if (suffix === 'site-feedback') {
             expect(JSON.parse(result).feedback).toMatchObject([

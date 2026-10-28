@@ -199,6 +199,14 @@ Deno.test('graph pause, camera keys and shortcut scoping, with a complete linked
     for (
       const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '+', '-', 'Home'] as const
     ) {
+      // Exact inverse zooms can already leave the paused view fitted. Give Home
+      // a displaced view so this checks that it restores the framing.
+      if (key === 'Home') {
+        await page.keyboard.down('Shift')
+        await page.keyboard.press('ArrowLeft')
+        await page.keyboard.up('Shift')
+        await settled(page)
+      }
       const before = await marks(page)
       await page.keyboard.press(key)
       await settled(page)
