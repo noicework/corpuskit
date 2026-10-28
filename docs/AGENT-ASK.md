@@ -238,6 +238,39 @@ data: {"type":"citation","marker":"1","sourceId":"marine","chunkId":"marine/res-
 data: {"type":"done","elapsedMs":18030}
 ```
 
+## Saving an answer as an evidence brief
+
+The Ask page's "Export" saves a research trail as a Word document. The agent ask page does the
+same through `AgentAnswerExportButton` (`apps/web/src/components/AgentAnswerExport.tsx`), which
+writes an evidence brief: each turn's question, who answered it (`agent-start.mode`), what every
+collection gave, the answer with its markers renumbered `[1]`, `[2]`... by first appearance
+whatever the writer used, and the references grouped by collection in the order `agent-start`
+announced them, followed by the collections `sources-failed` named and why.
+
+The page keeps one `AgentAnswerRecord` per turn (`apps/web/src/lib/agent-answer-export.ts`):
+`emptyAgentAnswer(question)`, then `applyAgentEvent(record, event)` for each event
+`streamAgentAsk()` delivers, so the record is whatever the stream has said so far. Only a finished
+turn with text exports (`hasExportableAnswer`). Mount the control with the turns and the portal:
+
+```tsx
+<AgentAnswerExportButton
+  slug={config.slug}
+  portalName={config.branding.productName}
+  turns={turns}
+  busy={isStreaming}
+/>
+```
+
+It renders nothing for a reader without `portal.export`, is disabled while an answer streams, and
+confirms the saved file with the same status line the Ask export uses. A reference links to the
+passage's own `url` when the stream gave one, else to `/t/<portal>/library/<resourceId>` when the
+collection is a portal of this deployment; a passage with neither (a federated partner's, with
+origin links off) is quoted under its title instead. A peer collection is headed "federated
+partner", or "partner over MCP" when its transport is `mcp`, and one that refused its key is
+listed as "this partner could not be reached". Everything the
+stream authored (labels, titles, answer text) is escaped; the brief's own copy goes through the
+portal locale.
+
 ## The stub server
 
 Build and check a view against the fixtures, with no live agent:
