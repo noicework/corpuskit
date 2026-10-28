@@ -175,7 +175,20 @@ export interface ListResourcesOptions {
   bounded?: boolean
 }
 
+/** Administrative inventory, including drafts and failed ingests, without credentialed URLs. */
+export interface ExportResource {
+  resource: ResourceSummary
+  metadata: Record<string, unknown>
+  labels: { labelset: string; label: string }[]
+  created?: string
+  modified?: string
+  status?: string
+  files: { fieldId: string; contentType?: string }[]
+}
+
 export interface RetrievalProvider {
+  /** Complete paged inventory or failure. Optional providers must refuse export, never truncate. */
+  exportResources?(tenant: TenantConfig, signal: AbortSignal): AsyncIterable<ExportResource>
   /** The configured answer model, when the provider can report it. No credentials. */
   generativeModel?(tenant: TenantConfig): Promise<string>
   /** Non-secret identifier of the store supplying this portal. */

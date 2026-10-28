@@ -4,6 +4,7 @@ import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { exportResearchFile, researchExportAuthority } from '../lib/research-export.ts'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { portalStarterQuestions } from '../lib/tenant-copy.ts'
 import {
   createResearchStorageContext,
   readResearchDraft,
@@ -43,7 +44,7 @@ import {
 } from '../api/client.ts'
 import { secondsUntilRetry } from '../lib/ask-budget.ts'
 import { answerHtml, escapeHtml, referenceListHtml } from '../lib/answer-export.ts'
-import { citationHref, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
+import { citationLink, ContextJourney, EvidenceDisclosure } from '../components/AnswerStream.tsx'
 import { CompareConfigurations } from '../components/CompareConfigurations.tsx'
 import { CurrencyNote } from '../components/CurrencyNote.tsx'
 import { RouteChip } from '../components/RouteChip.tsx'
@@ -1500,18 +1501,10 @@ function AnswerCard({
                           const source = message.sources.find((source) =>
                             source.id === citation.resourceId
                           )
-                          const matchedPassage = source?.matchedField === 'summary'
-                            ? undefined
-                            : source?.matchedPassage
                           return (
                             <Link
                               key={citation.index}
-                              to={citationHref(
-                                slug,
-                                citation.resourceId,
-                                matchedPassage,
-                                source?.matchedPage,
-                              )}
+                              to={citationLink(slug, citation, source)}
                               title={citation.headline
                                 ? `${citation.title} - ${citation.headline}`
                                 : citation.title}
@@ -1987,10 +1980,11 @@ export function AskPage() {
     }
   }, [])
 
-  const { data: suggestions } = useQuery({
+  const { data: storedSuggestions } = useQuery({
     queryKey: ['suggested-questions', config.slug],
     queryFn: () => getSuggestedQuestions(config.slug),
   })
+  const suggestions = storedSuggestions && portalStarterQuestions(config, storedSuggestions)
 
   /**
    * Fire-and-forget push of one session to the server, debounced so a burst

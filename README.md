@@ -164,9 +164,10 @@ deploy from a developer machine. The flow is:
 
 1. Commit locally and push.
 2. `.github/workflows/deploy.yml` runs the gate job (`deno task build:cloudflare` then `deno task check` -
-   typecheck, lint, format, tests) on GitHub's runners.
-3. Only if the gate passes does the deploy job publish the preserved package as the Cloudflare
-   Worker named `corpuskit`.
+   typecheck, lint, format, tests) on GitHub's runners, and beside it the browser E2E suite split
+   across parallel shards (`e2e/support/shard.ts`).
+3. Only if the gate and every E2E shard pass does the deploy job publish the preserved package as
+   the Cloudflare Worker named `corpuskit`.
 
 A push that fails the gate never reaches production. Cloudflare configuration is in
 `wrangler.jsonc`; the production and Entra runbook is in `docs/CLOUDFLARE.md`.

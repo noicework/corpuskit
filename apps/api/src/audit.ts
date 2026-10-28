@@ -254,6 +254,7 @@ const fields = {
   suspendedDays: count,
   operatorDeleteAfterDays: count,
   eraseRequested: flag,
+  includeFeedback: flag,
   // Records removed by a portal erasure, one field for each kind in `ERASED_RECORD_KINDS`.
   erasedConfiguration: count,
   erasedAliases: count,
@@ -265,6 +266,7 @@ const fields = {
   erasedSources: count,
   erasedInsights: count,
   erasedFeedback: count,
+  erasedSiteFeedback: count,
   erasedAnswerRecords: count,
   erasedSuggestions: count,
   erasedEnrichments: count,
@@ -277,6 +279,7 @@ const fields = {
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
+  'portal.export.bundle': ['permission', 'includeFeedback', 'code'],
   'auth.external.denied': ['externalReason', 'count'],
   'portal.lifecycle.update': [
     'permission',
@@ -304,6 +307,7 @@ const actionFields = {
     'erasedSources',
     'erasedInsights',
     'erasedFeedback',
+    'erasedSiteFeedback',
     'erasedAnswerRecords',
     'erasedSuggestions',
     'erasedEnrichments',

@@ -175,14 +175,18 @@ whose response is built in memory, the completion record is written before the r
 released; streaming responses are buffered up to a fixed cap for the same reason.
 
 Every declared local store mutation on either runtime also records `local.mutation`, including
-sources, generated enrichments, suggestions, answer feedback, insights, routing, knowledge graph
-proposals and branding. On Deno, the synchronous file write and its required audit completion
+sources, generated enrichments, suggestions, answer feedback, reader feedback, insights, routing,
+knowledge graph proposals and branding. On Deno, the synchronous file write and its required audit completion
 form one rollback boundary. See [single-process hosting](HOSTING.md#single-process-mutation-audit).
 
 Read at `GET /api/admin/t/:slug/audit` (portal `audit.read`) or `GET /api/admin/audit` (platform
 `audit.read`), export as CSV or JSON from the `/export` siblings (`audit.export`). Retention is
 `AUDIT_RETENTION_DAYS` (default 400), applied by the maintenance cron, and the purge is itself
 recorded.
+
+The administrative portal bundle at `GET /api/admin/t/:slug/export` also requires portal
+`audit.export`. Its `portal.export.bundle` events record the explicit feedback selection.
+See [the versioned bundle format](PORTAL-EXPORT.md) for included data and bounds.
 
 ## Break-glass
 

@@ -18,7 +18,7 @@ import type {
   SearchResults,
   TenantConfig,
 } from '@research-portal/core'
-import type { RetrievalProvider } from '@research-portal/retrieval'
+import type { ExportResource, RetrievalProvider } from '@research-portal/retrieval'
 
 export const RESOURCE_ONE: ResourceSummary = {
   id: 'res-1',
@@ -42,9 +42,13 @@ export const RESOURCE_TWO: ResourceSummary = {
   keyFacts: ['Heatwave events correlate with reduced catch rates.'],
 }
 
-const MATCHED_PASSAGE =
+/** The passage search matches and the answer cites in `RESOURCE_ONE`. */
+export const MATCHED_PASSAGE =
   'Surveys across the southern region recorded a sustained 12% decline in abalone ' +
   'populations since 2019, with marine heatwaves identified as the leading stressor.'
+
+/** The page (counted from one) a journey's PDF of `RESOURCE_ONE` carries the passage on. */
+export const CITED_PAGE = 3
 
 export class DoubleProvider implements RetrievalProvider {
   /** Protected so a journey that deletes a document can take it out of the collection. */
@@ -65,6 +69,22 @@ export class DoubleProvider implements RetrievalProvider {
     return Promise.resolve(this.resources)
   }
 
+  async *exportResources(
+    _tenant: TenantConfig,
+    signal: AbortSignal,
+  ): AsyncIterable<ExportResource> {
+    for (const resource of this.resources) {
+      signal.throwIfAborted()
+      yield {
+        resource: { ...resource, originUrl: `https://research.example.test/${resource.id}` },
+        metadata: { collection: 'Fisheries research' },
+        labels: resource.topicIds.map((label) => ({ labelset: 'topic', label })),
+        status: 'PROCESSED',
+        files: resource.type === 'pdf' ? [{ fieldId: 'file', contentType: 'application/pdf' }] : [],
+      }
+    }
+  }
+
   resource(_tenant: TenantConfig, id: string): Promise<ResourceSummary | null> {
     return Promise.resolve(this.resources.find((resource) => resource.id === id) ?? null)
   }
@@ -78,7 +98,7 @@ export class DoubleProvider implements RetrievalProvider {
           relevance: 0.91,
           citedCount: 0,
           matchedPassage: MATCHED_PASSAGE,
-          matchedPage: 3,
+          matchedPage: CITED_PAGE,
         },
         { ...RESOURCE_TWO, relevance: 0.58, citedCount: 0 },
       ],
@@ -141,6 +161,7 @@ export class DoubleProvider implements RetrievalProvider {
       relevance: 0.91,
       citedCount: 1,
       matchedPassage: MATCHED_PASSAGE,
+      matchedPage: CITED_PAGE,
     }
     yield { type: 'sources', resources: [source] }
     yield { type: 'stage', stage: 'retrieval', status: 'completed' }
@@ -157,6 +178,7 @@ export class DoubleProvider implements RetrievalProvider {
         resourceId: RESOURCE_ONE.id,
         title: RESOURCE_ONE.title,
         passage: MATCHED_PASSAGE,
+        page: CITED_PAGE,
       },
     }
     yield { type: 'stage', stage: 'generating', status: 'completed' }

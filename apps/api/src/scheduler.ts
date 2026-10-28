@@ -13,7 +13,8 @@ import {
   looksLikeChallengePage,
 } from './crawl.ts'
 import { type Source, type SourceStoreApi, type WatchStoreApi } from './stores.ts'
-import { FeedbackStore, type FeedbackStoreApi } from './stores.ts'
+import { FeedbackStore, type FeedbackStoreApi, SiteFeedbackStore } from './stores.ts'
+import type { SiteFeedbackStoreApi } from './site-feedback.ts'
 import {
   type EnrichmentStoreApi,
   isAccountBackpressure,
@@ -67,6 +68,7 @@ export interface MaintenanceFailure {
     | 'portal'
     | 'job'
     | 'feedback'
+    | 'site-feedback'
     | 'answerRecords'
 }
 
@@ -315,19 +317,21 @@ interface MaintenanceStores {
   bindings?: Pick<BindingStoreApi, 'status'>
   /** Answer feedback, whose expired ratings the retention pass removes. */
   feedback?: Pick<FeedbackStoreApi, 'purgeExpired'>
+  /** Readers' messages to the portal team, which the retention pass ages out too. */
+  siteFeedback?: Pick<SiteFeedbackStoreApi, 'purgeExpired'>
   answerRecords?: Pick<AnswerRecordStoreApi, 'purgeExpired'>
 }
 
 /**
- * Remove expired answer feedback; true when that worked. A failure is logged and counted in the
- * pass's combined error, and never stops the maintenance jobs.
+ * Remove expired feedback of one kind; true when that worked. A failure is logged and counted in
+ * the pass's combined error, and never stops the maintenance jobs.
  */
-function purgeExpiredFeedback(feedback: MaintenanceStores['feedback']): boolean {
+function purgeExpired(store: { purgeExpired(): number } | undefined, kind: string): boolean {
   try {
-    feedback?.purgeExpired()
+    store?.purgeExpired()
     return true
   } catch {
-    console.error('[scheduler] expired answer feedback could not be removed')
+    console.error(`[scheduler] expired ${kind} could not be removed`)
     return false
   }
 }
@@ -354,16 +358,14 @@ export async function runSystemMaintenance(
   if (retain) stores.rbac.retainAudit(days)
   const failures: MaintenanceFailure[] = []
   // A failed purge never stops the jobs, but the pass still reports it at the end.
-  if (retain && !purgeExpiredFeedback(stores.feedback)) {
+  if (retain && !purgeExpired(stores.feedback, 'answer feedback')) {
     failures.push({ job: 'retention', target: 'feedback' })
   }
-  if (retain) {
-    try {
-      stores.answerRecords?.purgeExpired()
-    } catch {
-      console.error('[scheduler] expired answer records could not be removed')
-      failures.push({ job: 'retention', target: 'answerRecords' })
-    }
+  if (retain && !purgeExpired(stores.siteFeedback, 'site feedback')) {
+    failures.push({ job: 'retention', target: 'site-feedback' })
+  }
+  if (retain && !purgeExpired(stores.answerRecords, 'answer records')) {
+    failures.push({ job: 'retention', target: 'answerRecords' })
   }
   let halted = false
   for (const job of jobs) {
@@ -973,6 +975,7 @@ export function startScheduler(
   // Unset or any value other than the exact string 'false' keeps the existing timers.
   if (env.LOCAL_SCHEDULER_ENABLED === 'false') return async () => {}
   // The feedback files `buildApp` keeps by default, under the same DATA_DIR.
+  const dataDir = env.DATA_DIR ?? './data'
   const stores = {
     rbac,
     tenants,
@@ -981,11 +984,12 @@ export function startScheduler(
     enrichments,
     lifecycle,
     bindings,
-    feedback: new FeedbackStore(env.DATA_DIR ?? './data'),
-    answerRecords: new AnswerRecordStore(new FileAnswerRecordState(env.DATA_DIR ?? './data')),
+    feedback: new FeedbackStore(dataDir),
+    siteFeedback: new SiteFeedbackStore(dataDir),
+    answerRecords: new AnswerRecordStore(new FileAnswerRecordState(dataDir)),
   }
   return startMaintenanceTimers({
-    dataDir: env.DATA_DIR ?? './data',
+    dataDir,
     atUtc: env.MAINTENANCE_AT_UTC,
     cadenceMs: autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS),
     failureMessage: (error) => error instanceof MaintenanceError ? error.message : undefined,

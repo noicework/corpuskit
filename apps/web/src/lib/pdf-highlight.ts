@@ -49,11 +49,17 @@ export function findPassageRange(
     text += piece
     for (let i = 0; i < piece.length; i++) owner.push(index)
   })
+  const full = normaliseText(passage)
   for (const needle of needles) {
     const at = text.indexOf(needle)
     if (at === -1) continue
+    // Every needle opens the passage, so the match runs on for as long as the
+    // page keeps agreeing with it: the whole cited passage is highlighted, not
+    // only the needle that found it.
+    let length = needle.length
+    while (length < full.length && text[at + length] === full[length]) length++
     const start = owner[at]
-    const end = owner[Math.min(at + needle.length - 1, owner.length - 1)]
+    const end = owner[Math.min(at + length - 1, owner.length - 1)]
     if (start === undefined || end === undefined) continue
     return { start, end }
   }

@@ -160,6 +160,19 @@ const POPULATE: Record<keyof DurableStores, (f: EnforcementFixture, slug: string
       good: false,
       text: 'reader@first-customer.example says the year is wrong',
     }),
+  siteFeedback: (f, slug) =>
+    // Messages age out on real time, whatever the fixture's clock says.
+    f.stores.siteFeedback.save(slug, {
+      id: '00000000-0000-4000-8000-000000000001',
+      slug,
+      createdAt: new Date().toISOString(),
+      category: 'problem',
+      message: 'The download link on this page is broken.',
+      email: 'reader@first-customer.example',
+      pageUrl: 'https://first-customer.example/t/erasure-probe/library',
+      delivery: 'sent',
+      notificationId: 'notification-probe',
+    }),
   sessions: (f, slug) => {
     for (const owner of [researcher, anonymous]) {
       f.stores.sessions.put(slug, owner, {
@@ -804,6 +817,7 @@ const DURABLE_TABLES: Record<string, string> = {
   enrichment_records: 'erased: DurableEnrichmentStore.erase',
   routing_records: 'erased: DurableRoutingLog.erase',
   answer_feedback: 'erased: DurableFeedbackStore.erase',
+  site_feedback: 'erased: DurableSiteFeedbackStore.erase',
   audit_events: 'erased: RbacState.erasePortalRecords, keeping the erasure records',
   audit_event_order: 'erased: with the audit events it orders',
   audit_query_snapshots: 'erased: open paged queries of the portal',

@@ -29,6 +29,8 @@ function fixture(opts: {
   failures?: { status: number; detail: string }[]
   inferenceModel?: string
   answer?: string
+  /** The zero-based page the platform reports for the retrieved paragraph. */
+  page?: number
 } = {}) {
   const bodies: Record<string, unknown>[] = []
   const resource = {
@@ -38,7 +40,11 @@ function fixture(opts: {
     fields: {
       'f/pdf': {
         paragraphs: {
-          'report/f/pdf/0-16': { score: 0.9, text: 'Stocks recovered.' },
+          'report/f/pdf/0-16': {
+            score: 0.9,
+            text: 'Stocks recovered.',
+            ...(opts.page === undefined ? {} : { position: { page_number: opts.page } }),
+          },
         },
       },
     },
@@ -112,12 +118,46 @@ Deno.test('all prose surfaces use the code flag, with claim-level footnotes afte
     })
     expect(events.filter((e) => e.type === 'citation')).toEqual([{
       type: 'citation',
-      citation: { index: 1, resourceId: 'report', title: 'Original report' },
+      citation: {
+        index: 1,
+        resourceId: 'report',
+        title: 'Original report',
+        passage: 'Stocks recovered.',
+      },
     }])
     const deltas = events.flatMap((e) => e.type === 'delta' ? [e.text] : []).join('')
     expect(deltas).toContain('Stocks recovered.')
     expect(deltas).not.toMatch(/block-AA|\[7\]/)
     expect(events.some((e) => e.type === 'error')).toBe(false)
+  }
+})
+
+Deno.test("a citation carries the paragraph it cited and that paragraph's page, in both modes", async () => {
+  for (const mode of ['llm_footnotes', 'standard'] as const) {
+    // The platform counts pages from zero; the reader counts from one.
+    const events = await collect(fixture({ mode, page: 4 }).provider)
+    expect(events.filter((e) => e.type === 'citation')).toEqual([{
+      type: 'citation',
+      citation: {
+        index: 1,
+        resourceId: 'report',
+        title: 'Original report',
+        passage: 'Stocks recovered.',
+        page: 5,
+      },
+    }])
+    const sources = events.findLast((e) => e.type === 'sources')
+    expect(sources?.type === 'sources' && sources.resources[0]?.matchedPage).toBe(5)
+  }
+})
+
+Deno.test('a citation of a paragraph retrieval never returned keeps no passage or page', async () => {
+  for (const mode of ['llm_footnotes', 'standard'] as const) {
+    const events = await collect(fixture({ mode, page: 4, id: 'report/f/pdf/16-40' }).provider)
+    expect(events.filter((e) => e.type === 'citation')).toEqual([{
+      type: 'citation',
+      citation: { index: 1, resourceId: 'report', title: 'Original report' },
+    }])
   }
 })
 

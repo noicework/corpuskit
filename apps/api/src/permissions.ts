@@ -128,6 +128,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'PUT', '/api/admin/t/:slug/answer-records/retention', 'behaviour.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/export', 'audit.export', 'portal', {
+    subActions: [{ action: 'portal.export.bundle', permission: 'audit.export', scope: 'portal' }],
+  }),
   entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),
   entry('http', 'GET', '/api/admin/audit/export', 'audit.export', 'platform'),
   ...['people', 'groups'].flatMap((family) => [
@@ -184,6 +187,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['answerRecords', ['record'], 'portal.ask', 'portal'],
     ['answerRecords', ['setRetention'], 'behaviour.write', 'portal'],
     ['feedback', ['record'], 'portal.ask', 'portal'],
+    ['siteFeedback', ['save'], 'portal.ask', 'portal'],
     ['routing', ['record'], 'portal.ask', 'portal'],
     ['watches', ['add', 'update', 'remove'], 'portal.watch', 'portal'],
     ['sources', ['add', 'update', 'remove'], 'content.write', 'portal'],
@@ -268,6 +272,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/t/:slug/graph', 'portal.read', 'portal'),
   entry('http', 'POST', '/api/t/:slug/generate', 'portal.generate', 'portal'),
   entry('http', 'POST', '/api/t/:slug/feedback', 'portal.ask', 'portal'),
+  entry('http', 'POST', '/api/t/:slug/site-feedback', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/summarize', 'portal.generate', 'portal'),
   entry('http', 'POST', '/api/t/:slug/subqueries', 'portal.generate', 'portal'),
   entry('http', 'GET', '/api/t/:slug/entity', 'portal.read', 'portal'),
@@ -409,7 +414,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
         action: 'tenant.behaviour.update',
         permission: 'behaviour.write',
         scope: 'portal',
-        fields: ['searchPlaceholder', 'regionalDiscovery'],
+        fields: ['searchPlaceholder', 'regionalDiscovery', 'siteFeedback'],
       },
     ],
   }),
@@ -491,6 +496,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/admin/t/:slug/corpus-health', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/purge-failed', 'content.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/insights', 'content.write', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/site-feedback', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/:id/hidden', 'content.write', 'portal', {
     subActions: [HIDDEN_RESOURCES_ENABLE],
   }),
@@ -600,10 +606,11 @@ export function isAccessTightening(
  */
 export type AskUse = 'count' | 'gate'
 const ASK_FREE_ROUTES: ReadonlySet<string> = new Set([
-  // A user's own saved research and answer feedback make no model call.
+  // Saved research and readers' feedback, on an answer or the portal, make no model call.
   'PUT /api/t/:slug/sessions/:id',
   'DELETE /api/t/:slug/sessions/:id',
   'POST /api/t/:slug/feedback',
+  'POST /api/t/:slug/site-feedback',
 ])
 const ASK_GATED_ROUTES: ReadonlySet<string> = new Set([
   'POST /api/t/:slug/route',
