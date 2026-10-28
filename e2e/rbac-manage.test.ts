@@ -39,6 +39,7 @@ const curatorTabs = [
 const administratorTabs = [
   ...curatorTabs,
   'appearance',
+  'evaluations',
   'behaviour',
   'details',
   'connections',
