@@ -8,6 +8,13 @@ interface Fetcher {
   fetch(request: Request): Promise<Response>
 }
 
+/** The options form of a `send_email` binding, which reader feedback sends with. */
+interface SendEmail {
+  send(message: import('../../api/src/site-feedback.ts').SiteFeedbackEmail): Promise<
+    { messageId: string }
+  >
+}
+
 interface DurableObjectSqlCursor<T> {
   one(): T
   toArray(): T[]

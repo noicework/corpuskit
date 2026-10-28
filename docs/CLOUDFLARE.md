@@ -194,10 +194,39 @@ in the pinned Wrangler version. Proxy access logs and other telemetry must also 
 query string. The source-bound assignment migration is not safe to roll back to older code while
 external assignments remain; see [the hosting rollback note](HOSTING.md#rollback).
 
+## Reader feedback email
+
+[Reader feedback](HOSTING.md#reader-feedback) reaches the portal team through a Cloudflare Email
+Service `send_email` binding. Neither reference configuration has one, so reader feedback is off on
+both until a deployment adds it:
+
+1. Onboard the sender's domain to Email Service sending (`npx wrangler email sending enable
+   <domain>`, or in the dashboard) and publish the DNS records it asks for.
+2. Add the binding to the Worker's configuration. Restricting it to the one sender and recipient
+   means a code change alone can never mail anyone else:
+
+   ```jsonc
+   "send_email": [
+     {
+       "name": "SITE_FEEDBACK_EMAIL",
+       "destination_address": "team@example.org",
+       "allowed_sender_addresses": ["feedback@example.org"]
+     }
+   ]
+   ```
+
+3. Set `SITE_FEEDBACK_FROM` and `SITE_FEEDBACK_TO` in `vars` (they are addresses, not secrets),
+   and `SITE_FEEDBACK_EMAIL_BINDING` only when the binding has another name.
+4. Regenerate `worker-configuration.d.ts` with `deno task types:cloudflare`.
+
+A binding is a deployment setting, so routine releases that preserve existing configuration apply
+it only when the configuration itself is deployed. Turn it on for each portal afterwards with
+`{"siteFeedback": true}`.
+
 ## State and rollback
 
 Tenant configuration, bindings, sessions, investigations, watches, sources, insights, answer
-feedback, suggestions, enrichments, branding assets and each portal's hosting lifecycle (status, limits,
+feedback, reader feedback, suggestions, enrichments, branding assets and each portal's hosting lifecycle (status, limits,
 ask counts and capacity ledger; see [lifecycle storage](HOSTING.md#storage)) live in the
 `PortalDurableObject` SQLite database. The first Worker migration is tagged `v1`; future schema changes must add a new
 migration tag. The hosting lifecycle uses the existing `state` table, so it needs no new

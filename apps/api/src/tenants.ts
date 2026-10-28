@@ -253,6 +253,8 @@ export interface TenantPatch {
   regionalDiscovery?: boolean
   /** Whether the portal offers agent ask (opt-in). */
   agentAsk?: boolean
+  /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
+  siteFeedback?: boolean
   branding?: TenantConfig['branding']
   /**
    * Portal-managed behaviour settings (system prompt, image grounding). `uncitedAnswers`: what an

@@ -148,6 +148,7 @@ const READ_ONLY_EXEMPT = new Set([
   'POST /api/t/:slug/route',
   'POST /api/t/:slug/generate',
   'POST /api/t/:slug/feedback',
+  'POST /api/t/:slug/site-feedback',
   'POST /api/t/:slug/summarize',
   'POST /api/t/:slug/subqueries',
   'POST /api/t/:slug/verdicts',

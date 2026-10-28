@@ -44,7 +44,7 @@
   inset-inline: 0;
   bottom: 0;
   height: 0.1875rem;
-  background: var(--rp-accent);
+  background: var(--rp-accent-on-primary);
   content: '';
 }
 
