@@ -226,6 +226,10 @@ Deno.test('bundle allowlists key metadata and resources and excludes feedback un
         evaluationResults: 0,
       },
     })
+    const snapshot = JSON.parse(files.get('manifest.json')!).auditSnapshot
+    expect(Object.keys(snapshot).sort()).toEqual(['expiresAt', 'id'])
+    expect(typeof snapshot.id).toBe('string')
+    expect(Number.isFinite(Date.parse(snapshot.expiresAt))).toBe(true)
     expect(JSON.parse(files.get('resources.json')!)[0]).toMatchObject({
       metadata: { useful: 'Kept metadata' },
       files: [{ fieldId: 'file', url: '/api/t/a/resources/res-1/file/file' }],

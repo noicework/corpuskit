@@ -34,7 +34,7 @@ questions, so handle downloaded bundles as administrative data.
 
 | File | Contents |
 |---|---|
-| `manifest.json` | `schemaVersion: 1`, portal slug, start/end UTC timestamps, `complete: true`, counts, feedback selection, audit watermark, file inventory, limits and scope notes. Byte sizes describe each other file's UTF-8 payload, before ZIP headers. |
+| `manifest.json` | `schemaVersion: 1`, portal slug, start/end UTC timestamps, `complete: true`, counts, feedback selection, opaque audit snapshot id and expiry, file inventory, limits and scope notes. Byte sizes describe each other file's UTF-8 payload, before ZIP headers. |
 | `configuration.json` | `tenant`: validated configuration including branding and branding asset links, layout, terminology/domain terms, topics, suggested questions, access mode, discovery, language, retrieval and extraction settings. `settings`: ask prompt, image grounding, uncited-answer behaviour, disabled flag and hosting lifecycle/limits. Only fields supported by current schemas are exported. |
 | `resources.json` | Array of `{resource, metadata, labels, created?, modified?, status?, portalUrl, files}`. `resource` is the typed summary with local merchandising applied; `metadata` is extra metadata after redaction; labels include user and computed resource classifications. Files have `fieldId`, optional `contentType`, and the portal's authenticated proxy `url`. |
 | `labelsets.json` | Labelset definitions, labels, cardinality and descriptions. |
@@ -78,6 +78,9 @@ audit viewer, correlated by `X-Request-Id`. Provider pages and separate stores a
 the export, not as one atomic cross-system snapshot. Counts describe included records.
 Source errors, cancellation and exceeded bounds produce errors, never a partial ZIP marked
 complete.
+
+The manifest exposes only the snapshot's opaque id and expiry. Its internal sequence position
+is shared across portals and is deliberately withheld.
 
 ## Bounds and retention
 

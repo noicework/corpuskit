@@ -240,7 +240,7 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
             complete: true,
             counts,
             includeFeedback,
-            auditSnapshot: { watermark: snapshot.watermark },
+            auditSnapshot: { id: snapshot.id, expiresAt: snapshot.expiresAt },
             files: [...zip.entries, { path: 'manifest.json' }],
             limits: {
               bytes: PORTAL_EXPORT_MAX_BYTES,
@@ -252,7 +252,7 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
               evaluationNote,
               'File and branding links require portal access. Original binary files are not embedded.',
               'Usage insights are the 90-day management summary, with the latest 25 asks and 30 gaps.',
-              'Audit rows are fixed at the watermark before resource retrieval; this export completion is recorded after bundle preparation.',
+              'Audit rows are fixed at the snapshot before resource retrieval; this export completion is recorded after bundle preparation.',
               'Provider pages and local stores are read during the export, not as one atomic cross-system snapshot.',
               ...(includeFeedback
                 ? ['Reader feedback messages contain personal data.']
