@@ -1018,10 +1018,12 @@ body {
 @supports (background: color-mix(in srgb, red 50%, transparent)) {
   .rp-hero-duotone {
     opacity: 1;
+    /* The shares rise where a photo could push the hero text under AA (lib/theme.ts
+     * heroVeilVars); 85% and 60% are the drawn defaults. */
     background: linear-gradient(
       135deg,
-      color-mix(in srgb, var(--rp-hero-from) 85%, transparent),
-      color-mix(in srgb, var(--rp-hero-to) 60%, transparent)
+      color-mix(in srgb, var(--rp-hero-from) var(--rp-hero-veil-from, 85%), transparent),
+      color-mix(in srgb, var(--rp-hero-to) var(--rp-hero-veil-to, 60%), transparent)
     );
   }
 }
@@ -1041,7 +1043,12 @@ body {
 
 /* Bottom scrim that keeps headline text legible over any photograph. */
 .rp-scrim-bottom {
-  background: linear-gradient(to top, rgba(10, 10, 12, 0.55), rgba(10, 10, 12, 0) 55%);
+  /* Dark under light hero text, light under dark hero text (lib/theme.ts heroVeilVars). */
+  background: linear-gradient(
+    to top,
+    rgb(var(--rp-hero-scrim, 10 10 12) / 0.55),
+    rgb(var(--rp-hero-scrim, 10 10 12) / 0) 55%
+  );
 }
 
 /* ---------------------------------------------------------------------------

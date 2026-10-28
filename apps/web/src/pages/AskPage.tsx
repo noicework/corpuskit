@@ -2797,7 +2797,14 @@ export function AskPage() {
       ? (lastMessage.rateLimited
         ? ui('The portal is busy - retrying shortly')
         : ui('Answer unavailable'))
-      : ui('Answer complete')
+      // Said once, when the answer settles - never per streamed chunk - with what came back,
+      // so a screen reader hears the sources and citations that appear with it (WCAG 4.1.3).
+      : `${ui('Answer complete')} ${
+        ui('{retrieved} sources retrieved, {cited} cited.', {
+          retrieved: lastMessage.sources.length,
+          cited: lastMessage.citations.length,
+        })
+      }`
     : ''
 
   return (

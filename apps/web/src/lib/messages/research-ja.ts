@@ -699,6 +699,8 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'An executive briefing document - an overview, structured sections, and the key takeaways worth remembering.':
     '概要、構成された節、主要な知見をまとめたブリーフィング資料です。',
   'Answer complete': '回答が完了しました',
+  '{retrieved} sources retrieved, {cited} cited.':
+    '{retrieved}件の資料を取得し、{cited}件を引用しました。',
   'Answer in progress': '回答を作成中',
   'Answer paused - results only': '回答を一時停止し、検索結果のみを表示しています',
   'Answer relevance': '回答の関連度',

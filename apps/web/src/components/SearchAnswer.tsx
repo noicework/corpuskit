@@ -279,7 +279,15 @@ function PermittedSearchAnswer({ slug, query, onResult }: SearchAnswerProps) {
   const liveMessage = status === 'streaming'
     ? (stageLabel ? ui(stageLabel) : ui('Answer in progress'))
     : status === 'done'
-    ? (refused ? ui('No direct evidence found') : ui('Answer complete'))
+    // Once, on completion, with the counts that appear beside it (WCAG 4.1.3).
+    ? (refused
+      ? ui('No direct evidence found')
+      : `${ui('Answer complete')} ${
+        ui('{retrieved} sources retrieved, {cited} cited.', {
+          retrieved: sources.length,
+          cited: citations.length,
+        })
+      }`)
     : status === 'error'
     ? ui('Answer unavailable')
     : status === 'deferred'

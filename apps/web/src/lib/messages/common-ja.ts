@@ -32,6 +32,7 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'New conversation': '新しい会話',
   'New session': '新しい会話',
   'Open menu': 'メニューを開く',
+  'Code example': 'コード例',
   'Close menu': 'メニューを閉じる',
   'Light mode': 'ライト表示',
   'Dark mode': 'ダーク表示',
