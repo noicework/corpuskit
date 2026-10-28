@@ -1,3 +1,4 @@
+import { refreshAfterDelete } from '../../components/DeleteDocument.tsx'
 import { useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -96,7 +97,7 @@ function LinkHealthContent({ slug }: { slug: string }) {
         setRetiring(null)
         await refresh()
         if (action === 'retire') {
-          await queryClient.invalidateQueries({ queryKey: ['admin-recent', slug] })
+          await refreshAfterDelete(queryClient, slug, row!.resourceId!)
         }
       }
       heading.current?.focus()

@@ -1245,7 +1245,14 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
           ).toBe(true)
         } else if (method === 'GET') {
           if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
-          else if (suffix === 'suggestions') {
+          else if (suffix === 'link-health') {
+            expect(JSON.parse(result)).toMatchObject([{
+              id: 'res-1',
+              status: 'broken',
+              attempts: 1,
+              ignored: false,
+            }])
+          } else if (suffix === 'suggestions') {
             expect(JSON.parse(result)[0].id).toBe('suggestion-a')
           } else if (suffix === 'enrichments/export') {
             expect(result).toContain('Seeded research')

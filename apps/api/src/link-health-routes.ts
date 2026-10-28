@@ -4,7 +4,13 @@ import type { RetrievalProvider } from '@research-portal/retrieval'
 import { declaredRoute } from './permissions.ts'
 import type { TenantStoreApi } from './tenants.ts'
 import type { SourceStoreApi } from './stores.ts'
-import { checkLink, type LinkHealthStoreApi, linkTargets, runLinkChecks } from './link-health.ts'
+import {
+  checkLink,
+  type LinkHealthStoreApi,
+  linkTargets,
+  recordLinkCheck,
+  runLinkChecks,
+} from './link-health.ts'
 
 export function registerLinkHealthRoutes(app: Hono, options: {
   tenants: TenantStoreApi
@@ -19,7 +25,7 @@ export function registerLinkHealthRoutes(app: Hono, options: {
   app.get(declaredRoute('GET', base), (c) => {
     const slug = c.req.param('slug')!
     if (!options.tenants.get(slug)) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(options.store.list(slug))
+    return c.json(options.store.list(slug).filter((row) => row.ignored || row.status !== 'ok'))
   })
   app.post(declaredRoute('POST', `${base}/check`), async (c) => {
     const config = options.tenants.get(c.req.param('slug')!)
@@ -47,11 +53,14 @@ export function registerLinkHealthRoutes(app: Hono, options: {
       const row = options.store.list(slug).find((row) => row.id === c.req.param('id'))
       if (!row) return options.notFound(c)
       const signal = options.signal(c.req.raw)
-      const next = action === 'ignore'
-        ? { ...row, ignored: true }
-        : await checkLink(row, { ...row, ignored: false }, options.client, signal)
-      signal.throwIfAborted()
-      options.store.put(slug, next)
+      if (action === 'ignore') options.store.put(slug, { ...row, ignored: true })
+      else {
+        const previous = { ...row, ignored: false }
+        if (row.ignored) options.store.put(slug, previous)
+        const next = await checkLink(previous, previous, options.client, signal)
+        signal.throwIfAborted()
+        recordLinkCheck(options.store, slug, next, previous)
+      }
       return c.json({ ok: true })
     })
   }

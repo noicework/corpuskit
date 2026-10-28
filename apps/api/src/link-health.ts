@@ -62,7 +62,7 @@ export async function checkLink(
     ...target,
     id: previous?.id ?? crypto.randomUUID(),
     status,
-    ...(httpStatus ? { httpStatus } : {}),
+    httpStatus,
     firstFailed: status === 'ok' ? null : previous?.firstFailed ?? now,
     lastChecked: now,
     attempts: (previous?.attempts ?? 0) + 1,
@@ -92,6 +92,29 @@ export async function linkTargets(
 }
 const sameTarget = (a: LinkTarget, b: LinkTarget) =>
   a.url === b.url && a.resourceId === b.resourceId && a.sourceId === b.sourceId
+
+/** Merge the completed check with decisions and attempts written while HTTP was in flight. */
+export function recordLinkCheck(
+  store: LinkHealthStoreApi,
+  slug: string,
+  result: LinkCheck,
+  previous?: LinkCheck,
+): void {
+  const latest = store.list(slug).find((row) => sameTarget(row, result))
+  // A retirement or reconciliation removed this review while the request was in flight.
+  if (previous && !latest) return
+  store.put(slug, {
+    ...result,
+    id: latest?.id ?? result.id,
+    attempts: (latest?.attempts ?? result.attempts - 1) + 1,
+    ignored: latest?.ignored ?? result.ignored,
+    firstFailed: result.status === 'ok'
+      ? null
+      : latest?.status === 'ok'
+      ? result.lastChecked
+      : latest?.firstFailed ?? result.firstFailed,
+  })
+}
 
 /** Oldest checks first; ignored decisions survive later checks and process restarts. */
 export async function runLinkChecks(
@@ -150,7 +173,7 @@ export async function runLinkChecks(
     if (stopTaking() || Date.now() >= deadline) break
     const result = await checkLink(target, previous, client, signal)
     signal?.throwIfAborted()
-    store.put(slug, result)
+    recordLinkCheck(store, slug, result, previous)
     checked++
     if (result.status !== 'ok') failed++
   }
