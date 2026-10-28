@@ -1,3 +1,4 @@
+import { browserClientId } from '../lib/browser-client.ts'
 import {
   AdminAccessError,
   adminFetch,
@@ -1266,13 +1267,7 @@ export function getRelationsGraph(
 // ---------------------------------------------------------------------------
 
 export function clientId(): string {
-  const KEY = 'rp-client-id'
-  let id = localStorage.getItem(KEY)
-  if (!id) {
-    id = crypto.randomUUID().replace(/-/g, '')
-    localStorage.setItem(KEY, id)
-  }
-  return id
+  return browserClientId()
 }
 
 export async function clientRequest<T>(

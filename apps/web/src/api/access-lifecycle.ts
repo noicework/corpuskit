@@ -1,3 +1,4 @@
+import { browserClientId } from '../lib/browser-client.ts'
 import type { Permission, Scope } from '@research-portal/core'
 import { type AuthSession, AuthSessionError, getAuthSession, parseAuthSession } from './auth.ts'
 
@@ -33,13 +34,7 @@ export class StaleAuthorityError extends Error {
 }
 
 function anonymousBrowserId(): string {
-  const key = 'rp-client-id'
-  let id = localStorage.getItem(key)
-  if (!id) {
-    id = crypto.randomUUID().replace(/-/g, '')
-    localStorage.setItem(key, id)
-  }
-  return id
+  return browserClientId()
 }
 
 function identityOf(session: AuthSession, browserId: () => string): string | null {
