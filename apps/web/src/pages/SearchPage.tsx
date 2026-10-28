@@ -275,6 +275,9 @@ function ResultCard(
               compact
               evidence={{
                 passage: resource.matchedPassage || resource.title,
+                ...(resource.matchedPassage && resource.matchedPage
+                  ? { page: resource.matchedPage }
+                  : {}),
                 resourceId: resource.id,
                 resourceTitle: resource.title,
                 score: resource.relevance,
