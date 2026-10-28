@@ -1,3 +1,4 @@
+import { EMBED_JA } from './messages/embed-ja.ts'
 import { ANSWER_RECORD_JA } from './messages/answer-record-ja.ts'
 import { EVALUATIONS_JA } from './messages/evaluations-ja.ts'
 import { LINK_HEALTH_JA } from './messages/link-health-ja.ts'
@@ -35,6 +36,7 @@ export function combineJapaneseCatalogs(
 }
 
 export const JAPANESE_MESSAGES = combineJapaneseCatalogs(
+  EMBED_JA,
   ANSWER_RECORD_JA,
   COMMON_JA,
   EVALUATIONS_JA,

@@ -1,3 +1,4 @@
+import { EmbedPage } from './pages/EmbedPage.tsx'
 import { AnswerRecordPage } from './pages/AnswerRecordPage.tsx'
 import { Component, type ContextType, type ReactNode, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
@@ -119,6 +120,7 @@ createRoot(container).render(
                   </ResolvedAccess>
                 }
               />
+              <Route path='/t/:slug/embed' element={<EmbedPage />} />
               <Route
                 path='/t/:slug'
                 element={

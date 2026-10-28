@@ -1,3 +1,4 @@
+import { EmbeddingPanel } from './EmbeddingPanel.tsx'
 import { messageFor } from './shared.ts'
 import { usePortalLocale } from '../../lib/portal-locale.tsx'
 import { useAccess } from '../../components/AccessProvider.tsx'
@@ -402,8 +403,13 @@ function SearchConfigsBlock({ slug }: { slug: string }) {
  * configurations. Both are platform-facing settings, not content.
  */
 function BehaviourPanelContent({ slug }: { slug: string }) {
+  const { data: config } = useQuery({
+    queryKey: ['tenant-config', slug],
+    queryFn: () => getTenantConfig(slug),
+  })
   return (
     <div className='space-y-6 lg:space-y-8'>
+      {config && <EmbeddingPanel config={config} />}
       <AskPromptEditor slug={slug} />
       <SearchConfigsBlock slug={slug} />
     </div>

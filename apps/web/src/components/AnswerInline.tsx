@@ -31,6 +31,7 @@ export interface InlineOptions {
   streaming: boolean
   /** Added to a marker's tooltip, to say where else the reader finds the source. */
   citationHint?: string
+  citationTarget?: '_blank'
   /** Application-copy translator; source text and citation titles remain verbatim. */
   ui?: ResearchUi
 }
@@ -88,12 +89,14 @@ export function renderCitationMarkers(
         <sup key={key}>
           <Link
             to={citationLink(slug, citation, source)}
+            target={options.citationTarget}
+            rel={options.citationTarget ? 'noopener noreferrer' : undefined}
             className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
             style={{ color: 'var(--rp-accent-fg)' }}
             aria-label={ui('Source {index}, {title}', {
               index: citation.index,
               title: citation.title,
-            })}
+            }) + (options.citationTarget ? `, ${ui('Opens in a new tab')}` : '')}
             title={ui('Source {index} - {title}{hint}', {
               index: citation.index,
               title: citation.title,
@@ -160,6 +163,7 @@ export function AnswerText({
   audit,
   streaming,
   citationHint,
+  citationTarget,
   bodyClassName,
 }: {
   text: string
@@ -169,6 +173,7 @@ export function AnswerText({
   audit?: AnswerAudit
   streaming: boolean
   citationHint?: string
+  citationTarget?: '_blank'
   bodyClassName?: string
 }) {
   const { ui } = usePortalLocale()
@@ -177,6 +182,7 @@ export function AnswerText({
     unsupported: unsupportedFigurePattern(audit),
     streaming,
     ...(citationHint ? { citationHint } : {}),
+    ...(citationTarget ? { citationTarget } : {}),
   }
   return (
     <AnswerMarkdown

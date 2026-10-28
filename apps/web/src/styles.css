@@ -3857,3 +3857,35 @@ button:disabled,
     outline-offset: -4px;
   }
 }
+
+/* Embed targets remain usable at large text sizes and on coarse pointers. */
+.rp-embed {
+  overflow-wrap: anywhere;
+}
+.rp-embed-link {
+  min-height: max(24px, 1.5rem);
+  min-width: max(24px, 1.5rem);
+}
+.rp-embed-citation,
+.rp-embed sup a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: max(24px, 1.5rem);
+  min-width: max(24px, 1.5rem);
+}
+@media (pointer: coarse) {
+  .rp-embed-link,
+  .rp-embed-citation,
+  .rp-embed sup a {
+    min-height: max(44px, 2.75rem);
+    min-width: max(44px, 2.75rem);
+  }
+}
+
+@media (pointer: coarse) {
+  .rp-embed .rp-btn {
+    min-height: max(44px, 2.75rem);
+    min-width: max(44px, 2.75rem);
+  }
+}
