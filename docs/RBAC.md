@@ -165,13 +165,47 @@ Keys let MCP clients and scripts act on one portal.
   portals' routes, after expiry or revocation, and for every management permission: a key is a
   data-plane credential whatever role it carries.
 - A key may name an `estate`: up to 19 other portals it also reaches at the estate MCP endpoint,
-  and only there. Its creator must hold the key's role on each of them when it is minted, and on
+  and only there. Its creator must administer each of them when it is minted, and on
   each the effective role is again `min(key role, creator's current role on that portal)`, so a
   portal drops out of the key's reach as soon as the creator loses access to it. The key is listed,
   revoked and expires on the portal it was minted on, and revoking it there ends it everywhere.
   A revoked key keeps no estate.
 - Keys minted before this release (`ck_mcp_` prefix) keep working as fixed `viewer` keys on their
   portal. They cannot be raised, and the key list marks them as legacy.
+
+## Federated portal MCP tools
+
+`POST /api/t/:slug/mcp` also offers `ask_federated` and `search_federated` when the
+portal has `agentAsk: true`, its retrieval provider supports agent ask or composition, and
+the caller has `portal.ask`. The tools are absent from `tools/list` otherwise, and direct
+calls cannot bypass that check. Existing portal and legacy viewer keys may use them because
+viewer includes `portal.ask`; a key still reaches only its bound portal at this endpoint.
+
+- `ask_federated`: `question` (1 to 2000 characters). Runs the same agent answer path as
+  `POST /api/t/:slug/ask-agent`: the configured agent, or one answer composed from the host's
+  passages and its federation peers. Returns `answer`, `mode`, `sources`, `citations` with
+  their `source` attribution, and `failed_sources` with each unavailable source and reason.
+  An interrupted or failed answer releases no partial answer text.
+- `search_federated`: `query` (1 to 2000 characters) and optional `limit` (passages per source,
+  default 4, maximum 20). Returns `results` containing passage text and its `source`, plus
+  `sources` and `failed_sources`. It makes no generation call and consumes no daily ask.
+  A call in which every source fails is an MCP tool error, with those sources still listed.
+
+Both use the host's configured peers and sealed peer keys. Participation, peer document
+exclusion and origin-link settings follow [agent ask](AGENT-ASK.md#federation-peers): an
+opted-out host searches only its own collection, and excluded peer passages are withheld.
+The host may still use its own excluded documents, as its own HTTP agent ask does.
+Peer lookups have the same source timeout as HTTP agent ask. A peer's failure does not discard
+other sources' results. These tools do not enumerate other hosted portals from an estate key;
+use the estate endpoint below to query the key's other hosted portals.
+
+Every call takes the same per-caller and per-address rate budget as HTTP agent ask, including
+one additional search for each configured peer. Anonymous calls also take the host's anonymous
+portal and address budgets. `ask_federated` counts once toward the host's daily ask limit;
+`search_federated` does not. Suspension and read-only rules are checked for each tool call.
+Each completed call writes `estate.query` on the host with the actor, tool and source count;
+peer lookups also write `federation.peer.call`. Required audit failure withholds the result.
+No new retained record kind or secret is introduced.
 
 ## Estate MCP endpoint
 
@@ -207,7 +241,17 @@ ask limit, and against the caller's per-minute ask limits once per portal, all a
 as a cross-portal ask does (see [hosting](HOSTING.md)). Failed bearers count against the same
 per-address MCP authentication limit as a portal's own endpoint, before any key is looked up.
 
-A key with an estate is minted with the portal's key route, by a signed-in user:
+In Manage > Access > Keys, a signed-in administrator can select additional **Portals covered**
+when creating a key. Only portals they can administer are offered; the current portal is always
+included. The key list shows the stored coverage. Revoke the key on its issuing portal to end
+access everywhere. As with single-portal keys, its secret is shown once, at creation.
+
+`GET /api/t/:slug/mcp/portals` (`keys.manage`) supplies those choices, including on a portal's
+alias hostname. It returns only `{slug, title}` for enabled portals the caller can administer;
+it does not broaden the normal portal picker. Issuing an estate key checks `keys.manage` on
+every selected portal, in addition to the key's role ceiling.
+
+A key with an estate can also be minted with the portal's key route, by a signed-in administrator:
 
 ```http
 POST /api/t/<portal>/mcp/keys

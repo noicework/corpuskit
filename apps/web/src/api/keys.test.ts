@@ -197,3 +197,58 @@ Deno.test('key role options honour the current ceiling and creation refuses miss
     }),
   ).rejects.toThrow(KeyError)
 })
+
+Deno.test('estate key input is bounded and the one-time response must match its exact coverage', async () => {
+  const original = globalThis.fetch
+  try {
+    const controller = authority()
+    const options = { authority: controller, context: controller.context }
+    let calls = 0
+    globalThis.fetch = (_input, init) => {
+      calls++
+      expect(JSON.parse(String(init?.body))).toEqual({
+        label: 'Research client',
+        role: 'viewer',
+        estate: ['grains'],
+      })
+      return Promise.resolve(Response.json({
+        key: 'ck_' + 'x'.repeat(43),
+        credential: { ...row, estate: ['grains'] },
+      }, { status: 201 }))
+    }
+    expect(
+      (await createKey('marine', {
+        label: 'Research client',
+        role: 'viewer',
+        estate: ['grains'],
+      }, options)).credential.estate,
+    ).toEqual(['grains'])
+    for (
+      const estate of [
+        [],
+        ['marine'],
+        ['grains', 'grains'],
+        ['../grains'],
+        Array(20).fill('grains'),
+      ]
+    ) {
+      await expect(
+        createKey('marine', { label: 'Research client', role: 'viewer', estate }, options),
+      )
+        .rejects.toThrow(KeyError)
+    }
+    expect(calls).toBe(1)
+    globalThis.fetch = () =>
+      Promise.resolve(Response.json({
+        key: 'ck_' + 'x'.repeat(43),
+        credential: row,
+      }, { status: 201 }))
+    await expect(createKey('marine', {
+      label: 'Research client',
+      role: 'viewer',
+      estate: ['grains'],
+    }, options)).rejects.toThrow(KeyError)
+  } finally {
+    globalThis.fetch = original
+  }
+})

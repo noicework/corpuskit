@@ -67,6 +67,9 @@ const retainedEnglish = new Set([
   'fixture-portal-admin',
   'fixture-viewer',
   'marine',
+  // Estate key choices retain the other portal's authored title and technical slug.
+  'Dryland Cropping Research Portal',
+  'grains',
   // The extraction sandbox's technical slug is authored fixture data, not UI copy.
   '(marine-lab)',
   'pending@example.test',
