@@ -61,9 +61,11 @@ export class LinkHealthStore implements LinkHealthStoreApi {
     } else write()
   }
   erase(slug: string): number {
-    if (!this.list(slug).length) return 0
-    if (this.database) this.database.exec('DELETE FROM link_health WHERE slug = ?', slug)
-    else this.transient.delete(slug)
-    return 1
+    if (this.database) {
+      if (!this.database.all('SELECT slug FROM link_health WHERE slug = ?', slug).length) return 0
+      this.database.exec('DELETE FROM link_health WHERE slug = ?', slug)
+      return 1
+    }
+    return Number(this.transient.delete(slug))
   }
 }

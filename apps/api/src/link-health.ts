@@ -102,7 +102,41 @@ export async function runLinkChecks(
   client: PublicHttpClient = publicHttp,
   stopTaking: () => boolean = () => false,
 ): Promise<{ checked: number; failed: number; deferred: number }> {
-  const saved = store.list(slug)
+  const targetKey = (target: LinkTarget) =>
+    JSON.stringify([target.url, target.resourceId, target.sourceId])
+  const targetKeys = new Set(targets.map(targetKey))
+  const previousRows = store.list(slug)
+  const claimed = new Set(
+    previousRows.filter((row) => targetKeys.has(targetKey(row))).map(targetKey),
+  )
+  const saved: LinkCheck[] = []
+  for (const row of previousRows) {
+    signal?.throwIfAborted()
+    if (targetKeys.has(targetKey(row))) {
+      saved.push(row)
+      continue
+    }
+    // Clean-text refresh replaces resource ids. Keep the URL's review and ignore decision.
+    const replacement = targets.find((target) =>
+      target.url === row.url && !claimed.has(targetKey(target)) &&
+      (row.resourceId ? target.resourceId : row.sourceId ? target.sourceId : true)
+    )
+    if (replacement) {
+      const next = {
+        ...row,
+        ...replacement,
+        resourceId: replacement.resourceId,
+        sourceId: replacement.sourceId,
+      }
+      store.put(slug, next)
+      claimed.add(targetKey(replacement))
+      saved.push(next)
+    } else if (row.ignored) {
+      const next = { ...row, resourceId: undefined, sourceId: undefined }
+      if (row.resourceId || row.sourceId) store.put(slug, next)
+      saved.push(next)
+    } else store.remove(slug, row.id)
+  }
   const pending = targets.map((target) => ({
     target,
     previous: saved.find((row) => sameTarget(row, target)),
