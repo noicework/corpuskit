@@ -149,6 +149,8 @@ const stopScheduler = startScheduler(
   process.env,
   owned.lifecycle,
   bindings,
+  owned.linkHealth,
+  owned.localMutations,
   () => runScheduledEvaluations(app),
 )
 // Off the listen path: the probe is a live retrieval call per portal.

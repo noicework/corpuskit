@@ -223,6 +223,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['routing', ['record'], 'portal.ask', 'portal'],
     ['watches', ['add', 'update', 'remove'], 'portal.watch', 'portal'],
     ['sources', ['add', 'update', 'remove'], 'content.write', 'portal'],
+    ['linkHealth', ['put', 'remove'], 'content.write', 'portal'],
     [
       'investigations',
       [
@@ -256,6 +257,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     )
   ),
   entry('internal', 'SYSTEM', 'maintenance.evaluation.run', 'behaviour.write', 'portal'),
+  entry('internal', 'SYSTEM', 'maintenance.link.check', 'content.write', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.source.sync', 'content.write', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.watch.run', 'portal.watch', 'portal'),
   entry('internal', 'SYSTEM', 'maintenance.enrichment.run', 'enrichments.write', 'portal'),
@@ -539,6 +541,10 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'DELETE', '/api/admin/t/:slug/resources/:id', 'content.write', 'portal', {
     subActions: [{ action: 'resource.delete', permission: 'content.write', scope: 'portal' }],
   }),
+  entry('http', 'GET', '/api/admin/t/:slug/link-health', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/link-health/check', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/link-health/:id/recheck', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/link-health/:id/ignore', 'content.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/sources', 'content.write', 'portal'),
   entry('http', 'PATCH', '/api/admin/t/:slug/sources/:id', 'content.write', 'portal'),

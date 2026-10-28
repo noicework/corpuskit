@@ -167,6 +167,9 @@ export interface CatalogOptions {
  */
 /** How a caller reads the catalogue listing. */
 export interface ListResourcesOptions {
+  /** Administrative enumeration only: include drafts and failed resources without caching them. */
+  includeHidden?: boolean
+  signal?: AbortSignal
   /**
    * A reader's request that must not wait on a slow box: answer within a bound with the cached
    * listing, or as much of it as has been read, possibly none, rather than the whole catalogue.

@@ -510,6 +510,12 @@ const portalSourceSchema = z.object({
   addedAt: z.string(),
   lastSync: z.string().nullable(),
   lastAdded: z.number().int().nonnegative(),
+  lastSummary: z.object({
+    new: z.number(),
+    changed: z.number(),
+    unchanged: z.number(),
+    failed: z.number(),
+  }).optional(),
   itemCount: z.number().int().nonnegative(),
   auto: z.boolean(),
   lastStatus: z.enum(['ok', 'error']).optional(),
@@ -1518,6 +1524,7 @@ export interface PortalSource {
   lastSync: string | null
   /** Pages ingested by the most recent sync run. */
   lastAdded: number
+  lastSummary?: { new: number; changed: number; unchanged: number; failed: number }
   /** Pages ingested from this source in total, across every run. */
   itemCount: number
   auto: boolean
@@ -2315,4 +2322,48 @@ export async function compareExtraction(
     reader.releaseLock()
     finishResponse(res)
   }
+}
+
+// --- Admin: link review queue ------------------------------------------------
+const linkCheckSchema = z.object({
+  id: z.string().min(1),
+  url: z.string().min(1),
+  title: z.string(),
+  resourceId: z.string().optional(),
+  sourceId: z.string().optional(),
+  status: z.enum(['ok', 'broken', 'restricted', 'temporary', 'timeout', 'blocked']),
+  httpStatus: z.number().int().optional(),
+  firstFailed: z.string().nullable(),
+  lastChecked: z.string(),
+  attempts: z.number().int().nonnegative(),
+  ignored: z.boolean(),
+})
+export type PortalLinkCheck = z.infer<typeof linkCheckSchema>
+export function getLinkHealth(
+  slug: string,
+  access: AdminRequestAccess,
+): Promise<PortalLinkCheck[]> {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/link-health`, access)
+    .then(validatedAdminResult(linkCheckSchema.array()))
+}
+export function checkPortalLinks(slug: string, access: AdminRequestAccess) {
+  return adminRequest(`/api/admin/t/${encodeURIComponent(slug)}/link-health/check`, access, {
+    method: 'POST',
+  }).then(validatedAdminResult(z.object({
+    checked: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    deferred: z.number().int().nonnegative(),
+  })))
+}
+export function reviewPortalLink(
+  slug: string,
+  access: AdminRequestAccess,
+  id: string,
+  action: 'recheck' | 'ignore',
+): Promise<{ ok: true }> {
+  return adminRequest(
+    `/api/admin/t/${encodeURIComponent(slug)}/link-health/${encodeURIComponent(id)}/${action}`,
+    access,
+    { method: 'POST' },
+  ).then(validatedAdminResult(adminSuccessSchema))
 }

@@ -225,6 +225,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       sessions: this.stores.sessions,
       watches: this.stores.watches,
       sources: this.stores.sources,
+      linkHealth: this.stores.linkHealth,
       investigations: this.stores.investigations,
       suggestions: this.stores.suggestions,
       enrichments: this.stores.enrichments,
