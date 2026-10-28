@@ -18,7 +18,7 @@ import type {
   SearchResults,
   TenantConfig,
 } from '@research-portal/core'
-import type { RetrievalProvider } from '@research-portal/retrieval'
+import type { ExportResource, RetrievalProvider } from '@research-portal/retrieval'
 
 export const RESOURCE_ONE: ResourceSummary = {
   id: 'res-1',
@@ -67,6 +67,22 @@ export class DoubleProvider implements RetrievalProvider {
 
   listResources(_tenant: TenantConfig): Promise<ResourceSummary[]> {
     return Promise.resolve(this.resources)
+  }
+
+  async *exportResources(
+    _tenant: TenantConfig,
+    signal: AbortSignal,
+  ): AsyncIterable<ExportResource> {
+    for (const resource of this.resources) {
+      signal.throwIfAborted()
+      yield {
+        resource: { ...resource, originUrl: `https://research.example.test/${resource.id}` },
+        metadata: { collection: 'Fisheries research' },
+        labels: resource.topicIds.map((label) => ({ labelset: 'topic', label })),
+        status: 'PROCESSED',
+        files: resource.type === 'pdf' ? [{ fieldId: 'file', contentType: 'application/pdf' }] : [],
+      }
+    }
   }
 
   resource(_tenant: TenantConfig, id: string): Promise<ResourceSummary | null> {

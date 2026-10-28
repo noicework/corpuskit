@@ -25,6 +25,7 @@ export const AUDIT_ACTIONS = [
   'portal.alias.set',
   'portal.alias.remove',
   'portal.erase',
+  'portal.export.bundle',
   'portal.delete.suspended',
   'local.mutation',
   'assignment.create',

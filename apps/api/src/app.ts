@@ -386,6 +386,7 @@ import { registerMcpAuthRateLimit, registerMcpRoutes } from './mcp.ts'
 import { DEFAULT_ESTATE_SOURCE_TIMEOUT_MS, registerEstateMcpRoutes } from './estate-mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
 import { registerAuditRoutes } from './audit-routes.ts'
+import { PORTAL_EXPORT_PATH, registerPortalExport } from './portal-export.ts'
 import {
   erasePortal,
   type ErasureTransaction,
@@ -2205,6 +2206,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
       },
     })
     // Hono records caught errors in c.error; c.res holds the onError response and real status.
+    // Its response setter merges earlier headers: a failed audit must discard download headers.
+    if (response.status >= 400) {
+      c.res.headers.delete('Content-Disposition')
+      c.res.headers.delete('Content-Length')
+    }
     c.res = response
   })
 
@@ -2291,6 +2297,33 @@ export function buildApp(opts: BuildAppOptions): Hono {
       if (!opts.rbac) throw new AuthorisationError(403)
       return opts.rbac
     },
+  })
+
+  registerPortalExport(app, {
+    provider,
+    tenants,
+    insights,
+    feedback,
+    keys: mcpKeys,
+    routing,
+    lifecycle,
+    state: () => {
+      if (!opts.rbac) throw new AuthorisationError(403)
+      return opts.rbac
+    },
+    configuration: (slug) => withBrandingUrls(tenants.get(slug)!),
+    resource: (slug, resource) => merchandiseSummary(enrichments, slug, resource),
+    audited: (c, includeFeedback, run) =>
+      subAction(
+        c,
+        PORTAL_EXPORT_PATH,
+        'portal.export.bundle',
+        run,
+        { includeFeedback },
+        { kind: 'portal', slug: c.req.param('slug')! },
+        { kind: 'portal', id: c.req.param('slug')! },
+        (response) => response.status < 400 ? 'success' : 'failure',
+      ),
   })
 
   registerAccessRoutes(app, {
