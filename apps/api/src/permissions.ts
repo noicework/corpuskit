@@ -282,6 +282,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/ask-estate', 'portal.ask', 'portal', {
     aggregate: 'authorised-portals',
   }),
+  entry('http', 'POST', '/api/ask-agent', 'portal.ask', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
   entry('http', 'GET', '/api/t/:slug/investigations', 'portal.read', 'portal', {
     owned: 'research',
   }),

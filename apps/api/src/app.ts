@@ -126,6 +126,7 @@ import {
   TypographyChoiceSchema,
 } from '@research-portal/core'
 import type {
+  AgentAskRequest,
   AskEvent,
   Citation,
   FacetCounts,
@@ -148,6 +149,7 @@ import {
   type SourceContext,
 } from '@research-portal/retrieval'
 import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
+import { agentAnswer } from './agent-compose.ts'
 import {
   type NewTenantInput,
   type TenantPatch,
@@ -638,6 +640,10 @@ const summarizeBodySchema = z.object({
   kind: z.enum(['simple', 'extended']).optional(),
 }).strict()
 const subqueriesBodySchema = z.object({ query: z.string().min(3).max(2000) }).strict()
+/** Agent ask across portals: the question, and the portals to ask, the host first. */
+const agentAskAcrossSchema = AgentAskRequestSchema.extend({
+  slugs: z.array(KeyPortalSlugSchema).min(1).max(12).optional(),
+}).strict()
 const estateAskSchema = z.object({
   query: z.string().min(1).max(2000),
   slugs: z.array(KeyPortalSlugSchema).max(100).optional(),
@@ -1110,6 +1116,10 @@ export interface BuildAppOptions {
   rateLimitEstatePerMin?: number
   /** Authentication attempts/min/IP at the MCP endpoint. Defaults to 60. 0 disables. */
   rateLimitMcpAuthPerMin?: number
+  /** How long one collection's search may take in a composed agent ask (20 s by default). */
+  agentSourceTimeoutMs?: number
+  /** How long composing an agent ask's answer may take (90 s by default). */
+  agentComposeTimeoutMs?: number
 }
 
 interface RequestAuthorisation {
@@ -1815,7 +1825,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Portal modes and assignments are mutable, even for currently public bytes.
     if (
       c.req.path.startsWith('/api/t/') || c.req.path === '/api/tenants' ||
-      c.req.path === '/api/ask-estate'
+      c.req.path === '/api/ask-estate' || c.req.path === '/api/ask-agent'
     ) c.header('Cache-Control', 'private, no-store')
   })
   registerInfrastructure(app, '*', async (c, next) => {
@@ -8034,18 +8044,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }))
   })
 
-  // Agent ask (docs/AGENT-ASK.md): a retrieval agent's answer, streamed step by step. Opt-in per
-  // portal; a portal that has not opted in, or a provider with no agent support, answers exactly
-  // as a route that does not exist.
-  app.post(declaredRoute('POST', '/api/t/:slug/ask-agent'), expensiveRateLimit, async (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const agentAsk = provider.agentAsk?.bind(provider)
-    if (!agentAsk || !offersAgentAsk(config)) return c.json({ error: 'not_found' }, 404)
-    const parsed = AgentAskRequestSchema.safeParse(await c.req.json().catch(() => null))
-    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
-    return withUtf8EventStream(streamSSE(c, async (stream) => {
-      // Ends the agent's upstream session the moment the reader goes away, not at its next event.
+  // Agent ask (docs/AGENT-ASK.md): a retrieval agent's answer streamed step by step, or, when the
+  // portal has no agent, the portal's own answer composed across collections. Opt-in per portal;
+  // a portal that has not opted in, or a provider that can do neither, answers exactly as a route
+  // that does not exist.
+  const agentAskStream = (
+    c: Context,
+    host: TenantConfig,
+    portals: readonly TenantConfig[],
+    request: AgentAskRequest,
+  ) =>
+    withUtf8EventStream(streamSSE(c, async (stream) => {
+      // Ends the upstream work the moment the reader goes away, not at its next event.
       const upstream = new AbortController()
       const cancelled = () =>
         stream.aborted || c.req.raw.signal.aborted ||
@@ -8058,11 +8068,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
         stream.writeSSE({ data: JSON.stringify(publicAgentSseEvent(event, 'agent-ask')) })
       try {
         if (cancelled()) return
-        const { query, context } = parsed.data
         for await (
-          const event of agentAsk(config, query, {
-            ...(context ? { context } : {}),
+          const event of agentAnswer({
+            provider,
+            host,
+            portals,
+            question: request.query,
+            ...(request.context ? { context: request.context } : {}),
             signal: upstream.signal,
+            ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
+            ...(opts.agentComposeTimeoutMs ? { composeTimeoutMs: opts.agentComposeTimeoutMs } : {}),
           })
         ) {
           if (cancelled()) return
@@ -8084,6 +8099,33 @@ export function buildApp(opts: BuildAppOptions): Hono {
         stop()
       }
     }))
+  const answersAgentAsk = () => Boolean(provider.agentAsk || provider.compose)
+
+  app.post(declaredRoute('POST', '/api/t/:slug/ask-agent'), expensiveRateLimit, async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    if (!answersAgentAsk() || !offersAgentAsk(config)) return c.json({ error: 'not_found' }, 404)
+    const parsed = AgentAskRequestSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    return agentAskStream(c, config, [config], parsed.data)
+  })
+
+  // The same answer across several portals, authorised and admitted as the federated ask is: every
+  // selected portal (or, with none named, every portal in the caller's directory) that offers
+  // agent ask is a source. The first is the host, whose agent answers when it has one.
+  app.post(declaredRoute('POST', '/api/ask-agent'), estateRateLimit, async (c) => {
+    const parsed = agentAskAcrossSchema.safeParse(await c.req.json().catch(() => null))
+    if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
+    if (!answersAgentAsk()) return c.json({ error: 'not_found' }, 404)
+    const { slugs, ...request } = parsed.data
+    const order = new Map((slugs ?? []).map((slug, index) => [slug, index]))
+    const targets = (await requestAuthorisation(c).aggregate(slugs))
+      .filter(offersAgentAsk)
+      .sort((a, b) => (order.get(a.slug) ?? 0) - (order.get(b.slug) ?? 0))
+    if (targets.length === 0) return c.json({ error: 'not_found' }, 404)
+    const fanOut = admitEstateFanOut(c, targets)
+    if (!fanOut.allowed) return rateLimited(c, fanOut.retryAfterSec)
+    return agentAskStream(c, targets[0]!, targets, request)
   })
 
   // The Help assistant: a grounded, cited answer about USING the portal,

@@ -156,6 +156,7 @@ const READ_ONLY_EXEMPT = new Set([
   'POST /api/t/:slug/docs/ask',
   'POST /api/t/:slug/ask-agent',
   'POST /api/ask-estate',
+  'POST /api/ask-agent',
   'ALL /api/t/:slug/mcp',
   // Revoking access; granting or changing it is refused.
   'DELETE /api/t/:slug/mcp/keys/:id',
@@ -918,6 +919,7 @@ const ASKS_COUNTED = new Set([
   'POST /api/t/:slug/docs/ask',
   'POST /api/t/:slug/ask-agent',
   'POST /api/ask-estate',
+  'POST /api/ask-agent',
   'MCP answer_question',
   'POST /api/t/:slug/generate',
   'POST /api/t/:slug/summarize',

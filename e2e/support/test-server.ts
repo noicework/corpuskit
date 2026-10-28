@@ -88,6 +88,8 @@ export function startTestServer(options: {
   emptyCollection?: boolean
   /** The collection readers see, when a journey changes it; the DoubleProvider otherwise. */
   provider?: DoubleProvider
+  /** How long one collection's search may take in a composed agent ask. */
+  agentSourceTimeoutMs?: number
 } = {}): TestServer {
   const directory = Deno.makeTempDirSync({ prefix: 'rbac-e2e-' })
   // Legacy JSON stores capture DATA_DIR at module load. Override only their
@@ -274,6 +276,9 @@ export function startTestServer(options: {
       rateLimitAnonPortalAskPerMin: 0,
       rateLimitAnonAddressAskPerMin: 0,
       rateLimitEstatePerMin: 0,
+      ...(options.agentSourceTimeoutMs
+        ? { agentSourceTimeoutMs: options.agentSourceTimeoutMs }
+        : {}),
       ...(options.apiOnly ? {} : { webDistPath: WEB_DIST }),
     })
     if (!options.apiOnly) {

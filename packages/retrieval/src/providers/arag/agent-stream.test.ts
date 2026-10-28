@@ -71,7 +71,7 @@ describe('the happy-path fixture', () => {
 
   it('is a valid agent ask stream that starts with the configured sources and ends done', () => {
     for (const event of events) AgentAskEventSchema.parse(event)
-    expect(events[0]).toEqual({ type: 'agent-start', sources: SOURCES })
+    expect(events[0]).toEqual({ type: 'agent-start', mode: 'agent', sources: SOURCES })
     expect(events.at(-1)).toEqual({ type: 'done', elapsedMs: 89_800 })
     expect(ofType(events, 'error')).toEqual([])
     expectWellFormedSteps(events)
@@ -441,7 +441,11 @@ describe('normaliseAgentStream', () => {
       [Symbol.asyncIterator]: () => ({ next: () => new Promise(() => {}) }),
     }
     const stream = normaliseAgentStream(never, { sources: SOURCES })
-    expect((await stream.next()).value).toEqual({ type: 'agent-start', sources: SOURCES })
+    expect((await stream.next()).value).toEqual({
+      type: 'agent-start',
+      mode: 'agent',
+      sources: SOURCES,
+    })
   })
 
   it('stops reading the upstream at the end of the answer', async () => {

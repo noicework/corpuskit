@@ -29,8 +29,8 @@ const chunk = { id: 'res-1/f/file/0-120', title: 'A report', text: 'A passage.' 
 describe('AgentAskEventSchema', () => {
   it('accepts one of every event in the contract', () => {
     const events: AgentAskEvent[] = [
-      { type: 'agent-start', sources: [source] },
-      { type: 'agent-start', sources: [] },
+      { type: 'agent-start', mode: 'agent', sources: [source] },
+      { type: 'agent-start', mode: 'agent', sources: [] },
       {
         type: 'agent-step',
         id: 'context/c1',
@@ -62,6 +62,21 @@ describe('AgentAskEventSchema', () => {
         chunks: [chunk, { ...chunk, id: 'res-2/f/file/0-80', url: 'https://example.org/r.pdf' }],
       },
       { type: 'agent-sources', stepId: 'context/c1', source, chunks: [] },
+      {
+        type: 'agent-start',
+        mode: 'orchestrated',
+        sources: [{ id: 'portal-a', label: 'Portal A', portal: 'portal-a' }],
+      },
+      {
+        type: 'sources-failed',
+        sources: [{ id: 'portal-b', label: 'Portal B', portal: 'portal-b', reason: 'timeout' }],
+      },
+      {
+        type: 'agent-sources',
+        stepId: 'source/portal-a',
+        source: { id: 'portal-a', label: 'Portal A', portal: 'portal-a' },
+        chunks: [{ ...chunk, id: 'portal-a/res-1', resourceId: 'res-1' }],
+      },
       { type: 'reasoning', text: 'Thinking.', last: false },
       { type: 'delta', text: 'The answer [block-AA].' },
       {
@@ -104,6 +119,10 @@ describe('AgentAskEventSchema', () => {
       { type: 'error', code: 'unknown', message: 'x', retryable: true },
       { type: 'reasoning', text: 'x' },
       { type: 'sources', resources: [] },
+      { type: 'agent-start', sources: [] },
+      { type: 'agent-start', mode: 'other', sources: [] },
+      { type: 'sources-failed', sources: [] },
+      { type: 'sources-failed', sources: [{ ...source, reason: 'slow' }] },
     ]
     for (const event of bad) expect(AgentAskEventSchema.safeParse(event).success).toBe(false)
   })

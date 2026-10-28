@@ -1,9 +1,9 @@
 import { expect } from '@std/expect'
 import type { AgentAskEvent } from '@research-portal/core'
-import { ApiError, streamAgentAsk } from './client.ts'
+import { ApiError, streamAgentAsk, streamAgentAskAcross } from './client.ts'
 
 const EVENTS: AgentAskEvent[] = [
-  { type: 'agent-start', sources: [{ id: 'drv-one', label: 'Source one' }] },
+  { type: 'agent-start', mode: 'agent', sources: [{ id: 'drv-one', label: 'Source one' }] },
   {
     type: 'agent-step',
     id: 'context/c1',
@@ -74,6 +74,31 @@ Deno.test('streamAgentAsk rejects with the status when the portal does not offer
     expect(error).toBeInstanceOf(ApiError)
     expect(error.status).toBe(404)
     expect(events).toBe(0)
+  } finally {
+    globalThis.fetch = original
+  }
+})
+
+Deno.test('streamAgentAskAcross posts the question and the portals to the cross-portal route', async () => {
+  const original = globalThis.fetch
+  const requests: { url: string; body: unknown }[] = []
+  globalThis.fetch = (input, init) => {
+    requests.push({ url: String(input), body: JSON.parse(String(init?.body)) })
+    const start = { type: 'agent-start', mode: 'orchestrated', sources: [] }
+    return Promise.resolve(
+      new Response(sseBody([JSON.stringify(start), JSON.stringify(EVENTS[3])]), {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    )
+  }
+  try {
+    const received: AgentAskEvent[] = []
+    await streamAgentAskAcross({ query: 'Why?', slugs: ['a', 'b'] }, (e) => received.push(e))
+    expect(requests).toEqual([{
+      url: '/api/ask-agent',
+      body: { query: 'Why?', slugs: ['a', 'b'] },
+    }])
+    expect(received.map((event) => event.type)).toEqual(['agent-start', 'done'])
   } finally {
     globalThis.fetch = original
   }

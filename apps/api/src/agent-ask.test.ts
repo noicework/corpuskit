@@ -12,6 +12,7 @@ import { RbacState } from './rbac-state.ts'
 import { tenantsWithNeuro } from './fixtures/neuro-tenant.ts'
 import { AGENT_ASK_MESSAGES, ANSWER_SERVICE_PROBLEM, leaksInternalDetail } from './public-error.ts'
 import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
+import { createEnforcementFixture } from './enforcement-fixture.ts'
 
 const passcode = 'agent-ask-test-passcode'
 const databases: LocalRbacDatabase[] = []
@@ -42,9 +43,13 @@ function buildApp(options: Partial<BuildAppOptions> & Pick<BuildAppOptions, 'pro
 }
 type App = ReturnType<typeof buildApp>
 
-/** A provider whose agent asks run `agentAsk`, recording each call. */
+/**
+ * A provider whose agent asks run `agentAsk`, recording each call. It composes as the
+ * DoubleProvider does, unless `composes` is false.
+ */
 function agentProvider(
   agentAsk?: (question: string, opts: AgentAskOptions) => AsyncIterable<AgentAskEvent>,
+  composes = true,
 ) {
   const calls: { question: string; opts: AgentAskOptions }[] = []
   const provider: RetrievalProvider = Object.assign(new DoubleProvider(), {
@@ -53,6 +58,7 @@ function agentProvider(
         calls.push({ question, opts })
         return agentAsk(question, opts)
       }),
+    ...(composes ? {} : { compose: undefined }),
   })
   return { provider, calls }
 }
@@ -104,8 +110,8 @@ describe('POST /api/t/:slug/ask-agent', () => {
     expect((await setAgentAsk(app, 'marine', 'yes')).status).toBe(400)
   })
 
-  it('stays not found on a provider with no agent support, even when switched on', async () => {
-    const { provider } = agentProvider(undefined)
+  it('stays not found on a provider that has no agent and cannot compose', async () => {
+    const { provider } = agentProvider(undefined, false)
     const app = buildApp({ provider })
     await setAgentAsk(app, 'marine', true)
     expect((await askAgent(app, 'marine', { query: 'Why?' })).status).toBe(404)
@@ -164,7 +170,7 @@ describe('POST /api/t/:slug/ask-agent', () => {
         retryable: false,
       }],
       [async function* () {
-        yield { type: 'agent-start', sources: [] }
+        yield { type: 'agent-start', mode: 'agent', sources: [] }
         throw new Error(leaky)
       }, {
         type: 'error',
@@ -180,7 +186,8 @@ describe('POST /api/t/:slug/ask-agent', () => {
       }, { type: 'error', code: 'upstream', message: ANSWER_SERVICE_PROBLEM, retryable: true }],
     ]
     for (const [agentAsk, expected] of cases) {
-      const { provider } = agentProvider(agentAsk)
+      // With nothing to fall back on, the agent's own failure is what the reader is told.
+      const { provider } = agentProvider(agentAsk, false)
       const app = buildApp({ provider })
       await setAgentAsk(app, 'marine', true)
       const events = await eventsOf(await askAgent(app, 'marine', { query: 'Why?' }))
@@ -206,7 +213,7 @@ describe('POST /api/t/:slug/ask-agent', () => {
       const ended = Promise.withResolvers<boolean>()
       const { provider } = agentProvider(async function* (_question, opts) {
         try {
-          yield { type: 'agent-start', sources: [] }
+          yield { type: 'agent-start', mode: 'agent', sources: [] }
           // An agent still thinking: nothing more arrives until the session is ended.
           await new Promise((resolve) => opts.signal?.addEventListener('abort', resolve))
           yield { type: 'delta', text: 'Never sent.' }
@@ -236,5 +243,112 @@ describe('POST /api/t/:slug/ask-agent', () => {
     expect(first.status).toBe(200)
     await first.text()
     expect((await askAgent(app, 'marine', { query: 'Why? #fast' })).status).toBe(429)
+  })
+})
+
+describe('POST /api/ask-agent', () => {
+  const askAcross = (app: App, body: unknown) =>
+    app.request('/api/ask-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+  it('answers as not found until a selected portal offers agent ask, and leaves out the rest', async () => {
+    const app = buildApp({ provider: new DoubleProvider() })
+    const slugs = ['marine', 'grains']
+    const off = await askAcross(app, { query: 'Why? #compose', slugs })
+    expect(off.status).toBe(404)
+    expect(await off.json()).toEqual({ error: 'not_found' })
+    await setAgentAsk(app, 'grains', true)
+    const events = await eventsOf(await askAcross(app, { query: 'Why? #compose', slugs }))
+    expect(events[0]).toMatchObject({
+      type: 'agent-start',
+      mode: 'orchestrated',
+      sources: [{ id: 'grains', portal: 'grains' }],
+    })
+  })
+
+  it('composes across the selected portals in their order, the first hosting', async () => {
+    const provider = new DoubleProvider()
+    const hosts: string[] = []
+    const compose = provider.compose.bind(provider)
+    provider.compose = (host, question, passages) => {
+      hosts.push(host.slug)
+      return compose(host, question, passages)
+    }
+    const app = buildApp({ provider })
+    for (const slug of ['marine', 'grains']) await setAgentAsk(app, slug, true)
+    for (const slugs of [['marine', 'grains'], ['grains', 'marine']]) {
+      const events = await eventsOf(await askAcross(app, { query: 'Why? #compose', slugs }))
+      const start = events[0]
+      expect(start?.type === 'agent-start' && start.sources.map((s) => s.id)).toEqual(slugs)
+      expect(events.filter((e) => e.type === 'sources-failed')).toEqual([])
+      const cited = new Set(events.flatMap((e) => e.type === 'citation' ? [e.sourceId] : []))
+      expect(cited.size).toBeGreaterThan(0)
+      for (const sourceId of cited) expect(slugs).toContain(sourceId)
+      expect(events.at(-1)?.type).toBe('done')
+    }
+    expect(hosts).toEqual(['marine', 'grains'])
+  })
+
+  it("uses the host portal's agent when it has one", async () => {
+    const app = buildApp({ provider: new DoubleProvider() })
+    for (const slug of ['marine', 'grains']) await setAgentAsk(app, slug, true)
+    const events = await eventsOf(
+      await askAcross(app, { query: 'Why?', slugs: ['marine', 'grains'] }),
+    )
+    expect(events[0]).toMatchObject({ type: 'agent-start', mode: 'agent' })
+    expect(events.at(-1)?.type).toBe('done')
+  })
+
+  it('refuses an invalid request, and one with no portal the caller may name', async () => {
+    const app = buildApp({ provider: new DoubleProvider() })
+    await setAgentAsk(app, 'marine', true)
+    for (
+      const body of [
+        { query: '' },
+        { query: 'Why?', slugs: [] },
+        { query: 'Why?', slugs: Array.from({ length: 13 }, (_, i) => `p${i}`) },
+        { query: 'Why?', slugs: ['marine'], extra: true },
+      ]
+    ) expect((await askAcross(app, body)).status).toBe(400)
+    // Anonymous, with no selection: nothing in the directory to ask.
+    expect((await askAcross(app, { query: 'Why?' })).status).toBe(401)
+  })
+
+  it("takes a day's ask on every portal it reaches, or on none", async () => {
+    const f = createEnforcementFixture()
+    const init = (slugs: string[]) => ({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'Why? #compose', slugs }),
+    })
+    const asksToday = (slug: string) => f.stores.lifecycle.usage(slug, 'UTC', f.now()).asksToday
+    try {
+      const owner = f.sessionFor('owner')
+      f.stores.lifecycle.set('b', { status: 'active', limits: { asksPerDay: 0 } })
+      const refused = await f.requestAs(owner, '/api/ask-agent', init(['a', 'b']))
+      expect(refused.status).toBe(429)
+      expect((await refused.json()).error).toBe('ask_quota_exceeded')
+      expect(asksToday('a')).toBe(0)
+      f.stores.lifecycle.set('b', { status: 'active', limits: null })
+      const admitted = await f.requestAs(owner, '/api/ask-agent', init(['a', 'b']))
+      expect(admitted.status).toBe(200)
+      const events = await eventsOf(admitted)
+      expect(events[0]).toMatchObject({ type: 'agent-start', mode: 'orchestrated' })
+      expect([asksToday('a'), asksToday('b')]).toEqual([1, 1])
+    } finally {
+      f.close()
+    }
+  })
+
+  it('is admitted as the federated ask is', async () => {
+    const app = buildApp({ provider: new DoubleProvider(), rateLimitEstatePerMin: 1 })
+    await setAgentAsk(app, 'marine', true)
+    const first = await askAcross(app, { query: 'Why? #compose #fast', slugs: ['marine'] })
+    expect(first.status).toBe(200)
+    await first.text()
+    expect((await askAcross(app, { query: 'Why? #compose', slugs: ['marine'] })).status).toBe(429)
   })
 })

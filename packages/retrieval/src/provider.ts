@@ -152,6 +152,14 @@ export interface AgentAskOptions {
   signal?: AbortSignal
 }
 
+/** A passage gathered for a composed answer, cited by its 1-based place in the list. */
+export interface ComposePassage {
+  /** The collection it came from, as the reader knows it. */
+  source: string
+  title: string
+  text: string
+}
+
 /** An agent ask refused before it streamed: the route reports it as an `error` event. */
 export class AgentAskError extends Error {
   constructor(readonly code: AgentAskErrorCode, message: string, readonly retryable = false) {
@@ -220,6 +228,18 @@ export interface RetrievalProvider {
     question: string,
     opts?: AgentAskOptions,
   ): AsyncIterable<AgentAskEvent>
+  /**
+   * One answer composed from passages the caller gathered across collections (agent ask without
+   * an agent, docs/AGENT-ASK.md), on this portal's own generation path and model. It cites the
+   * passages inline as `[n]`, n each one's 1-based place in `passages`, and nothing else; the
+   * caller checks every citation against its passage. Optional: without it, no composing.
+   */
+  compose?(
+    tenant: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts?: Pick<AgentAskOptions, 'context'>,
+  ): Promise<string>
   catalog(tenant: TenantConfig, opts?: CatalogOptions): Promise<CatalogPage>
   /** Top resources filed under one topic (Explore's topic rows) - via the classification index, not per-resource topicIds. */
   topicResources(tenant: TenantConfig, topicId: string, limit?: number): Promise<ResourceSummary[]>

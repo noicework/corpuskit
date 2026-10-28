@@ -100,7 +100,11 @@ export class AgentStreamNormaliser {
 
   /** The stream's first event, sent before any line arrives. */
   start(): AgentAskEvent {
-    return { type: 'agent-start', sources: this.#sources.map((source) => ({ ...source })) }
+    return {
+      type: 'agent-start',
+      mode: 'agent',
+      sources: this.#sources.map((source) => ({ ...source })),
+    }
   }
 
   /** The events one line produces: a raw NDJSON line, or the value already parsed from one. */

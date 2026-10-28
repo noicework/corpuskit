@@ -37,6 +37,7 @@ import {
   type AgentAskOptions,
   type AskOptions,
   type CatalogOptions,
+  type ComposePassage,
   type ListResourcesOptions,
   type RetrievalProvider,
   type SearchOptions,
@@ -452,6 +453,25 @@ export function isPurgeEligible(raw: DisplayabilityInput): boolean {
  * independent of search's, even though today the two agree.
  */
 export const MIN_GENERATE_GROUNDING = 0.1
+
+/** The structured answer `compose` asks for: the composed text, citations inline. */
+const COMPOSE_SCHEMA = {
+  name: 'composed_answer',
+  description: 'One answer composed strictly from numbered passages, citing them inline as [n]',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+  },
+}
+const COMPOSE_INSTRUCTIONS =
+  'Answer the question in `answer` STRICTLY from the numbered passages, never from outside ' +
+  'knowledge. The passages come from several collections: say which collection each point ' +
+  'comes from where it helps the reader, and where collections differ, say so. Cite every ' +
+  'claim inline with the number of the passage that states it, as [n] straight after the ' +
+  'sentence; cite only the passages given, and write no reference list. When the passages do ' +
+  'not answer the question, say that in one sentence. Plain paragraphs, no headings.'
 
 /**
  * Refusal-override floor for `ask`: a known platform quirk (see
@@ -4001,6 +4021,43 @@ export class AragProvider implements RetrievalProvider {
     _opts?: AgentAskOptions,
   ): AsyncIterable<AgentAskEvent> {
     throw new AgentAskError('not_configured', 'No retrieval agent is configured for this portal')
+  }
+
+  /**
+   * One answer composed from passages gathered across collections, on the structured generation
+   * path the investigation synthesis uses (this box's model and the binding's inference model).
+   * The passages ride the prompt, numbered; the platform's own retrieval is held to one paragraph
+   * so the answer is written from them, and the caller checks every `[n]` against its passage.
+   */
+  async compose(
+    tenant: TenantConfig,
+    question: string,
+    passages: readonly ComposePassage[],
+    opts: Pick<AgentAskOptions, 'context'> = {},
+  ): Promise<string> {
+    const earlier = (opts.context ?? []).slice(-4).map((turn) =>
+      `${turn.author === 'USER' ? 'Earlier question' : 'Earlier answer'}: ${
+        turn.text.slice(0, 600)
+      }`
+    )
+    const prompt = [
+      `Question: ${question}`,
+      ...(earlier.length > 0 ? ['', ...earlier] : []),
+      '',
+      ...passages.map((passage, index) =>
+        `[${index + 1}] ${passage.source} | ${passage.title}\n${passage.text.slice(0, 1200)}`
+      ),
+    ].join('\n')
+    const result = await this.askStructured(tenant, COMPOSE_SCHEMA, prompt, {
+      instructions: COMPOSE_INSTRUCTIONS +
+        (tenant.languagePolicy ? '' : ' Use Australian English.'),
+      topK: 1,
+    })
+    const answer = (result.object as { answer?: unknown } | null)?.answer
+    if (typeof answer !== 'string' || !answer.trim()) {
+      throw new Error('The platform returned no composed answer')
+    }
+    return answer.trim()
   }
 
   async *ask(

@@ -29,6 +29,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['ALL', '/t/*', 'portal.read', 'viewer'],
   ['GET', '/api/tenants', 'portal.read', 'viewer'],
   ['POST', '/api/ask-estate', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
+  ['POST', '/api/ask-agent', 'portal.ask', 'viewer', { query: 'Abalone evidence' }],
   ['GET', '/api/t/:slug/config', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/branding/:kind', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/branding/image/:name', 'portal.read', 'viewer'],
@@ -333,6 +334,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       '/t/*',
       '/api/tenants',
       '/api/ask-estate',
+      '/api/ask-agent',
       '/api/t/:slug/config',
     ].includes(template)
     if (!special) {
@@ -405,7 +407,11 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       if (suffix === 'resources/:id/questions') {
         expect(JSON.parse(result)).toEqual({ questions: ['Seeded question?'] })
       } else {
-        const expected = template === '/api/ask-estate' ? 'ask' : operations[suffix]
+        const expected = template === '/api/ask-estate'
+          ? 'ask'
+          : template === '/api/ask-agent'
+          ? 'agentAsk'
+          : operations[suffix]
         expect(expected, `missing dispatch assertion ${template}`).toBeDefined()
         expect([...calls, ...f.providerCalls.map((c) => c.method)], template).toContain(expected)
       }
@@ -446,7 +452,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       const safe = JSON.stringify(await (await f.requestAs(f.unassigned, path)).json())
       expect(safe).not.toContain('"slug":"a"')
     }
-    if (template === '/api/ask-estate') {
+    if (template === '/api/ask-estate' || template === '/api/ask-agent') {
       const before = f.providerCalls.length
       const denied = await f.requestAs(f.unassigned, path, {
         ...init,

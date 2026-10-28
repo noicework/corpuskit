@@ -483,20 +483,51 @@ export async function streamAsk(
 }
 
 /**
- * Stream a retrieval agent's answer (docs/AGENT-ASK.md): `agent-start` first, then steps, the
- * passages each source returned, reasoning and answer text as they happen, citations, and one
- * `done` or `error` last. A frame that is not a valid agent ask event is dropped. Returns when the
- * stream closes; abort via the signal, which also ends the agent's session. A portal that does
- * not offer agent ask rejects with a 404 `ApiError`.
+ * Stream a portal's agent ask (docs/AGENT-ASK.md): its retrieval agent's answer, or, when it has
+ * none, the portal's own answer composed from its collection (`agent-start.mode` says which).
+ * `agent-start` first, then steps, the passages each source returned, reasoning and answer text
+ * as they happen, citations, and one `done` or `error` last. A frame that is not a valid agent
+ * ask event is dropped. Returns when the stream closes; abort via the signal, which also ends the
+ * upstream work. A portal that does not offer agent ask rejects with a 404 `ApiError`.
  */
-export async function streamAgentAsk(
+export function streamAgentAsk(
   slug: string,
   body: AgentAskRequest,
   onEvent: (event: AgentAskEvent) => void,
   signal?: AbortSignal,
   options: RequestContext = {},
 ): Promise<void> {
-  const res = await transportFetch(`/api/t/${encodeURIComponent(slug)}/ask-agent`, {
+  return agentAskStream(
+    `/api/t/${encodeURIComponent(slug)}/ask-agent`,
+    body,
+    onEvent,
+    signal,
+    options,
+  )
+}
+
+/**
+ * The same stream across several portals: the first in `slugs` hosts (its agent answers if it
+ * has one), and every selected portal that offers agent ask is a source when the answer is
+ * composed. Rejects with a 404 `ApiError` when none of them offers it.
+ */
+export function streamAgentAskAcross(
+  body: AgentAskRequest & { slugs?: string[] },
+  onEvent: (event: AgentAskEvent) => void,
+  signal?: AbortSignal,
+  options: RequestContext = {},
+): Promise<void> {
+  return agentAskStream('/api/ask-agent', body, onEvent, signal, options)
+}
+
+async function agentAskStream(
+  path: string,
+  body: unknown,
+  onEvent: (event: AgentAskEvent) => void,
+  signal: AbortSignal | undefined,
+  options: RequestContext,
+): Promise<void> {
+  const res = await transportFetch(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-rp-client': clientId() },
     body: JSON.stringify(body),

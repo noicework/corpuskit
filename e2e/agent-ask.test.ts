@@ -4,6 +4,14 @@ import { expect } from '@std/expect'
 import { type AgentAskEvent, AgentAskEventSchema, TenantConfigSchema } from '@research-portal/core'
 import { AGENT_STUB_PORTAL, startAgentStub } from './support/agent-stub-server.ts'
 
+function askAcross(url: string, query: string, slugs: string[]) {
+  return fetch(`${url}/api/ask-agent`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ query, slugs }),
+  })
+}
+
 function askAgent(url: string, query: string, signal?: AbortSignal) {
   return fetch(`${url}/api/t/${AGENT_STUB_PORTAL}/ask-agent`, {
     method: 'POST',
@@ -58,7 +66,8 @@ Deno.test('the stub serves the portal and streams each fixture session over HTTP
     expect(slow.at(-1)).toEqual({ type: 'done', elapsedMs: 46_800 })
 
     // A portal that has not opted in answers as if the route did not exist.
-    const other = await fetch(`${server.url}/api/t/grains/ask-agent`, {
+    const unlisted = server.tenants.add({ name: 'Unlisted collection' })
+    const other = await fetch(`${server.url}/api/t/${unlisted.slug}/ask-agent`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ query: 'Why?' }),
@@ -101,6 +110,40 @@ Deno.test('a reader leaving ends the replay at once', async () => {
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
     expect(server.provider.agentAsksOpen).toBe(0)
+  } finally {
+    await server.close()
+  }
+})
+
+Deno.test('the stub composes across its portals without an agent, naming a portal that fails', async () => {
+  const server = startAgentStub({ speed: 0, apiOnly: true })
+  try {
+    const slugs = server.portals.map((portal) => portal.slug)
+    const events = async (query: string) =>
+      (await timedEvents(await askAcross(server.url, query, slugs))).map(({ event }) => event)
+
+    const composed = await events('How is warming changing pests? #compose')
+    expect(composed[0]).toMatchObject({ type: 'agent-start', mode: 'orchestrated' })
+    const start = composed[0]
+    expect(start?.type === 'agent-start' && start.sources.map((source) => source.portal))
+      .toEqual(slugs)
+    const cited = (list: AgentAskEvent[]) =>
+      new Set(list.flatMap((event) => event.type === 'citation' ? [event.sourceId] : []))
+    expect(cited(composed)).toEqual(new Set(slugs))
+    expect(composed.some((event) => event.type === 'sources-failed')).toBe(false)
+    expect(composed.at(-1)?.type).toBe('done')
+
+    for (const [tag, reason] of [['#source-timeout', 'timeout'], ['#source-error', 'error']]) {
+      const partial = await events(`Why? #compose ${tag}`)
+      const failed = partial.find((event) => event.type === 'sources-failed')
+      // The stub fails its second portal; the other two still answer.
+      expect(failed).toMatchObject({
+        type: 'sources-failed',
+        sources: [{ id: slugs[1], portal: slugs[1], reason }],
+      })
+      expect(cited(partial)).toEqual(new Set([slugs[0], slugs[2]]))
+      expect(partial.at(-1)?.type).toBe('done')
+    }
   } finally {
     await server.close()
   }

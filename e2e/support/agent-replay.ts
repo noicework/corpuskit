@@ -34,19 +34,58 @@ export function agentFixture(scenario: AgentScenario): string {
   )
 }
 
+export interface AgentStubRequest {
+  scenario: AgentScenario
+  /** Replay without waiting. */
+  fast: boolean
+  /** No agent: the portal composes the answer across its collections instead. */
+  compose: boolean
+  /** When composing, the second collection's search hangs past its time limit, or fails. */
+  sourceFailure?: 'timeout' | 'error'
+}
+
 /**
- * What a question asks the stub for: `#error` or `#slow` anywhere in it picks that scenario
- * (the happy path otherwise), and `#fast` replays without waiting.
+ * What a question asks the stub for. `#error` or `#slow` picks that agent scenario (the happy
+ * path otherwise), `#compose` takes the agent away so the portal composes, `#source-timeout` and
+ * `#source-error` fail one collection while composing, and `#fast` skips the waiting.
  */
-export function agentScenarioFor(question: string): { scenario: AgentScenario; fast: boolean } {
+export function agentScenarioFor(question: string): AgentStubRequest {
   const tags = new Set(question.toLowerCase().match(/#[a-z-]+/g) ?? [])
   return {
     scenario: tags.has('#error') ? 'error' : tags.has('#slow') ? 'slow-start' : 'happy',
     fast: tags.has('#fast'),
+    compose: tags.has('#compose'),
+    ...(tags.has('#source-timeout')
+      ? { sourceFailure: 'timeout' as const }
+      : tags.has('#source-error')
+      ? { sourceFailure: 'error' as const }
+      : {}),
   }
 }
 
-function pause(ms: number, signal?: AbortSignal): Promise<void> {
+/** The passages each driver of the happy-path session returned, by driver id. */
+export function agentFixturePassages(): Map<string, { id: string; title: string; text: string }[]> {
+  const out = new Map<string, { id: string; title: string; text: string }[]>()
+  for (const line of agentFixture('happy').split('\n')) {
+    if (!line.trim()) continue
+    const context = (JSON.parse(line) as {
+      context?: {
+        agent_id: string
+        chunks: { chunk_id: string; title: string; text: string }[]
+      }
+    }).context
+    if (!context) continue
+    const passages = out.get(context.agent_id) ?? []
+    for (const chunk of context.chunks) {
+      passages.push({ id: chunk.chunk_id.split('/')[0]!, title: chunk.title, text: chunk.text })
+    }
+    out.set(context.agent_id, passages)
+  }
+  return out
+}
+
+/** Wait `ms`, or reject at once with the signal's reason. */
+export function pause(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(signal.reason)
   if (ms <= 0) return Promise.resolve()
   return new Promise((resolve, reject) => {

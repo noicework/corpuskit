@@ -12,10 +12,15 @@ const HttpUrlSchema = z.string().url().refine((value) => /^https?:\/\//i.test(va
   message: 'Must be an http(s) address',
 })
 
-/** One source the agent searches: a knowledge box behind one of its drivers. */
+/**
+ * One source the answer searches: a knowledge box behind one of the agent's drivers, or one
+ * portal of this deployment when the portal composes the answer itself.
+ */
 export const AgentSourceSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
+  /** The portal's slug, when the source is a portal of this deployment (links go there). */
+  portal: z.string().min(1).optional(),
 })
 
 /** A passage a source returned for one of the agent's lookups. */
@@ -24,7 +29,15 @@ export const AgentChunkSchema = z.object({
   title: z.string(),
   text: z.string(),
   url: HttpUrlSchema.optional(),
+  /** The resource in the source's portal the passage comes from, when it is a portal. */
+  resourceId: z.string().min(1).optional(),
 })
+
+/**
+ * Who wrote the answer. `agent`: a retrieval agent planned, searched and answered. `orchestrated`:
+ * the portal searched each collection itself and composed one answer from what they returned.
+ */
+export const AgentAskModeSchema = z.enum(['agent', 'orchestrated'])
 
 export const AgentStepStatusSchema = z.enum(['started', 'completed', 'failed'])
 
@@ -41,8 +54,12 @@ export const AgentAskErrorCodeSchema = z.enum([
 ])
 
 export const AgentAskEventSchema = z.discriminatedUnion('type', [
-  /** First on every stream, before the agent has done anything: the sources it can search. */
-  z.object({ type: z.literal('agent-start'), sources: AgentSourceSchema.array() }),
+  /** First on every stream, before anything is searched: who answers, and its sources. */
+  z.object({
+    type: z.literal('agent-start'),
+    mode: AgentAskModeSchema,
+    sources: AgentSourceSchema.array(),
+  }),
   /**
    * A step opening or closing. Every step id is `started` once, then at most once `completed`
    * or `failed`; a step still open when the stream ends is closed by the `done` or `error`.
@@ -66,6 +83,14 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
     /** The question the agent put to this source, when it rephrased the reader's. */
     question: z.string().optional(),
     chunks: AgentChunkSchema.array(),
+  }),
+  /**
+   * The sources that could not be searched (an error, or no answer within the time limit), sent
+   * once, after every lookup has settled and before the answer. The answer comes from the rest.
+   */
+  z.object({
+    type: z.literal('sources-failed'),
+    sources: AgentSourceSchema.extend({ reason: z.enum(['timeout', 'error']) }).array().min(1),
   }),
   /** The agent thinking aloud. `last` closes the current run of reasoning. */
   z.object({ type: z.literal('reasoning'), text: z.string(), last: z.boolean() }),
@@ -91,7 +116,7 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
   }),
 ])
 
-/** The body of `POST /api/t/:slug/ask-agent`. */
+/** The body of `POST /api/t/:slug/ask-agent`; `POST /api/ask-agent` also takes `slugs`. */
 export const AgentAskRequestSchema = z.object({
   query: z.string().trim().min(1).max(2000),
   /** Prior turns, oldest first. */
@@ -109,6 +134,7 @@ export function offersAgentAsk(config: { agentAsk?: boolean }): boolean {
 
 export type AgentSource = z.infer<typeof AgentSourceSchema>
 export type AgentChunk = z.infer<typeof AgentChunkSchema>
+export type AgentAskMode = z.infer<typeof AgentAskModeSchema>
 export type AgentStepStatus = z.infer<typeof AgentStepStatusSchema>
 export type AgentAskErrorCode = z.infer<typeof AgentAskErrorCodeSchema>
 export type AgentAskEvent = z.infer<typeof AgentAskEventSchema>
