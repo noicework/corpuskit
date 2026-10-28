@@ -2,7 +2,12 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useParams } from 'react-router-dom'
-import { acceptsSiteFeedback, type Permission, type TenantConfig } from '@research-portal/core'
+import {
+  acceptsSiteFeedback,
+  demoTourMode,
+  type Permission,
+  type TenantConfig,
+} from '@research-portal/core'
 import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
 import { retryTenantConfig } from '../api/portal-metadata.ts'
 import {
@@ -79,6 +84,8 @@ const NAV_ITEMS: {
 }[] = [
   { id: 'library', path: '/library', label: 'Library', end: false, permission: 'portal.read' },
   { id: 'ask', path: '/ask', label: 'Ask', end: false, permission: 'portal.ask' },
+  // Agent ask is opt-in per portal (`agentAsk`); the item shows only where it is offered.
+  { id: 'agent', path: '/agent', label: 'Agent ask', end: false, permission: 'portal.ask' },
   { id: 'graph', path: '/graph', label: 'Graph', end: false, permission: 'portal.read' },
   { id: 'tools', path: '/tools', label: 'Tools', end: false, permission: 'portal.read' },
   {
@@ -188,7 +195,7 @@ export function TenantLayout() {
   const routeAllowed = section === 'manage'
     ? MANAGEMENT_PERMISSIONS.some((permission) => access.can(permission, scope))
     : access.can(
-      section === 'ask'
+      section === 'ask' || section === 'agent'
         ? 'portal.ask'
         : ['generate', 'assessment'].includes(section)
         ? 'portal.generate'
@@ -333,7 +340,7 @@ export function TenantLayout() {
     [sourceConfig, locale.language],
   )
   // Routes whose page owns the full viewport height.
-  const isViewportHeightRoute = /\/(ask|graph)(\/|$)/.test(location.pathname)
+  const isViewportHeightRoute = /\/(ask|agent|graph)(\/|$)/.test(location.pathname)
 
   const { data: kbStatus } = useQuery({
     queryKey: ['kb-status', access.identityKey, slug, access.generation],
@@ -413,7 +420,7 @@ export function TenantLayout() {
 
   // The portal's own header links follow the built-in items it keeps.
   const { items: navigation, links: customLinks } = portalNavigation(
-    permitted,
+    permitted.filter((item) => item.id !== 'agent' || config.agentAsk === true),
     config.branding.layout,
   )
 
@@ -429,6 +436,8 @@ export function TenantLayout() {
 
   // Offered only where the server says this portal takes feedback and the reader may send it.
   const takesFeedback = acceptsSiteFeedback(config) && access.can('portal.ask', scope)
+  // The guided tour's way in, once the home page has stopped carrying one of its own.
+  const offersTour = demoTourMode(config) !== 'off'
   const feedbackControl = takesFeedback && (
     <span className='hidden sm:inline-flex'>
       <IconButton
@@ -517,7 +526,7 @@ export function TenantLayout() {
                     )}
                     {feedbackControl}
                     <span className='hidden sm:inline-flex'>
-                      <HelpMenu slug={config.slug} />
+                      <HelpMenu slug={config.slug} tour={offersTour} />
                     </span>
                     <span className='hidden sm:inline-flex'>
                       {accountControl}
@@ -658,7 +667,7 @@ export function TenantLayout() {
                       )}
                       {feedbackControl}
                       <span className='hidden sm:inline-flex'>
-                        <HelpMenu slug={config.slug} />
+                        <HelpMenu slug={config.slug} tour={offersTour} />
                       </span>
                       <span className='hidden sm:inline-flex'>
                         {accountControl}
@@ -876,7 +885,7 @@ export function TenantLayout() {
                     {locale.ui(scheme === 'dark' ? 'Light mode' : 'Dark mode')}
                   </Button>
                 )}
-                {helpMenuItems(config.slug).map((item) => (
+                {helpMenuItems(config.slug, { tour: offersTour }).map((item) => (
                   <NavLink
                     key={item.key}
                     to={item.href}

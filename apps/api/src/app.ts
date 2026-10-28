@@ -100,6 +100,7 @@ import {
 import {
   AccessModeSchema,
   authorize,
+  DemoTourModeSchema,
   normalisePrincipal,
   portalConfigurationExport,
   PortalConfigurationImportSchema,
@@ -903,6 +904,8 @@ const renameTenantSchema = z.object({
   federation: FederationSettingsSchema.optional(),
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback: z.boolean().optional(),
+  /** The guided tour on the home page: off, request or auto (see TenantConfigSchema). */
+  demoTour: DemoTourModeSchema.optional(),
   /**
    * The portal's header links, footer and home page, or null to clear them. Checked against
    * `PortalLayoutSchema` only after authorisation, so a caller who may not change the portal's
@@ -916,6 +919,7 @@ const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'regionalDiscovery',
   'agentAsk',
   'siteFeedback',
+  'demoTour',
   'federation',
 ])
 const kgImplementSchema = z.object({
@@ -5572,6 +5576,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       agentAsk,
       federation,
       siteFeedback: siteFeedbackSetting,
+      demoTour,
       layout: _layout,
       ...branding
     } = parsed.data
@@ -5583,6 +5588,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }
         : {}),
       ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
+      ...(demoTour !== undefined ? { demoTour } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
     // A participation change is recorded with its before and after (who and when are the
