@@ -226,9 +226,14 @@ export function DemoTourDialog({
                 : null}
               {step.kind === 'welcome'
                 ? (
-                  <Button leadingIcon={Compass} onClick={next}>
-                    {ui('Take the tour')}
-                  </Button>
+                  <>
+                    <Button variant='ghost' onClick={() => close.current()}>
+                      {ui('Explore on my own')}
+                    </Button>
+                    <Button leadingIcon={Compass} onClick={next}>
+                      {ui('Take the tour')}
+                    </Button>
+                  </>
                 )
                 : step.kind === 'finish'
                 ? <Button onClick={() => close.current()}>{ui('Done')}</Button>

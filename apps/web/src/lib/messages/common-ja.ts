@@ -6,6 +6,7 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
     'このプラットフォームは{organisation}{partners}が発行・編集した研究をまとめたものです。コレクションを検索し、質問し、そのつながりを見つけることができます。',
   ' and its research partners': 'とその研究パートナー',
   'Take the tour': 'ツアーを見る',
+  'Explore on my own': '自分で見て回る',
   'Get started with {portal}': '{portal}を始める',
   'Explore the Graph': 'グラフを見る',
   'Find answers and sources': '回答と出典を見つける',
