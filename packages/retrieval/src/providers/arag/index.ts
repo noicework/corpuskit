@@ -4113,16 +4113,45 @@ export class AragProvider implements RetrievalProvider {
         `[${index + 1}] ${passage.source} | ${passage.title}\n${passage.text.slice(0, 1200)}`
       ),
     ].join('\n')
-    const result = await this.askStructured(tenant, COMPOSE_SCHEMA, prompt, {
-      instructions: COMPOSE_INSTRUCTIONS +
-        (tenant.languagePolicy ? '' : ' Use Australian English.'),
-      topK: 1,
-    })
-    const answer = (result.object as { answer?: unknown } | null)?.answer
+    const instructions = COMPOSE_INSTRUCTIONS +
+      (tenant.languagePolicy ? '' : ' Use Australian English.')
+    let answer: unknown
+    try {
+      const result = await this.askStructured(tenant, COMPOSE_SCHEMA, prompt, {
+        instructions,
+        topK: 1,
+      })
+      answer = (result.object as { answer?: unknown } | null)?.answer
+    } catch {
+      // Some models refuse the forced tool call structured output rides on, and the platform
+      // answers 412. The same prompt as a plain answer still composes.
+      answer = await this.composePlain(tenant, prompt, instructions.replace('in `answer` ', ''))
+    }
     if (typeof answer !== 'string' || !answer.trim()) {
       throw new Error('The platform returned no composed answer')
     }
     return answer.trim()
+  }
+
+  /** `compose` without a schema: the same prompt and instructions, the answer read as text. */
+  private async composePlain(
+    tenant: TenantConfig,
+    prompt: string,
+    instructions: string,
+  ): Promise<string> {
+    const res = await this.client(tenant).postStream('/ask', {
+      query: prompt,
+      features: ['keyword', 'semantic'],
+      prompt: { system: instructions },
+      top_k: 1,
+      max_tokens: 4096,
+    })
+    let text = ''
+    for await (const line of ndjson(res)) {
+      const item = (line as { item?: { type?: string; text?: unknown } }).item
+      if (item?.type === 'answer' && typeof item.text === 'string') text += item.text
+    }
+    return text
   }
 
   async *ask(
