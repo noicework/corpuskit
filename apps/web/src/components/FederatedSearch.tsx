@@ -98,7 +98,11 @@ export function SearchSourceBadge({ resource }: { resource: ScoredResource }) {
     ? (
       <span
         className='rp-badge max-w-full [overflow-wrap:anywhere]'
-        style={{ whiteSpace: 'normal' }}
+        style={{
+          whiteSpace: 'normal',
+          // Wrapped labels need corners small enough to keep every line visible.
+          borderRadius: 'min(var(--rp-radius-chip), var(--rp-radius))',
+        }}
       >
         {ui('Source: {source}', { source: resource.source.label })}
       </span>
@@ -117,7 +121,11 @@ export function PeerSearchResult({ resource }: { resource: ScoredResource }) {
       <h3 className='mt-2.5 text-base font-semibold text-ink'>
         {resource.peerUrl
           ? (
-            <a href={resource.peerUrl} className='rp-focus inline-block min-h-11'>
+            <a
+              href={resource.peerUrl}
+              className='rp-focus inline-block'
+              style={{ minHeight: 'max(44px, calc(2.75rem * var(--rp-density-ctl, 1)))' }}
+            >
               {title}
             </a>
           )

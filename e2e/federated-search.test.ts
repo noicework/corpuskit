@@ -57,6 +57,64 @@ Deno.test('shared search over HTTP returns both partners, partial failures and o
   }
 })
 
+Deno.test('an all-failed shared search names every unavailable collection and avoids claiming there were no matches', async () => {
+  const server = await startAgentStub({ speed: 0 })
+  const browser = await launch()
+  const shots = Deno.env.get('FEDERATED_SEARCH_SHOTS')
+  server.provider.search = async () => {
+    throw new Error('Synthetic host search failure')
+  }
+  const path = `/t/marine/search?federated=1&answer=0&q=${
+    encodeURIComponent(`${query} #peer-timeout`)
+  }`
+  try {
+    if (shots) await Deno.mkdir(shots, { recursive: true })
+    const page = await browser.newPage(server.url)
+    const branding = server.tenants.get('marine')!.branding
+    for (const scheme of ['light', 'dark'] as const) {
+      server.tenants.patchBranding('marine', {
+        ...branding,
+        paletteId: scheme === 'dark' ? 'observatory' : 'corpuskit',
+        colourScheme: 'viewer',
+        shape: 'soft',
+      })
+      await page.evaluate((scheme) => localStorage.setItem('rp-scheme', scheme), { args: [scheme] })
+      for (const width of [1440, 390]) {
+        await page.unsafelyGetCelestialBindings().Emulation.setDeviceMetricsOverride({
+          width,
+          height: width === 1440 ? 900 : 844,
+          deviceScaleFactor: 1,
+          mobile: false,
+        })
+        await page.goto(`${server.url}${path}`)
+        await ready(page)
+        const state = await page.evaluate(() => ({
+          status: document.querySelector('main [role="status"]')?.textContent,
+          text: document.querySelector('main')?.textContent,
+          cards: document.querySelectorAll('article').length,
+          scroll: document.documentElement.scrollWidth,
+        }))
+        expect(state.status).toContain('Southern Waters Research Portal could not be searched')
+        expect(state.status).toContain('Soil partner collection could not be searched')
+        expect(state.status).toContain('Water partner collection could not be searched')
+        expect(state.text).toContain('No resources returned from these collections')
+        expect(state.text).not.toContain('No resources matched that search')
+        expect(state.cards).toBe(0)
+        expect(state.scroll).toBeLessThanOrEqual(width)
+        if (shots) {
+          await Deno.writeFile(
+            `${shots}/search-unavailable-${width}-${scheme}.png`,
+            await page.screenshot({ captureBeyondViewport: false }),
+          )
+        }
+      }
+    }
+  } finally {
+    await browser.close()
+    await server.close()
+  }
+})
+
 Deno.test('shared search switch, attribution, source filter and failure status work by keyboard without generating an answer', async () => {
   const server = await startAgentStub({ speed: 0 })
   const browser = await launch()
@@ -130,6 +188,19 @@ Deno.test('shared search switch, attribution, source filter and failure status w
       false,
     )
     expect(searchesBefore).toBeGreaterThan(0)
+    await page.goto(`${server.url}${sharedPath}&source=peer%3Awater-partner`)
+    await ready(page)
+    await page.waitForFunction(() => document.querySelectorAll('article').length === 0)
+    await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+        button.textContent?.trim() === 'Clear filters'
+      )!.focus()
+    )
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() =>
+      !new URLSearchParams(location.search).has('source') &&
+      document.querySelectorAll('article').length > 0
+    )
     const config = server.tenants.get('marine')!
     server.tenants.patch('marine', {
       federation: {
@@ -145,6 +216,13 @@ Deno.test('shared search switch, attribution, source filter and failure status w
         )
       ),
     ).toBe(true)
+    expect(
+      await page.evaluate(() =>
+        document.querySelector<HTMLAnchorElement>(
+          'article a[href^="https://partner.example.org/"]',
+        )!.getBoundingClientRect().height
+      ),
+    ).toBeGreaterThanOrEqual(44)
     await page.evaluate(() => document.querySelector<HTMLButtonElement>('[role="switch"]')!.focus())
     await page.keyboard.press('Space')
     await page.waitForFunction(() => !new URLSearchParams(location.search).has('federated'))
@@ -227,9 +305,10 @@ Deno.test('shared search reflows at 320px, uses appearance tokens and saves the 
       document.documentElement.style.fontSize = '32px'
       const style = document.createElement('style')
       style.textContent =
-        'main p, main button, main label, main blockquote { line-height: 1.5; letter-spacing: .12em; word-spacing: .16em; }'
+        '* { line-height: 1.5 !important; letter-spacing: .12em !important; word-spacing: .16em !important; } p { margin-bottom: 2em !important; }'
       document.head.append(style)
     })
+    await page.waitForFunction(() => document.documentElement.dataset.textSpacing === 'custom')
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
     if (shots) {
       await Deno.writeFile(
@@ -264,6 +343,13 @@ Deno.test('shared search reflows at 320px, uses appearance tokens and saves the 
         await page.screenshot({ captureBeyondViewport: false }),
       )
     }
+    await page.setViewportSize({ width: 320, height: 844 })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(320)
+    expect(
+      await page.evaluate(() =>
+        document.querySelector<HTMLElement>('#search-source')!.getBoundingClientRect().height
+      ),
+    ).toBeGreaterThanOrEqual(44)
   } finally {
     await browser.close()
     await server.close()

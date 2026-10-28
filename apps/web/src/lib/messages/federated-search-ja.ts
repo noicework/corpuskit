@@ -14,6 +14,10 @@ export const FEDERATED_SEARCH_JA: Readonly<Record<string, string>> = {
   'Source: {source}': '情報源：{source}',
   'Partner collection': 'パートナーのコレクション',
   'Matches from each collection in turn': '各コレクションの検索結果を交互に表示',
+  'No resources returned from these collections':
+    'これらのコレクションから資料が返されませんでした',
+  'Try another topic or try again if a collection could not be searched.':
+    '別のトピックを試すか、検索できなかったコレクションがある場合は再試行してください。',
   'The answer below uses {source}. Partner passages are included in the search results.':
     '以下の回答は{source}に基づいています。パートナーの該当箇所は検索結果に含まれています。',
 }

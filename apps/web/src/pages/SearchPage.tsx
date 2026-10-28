@@ -1388,6 +1388,9 @@ export function SearchPage() {
                           type='button'
                           onClick={filter.onRemove}
                           className='rp-chip gap-1'
+                          style={federated
+                            ? { minHeight: 'max(44px, calc(2.75rem * var(--rp-density-ctl, 1)))' }
+                            : undefined}
                         >
                           {filter.label}
                           <X size='sm' className='shrink-0 text-ink-3' />
@@ -1439,9 +1442,15 @@ export function SearchPage() {
                       )
                       : (
                         <EmptyState
-                          title={ui('No resources matched that search')}
+                          title={ui(
+                            federated
+                              ? 'No resources returned from these collections'
+                              : 'No resources matched that search',
+                          )}
                           description={ui(
-                            'Try broader terms, a different retrieval mode, or fewer topic filters.',
+                            federated
+                              ? 'Try another topic or try again if a collection could not be searched.'
+                              : 'Try broader terms, a different retrieval mode, or fewer topic filters.',
                           )}
                         />
                       )
@@ -1456,8 +1465,14 @@ export function SearchPage() {
                     >
                       <button
                         type='button'
-                        onClick={() => updateParams({ topics: null, strength: null })}
+                        onClick={() =>
+                          updateParams(
+                            federated ? { source: null } : { topics: null, strength: null },
+                          )}
                         className='rp-btn rp-btn-outline'
+                        style={federated
+                          ? { minHeight: 'max(44px, calc(2.75rem * var(--rp-density-ctl, 1)))' }
+                          : undefined}
                       >
                         {ui('Clear filters')}
                       </button>
