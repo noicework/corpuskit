@@ -864,7 +864,7 @@ saving changes. Every route or tool that makes a paid model call for its caller 
 
 - These count as one ask each: research asks (`POST /api/t/:slug/ask`), help-assistant asks
   (`POST /api/t/:slug/docs/ask`), cross-portal asks (`POST /api/ask-estate`), the MCP
-  `answer_question` tool, briefings (`POST /api/t/:slug/generate`), multi-document summaries
+  `answer_question` and `answer_estate` tools, briefings (`POST /api/t/:slug/generate`), multi-document summaries
   (`POST /api/t/:slug/summarize`) and investigation syntheses
   (`POST /api/t/:slug/investigations/:id/synthesise`).
 - These accompany an ask that has already counted, so they do not count themselves, but they
@@ -874,7 +874,11 @@ saving changes. Every route or tool that makes a paid model call for its caller 
   The last ask of the day therefore gets no verdicts or follow-up suggestions.
 
 A cross-portal ask counts once on each portal it reaches, and is admitted on every selected
-portal or on none. An ask is counted when it is admitted, before its answer streams, so a
+portal or on none. The estate MCP `answer_estate` tool also counts once on each portal it
+reaches, but each portal is admitted on its own: a portal whose asks are spent is named in the
+call's `failed_sources` as `unavailable` and the others still answer (see
+[the estate MCP endpoint](RBAC.md#estate-mcp-endpoint)). `ESTATE_SOURCE_TIMEOUT_MS`, 25000 by
+default, is how long each portal may take in such a call before it is named there as `timeout`. An ask is counted when it is admitted, before its answer streams, so a
 refused ask costs nothing upstream. A request that is refused after it was counted, for
 example by the per-minute rate limit or because its input is invalid, is given its ask back.
 A refused MCP call returns the same body as a tool error.
@@ -1152,7 +1156,8 @@ The limits, each per minute, with `0` turning one off:
 A paid-answer route covers asks, help-assistant asks, briefings, summaries, syntheses, routing,
 sub-questions, verdicts and follow-ups. A cross-portal ask is one answer on every portal it
 reaches, so it counts once per portal against the first two limits and against each portal's
-anonymous limit, and it is admitted on all of them or on none. A request over any limit is
+anonymous limit, and it is admitted on all of them or on none. An estate MCP `answer_estate` call
+counts the same way, and a refused one is a tool error with the same body. A request over any limit is
 answered `429 {"error":"rate_limited"}` with a `Retry-After` header, and an ask it had counted
 toward `asksPerDay` is given back.
 

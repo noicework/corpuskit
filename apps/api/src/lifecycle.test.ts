@@ -157,6 +157,7 @@ const READ_ONLY_EXEMPT = new Set([
   'POST /api/t/:slug/docs/ask',
   'POST /api/ask-estate',
   'ALL /api/t/:slug/mcp',
+  'ALL /api/estate/mcp',
   // Revoking access; granting or changing it is refused.
   'DELETE /api/t/:slug/mcp/keys/:id',
   'DELETE /api/admin/t/:slug/members/:id',
@@ -169,6 +170,8 @@ const READ_ONLY_EXEMPT = new Set([
   'MCP get_document',
   'MCP browse_catalogue',
   'MCP answer_question',
+  'MCP search_estate',
+  'MCP answer_estate',
 ])
 
 Deno.test('every portal write is a read-only mutation unless it is an explicit exemption', () => {
@@ -918,6 +921,7 @@ const ASKS_COUNTED = new Set([
   'POST /api/t/:slug/docs/ask',
   'POST /api/ask-estate',
   'MCP answer_question',
+  'MCP answer_estate',
   'POST /api/t/:slug/generate',
   'POST /api/t/:slug/summarize',
   'POST /api/t/:slug/investigations/:id/synthesise',

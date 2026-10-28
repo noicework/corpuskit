@@ -43,6 +43,7 @@ import {
   type Declaration,
   declaredRoute,
   declaredSubAction,
+  ESTATE_MCP_ROUTE,
   infrastructureHandler,
   isInfrastructurePreflight,
   isPrivileged,
@@ -80,6 +81,7 @@ import {
   authoriseSubActions as checkSubActions,
   type AuthorityDependencies,
   evaluateOperation,
+  keyPortalRoles,
   type RequestAuthority,
   researchOwner as resolveResearchOwner,
   selectRequestAuthority,
@@ -383,6 +385,7 @@ import {
   planLabelsetRebuild,
 } from './labelsets.ts'
 import { registerMcpAuthRateLimit, registerMcpRoutes } from './mcp.ts'
+import { DEFAULT_ESTATE_SOURCE_TIMEOUT_MS, registerEstateMcpRoutes } from './estate-mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
 import { registerAuditRoutes } from './audit-routes.ts'
 import { PORTAL_EXPORT_PATH, registerPortalExport } from './portal-export.ts'
@@ -1125,6 +1128,9 @@ export interface BuildAppOptions {
   /** Requests/min per address for POST /api/ask-estate, which fans one request across every
    *  tenant. Defaults to env RATE_LIMIT_ESTATE_PER_MIN, or 6. 0 disables. */
   rateLimitEstatePerMin?: number
+  /** How long one portal may take in an estate MCP call before it is named as a failed source.
+   *  Defaults to env ESTATE_SOURCE_TIMEOUT_MS, or 25 seconds. */
+  estateSourceTimeoutMs?: number
   /** Authentication attempts/min/IP at the MCP endpoint. Defaults to 60. 0 disables. */
   rateLimitMcpAuthPerMin?: number
 }
@@ -1136,13 +1142,19 @@ interface RequestAuthorisation {
   aggregateAuthority(): Promise<RequestAuthority>
   /** The selected portals the caller may use, or without a selection their directory's. */
   aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
+  /**
+   * The portals one estate MCP tool call may reach on that tool's own permission, chosen as
+   * `aggregate` chooses them. Admission against the daily ask limit is left to each portal.
+   */
+  estatePortals(tool: Declaration, slugs?: readonly string[]): Promise<TenantConfig[]>
 }
 /**
  * Which portals belong in the caller's directory: the portal list, and the portals a cross-portal
  * ask reaches when it names none. Being able to read a portal is not enough, or every public
  * portal on a deployment would be listed to anyone. Platform authority lists every portal; anyone
  * else gets the portals they hold a role on, directly or through a group, and the portal whose
- * canonical hostname is the request's host. A listed portal must still be readable.
+ * canonical hostname is the request's host. A key's roles are the portals its scope reaches. A
+ * listed portal must still be readable.
  */
 function portalDirectory(
   authority: RequestAuthority,
@@ -1150,7 +1162,11 @@ function portalDirectory(
 ): (config: TenantConfig) => boolean {
   if (isPlatformAuthority(authority)) return () => true
   const host = normaliseHostname(requestHostname)
-  const roles = authority.kind === 'session' ? authority.effectiveRoles.portalRoles : []
+  const roles = authority.kind === 'session'
+    ? authority.effectiveRoles.portalRoles
+    : authority.kind === 'key'
+    ? keyPortalRoles(authority)
+    : []
   return (config) =>
     roles.some((grant) => grant.slug === config.slug) ||
     (config.hostname !== undefined && normaliseHostname(config.hostname) === host)
@@ -1495,84 +1511,99 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return deny(scope)
       }
       // Selection rejects every aggregate bearer before any portal enumeration, including
-      // a key accompanied by an otherwise privileged ambient session.
+      // a key accompanied by an otherwise privileged ambient session. The estate MCP endpoint
+      // alone takes a key, which then reaches only the portals its own scope names.
       return await authority(scope)
+    }
+    /** The portals `declaration` may reach for this caller, as the cross-portal ask chooses them. */
+    const authorisedPortals = async (declaration: Declaration, slugs?: readonly string[]) => {
+      const selected = await aggregateAuthority()
+      const requested = slugs ? new Set(slugs) : undefined
+      // Without a selection the caller gets their directory. A selection, such as the alias
+      // host's portal, is authorised as it stands.
+      const listed = requested ? undefined : portalDirectory(selected, new URL(c.req.url).hostname)
+      const targets: TenantConfig[] = []
+      tenants.list(false, (config) => {
+        const slug = config.slug
+        if (requested && !requested.has(slug)) return false
+        if (listed && !listed(config)) return false
+        // The portal list still shows a suspended portal, with its status, so the picker
+        // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
+        // be read is left out on its own.
+        const hosting = readLifecycle(lifecycle, slug)
+        if (!hosting) return false
+        if (
+          declaration.path !== '/api/tenants' &&
+          hosting.status === 'suspended' && !isPlatformAuthority(selected)
+        ) return false
+        if (!AccessModeSchema.safeParse(config.accessMode).success) return false
+        const policy = {
+          slug,
+          accessMode: config.accessMode,
+          configuredTenantId: configuredTenantId,
+        }
+        // Candidate filtering is pure: a hidden portal must not latch a request denial.
+        const principal = selected.kind === 'break-glass'
+          ? normalisePrincipal({
+            kind: 'user',
+            tenantId: configuredTenantId,
+            oid: 'break-glass',
+          }, { platformRole: 'owner', portalRoles: [] })
+          : selected.kind === 'key'
+          ? normalisePrincipal({ kind: 'user', tenantId: configuredTenantId, oid: selected.id }, {
+            portalRoles: [...keyPortalRoles(selected)],
+          })
+          : normalisePrincipal(
+            selected.kind === 'session'
+              ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
+              : { kind: 'anonymous' },
+            selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
+            policy,
+          )
+        const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
+        if (allowed) targets.push(config)
+        return allowed
+      })
+      if (targets.length === 0) {
+        // The portal list shows what the caller may see, and seeing none is not a refusal: an
+        // empty list says nothing a refusal would not. A cross-portal ask with nowhere to ask
+        // is still refused.
+        if (declaration.path === '/api/tenants') return targets
+        return deny({ kind: 'platform' })
+      }
+      // Terminal guards run only after the complete candidate set is filtered.
+      if (selected) {
+        try {
+          for (const config of targets) {
+            authoriseOperation(selected, declaration.permission, {
+              kind: 'portal',
+              slug: config.slug,
+            }, {
+              slug: config.slug,
+              accessMode: config.accessMode,
+              configuredTenantId: configuredTenantId,
+            })
+          }
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+      }
+      return targets
     }
     return {
       aggregateAuthority,
       aggregate: async (slugs) => {
-        const selected = await aggregateAuthority()
         const declaration = operation()
-        const requested = slugs ? new Set(slugs) : undefined
-        // Without a selection the caller gets their directory. A selection, such as the alias
-        // host's portal, is authorised as it stands.
-        const listed = requested
-          ? undefined
-          : portalDirectory(selected, new URL(c.req.url).hostname)
-        const targets: TenantConfig[] = []
-        tenants.list(false, (config) => {
-          const slug = config.slug
-          if (requested && !requested.has(slug)) return false
-          if (listed && !listed(config)) return false
-          // The portal list still shows a suspended portal, with its status, so the picker
-          // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
-          // be read is left out on its own.
-          const hosting = readLifecycle(lifecycle, slug)
-          if (!hosting) return false
-          if (
-            declaration.path !== '/api/tenants' &&
-            hosting.status === 'suspended' && !isPlatformAuthority(selected)
-          ) return false
-          if (!AccessModeSchema.safeParse(config.accessMode).success) return false
-          const policy = {
-            slug,
-            accessMode: config.accessMode,
-            configuredTenantId: configuredTenantId,
-          }
-          // Candidate filtering is pure: a hidden portal must not latch a request denial.
-          const principal = selected.kind === 'break-glass'
-            ? normalisePrincipal({
-              kind: 'user',
-              tenantId: configuredTenantId,
-              oid: 'break-glass',
-            }, { platformRole: 'owner', portalRoles: [] })
-            : normalisePrincipal(
-              selected.kind === 'session'
-                ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
-                : { kind: 'anonymous' },
-              selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
-              policy,
-            )
-          const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
-          if (allowed) targets.push(config)
-          return allowed
-        })
-        if (targets.length === 0) {
-          // The portal list shows what the caller may see, and seeing none is not a refusal: an
-          // empty list says nothing a refusal would not. A cross-portal ask with nowhere to ask
-          // is still refused.
-          if (declaration.path === '/api/tenants') return targets
-          return deny({ kind: 'platform' })
-        }
-        // Terminal guards run only after the complete candidate set is filtered.
-        if (selected) {
-          try {
-            for (const config of targets) {
-              authoriseOperation(selected, declaration.permission, {
-                kind: 'portal',
-                slug: config.slug,
-              }, {
-                slug: config.slug,
-                accessMode: config.accessMode,
-                configuredTenantId: configuredTenantId,
-              })
-            }
-          } finally {
-            if (context.denialAudited) markDenialAudited(c.req.raw)
-          }
-        }
+        const targets = await authorisedPortals(declaration, slugs)
         admitRequestAsks(c.req.raw, declaration, targets)
         return targets
+      },
+      estatePortals: async (tool, slugs) => {
+        if (
+          tool.kind !== 'mcp' || tool.aggregate !== 'authorised-portals' ||
+          operation().path !== ESTATE_MCP_ROUTE
+        ) return deny({ kind: 'platform' })
+        return await authorisedPortals(tool, slugs)
       },
       declared: async () => {
         if (operation().aggregate) return aggregateAuthority()
@@ -1834,7 +1865,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Portal modes and assignments are mutable, even for currently public bytes.
     if (
       c.req.path.startsWith('/api/t/') || c.req.path === '/api/tenants' ||
-      c.req.path === '/api/ask-estate'
+      c.req.path === '/api/ask-estate' || c.req.path === ESTATE_MCP_ROUTE
     ) c.header('Cache-Control', 'private, no-store')
   })
   registerInfrastructure(app, '*', async (c, next) => {
@@ -2083,7 +2114,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (err instanceof BindingCryptoError) return c.json({ error: err.code }, err.status)
     if (err instanceof AuthorisationError) {
       if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
-      if (err.status === 401 && classification(c).declaration?.path === '/api/t/:slug/mcp') {
+      const mcpRoutes = ['/api/t/:slug/mcp', ESTATE_MCP_ROUTE]
+      if (err.status === 401 && mcpRoutes.includes(classification(c).declaration?.path ?? '')) {
         c.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
       }
       return c.json({ error: err.code }, err.status)
@@ -2390,6 +2422,32 @@ export function buildApp(opts: BuildAppOptions): Hono {
       toolGuard(declaration, config, authority)
       admitAll(portal)
     },
+  })
+  const estateTimeoutMs = opts.estateSourceTimeoutMs ??
+    Number(process.env.ESTATE_SOURCE_TIMEOUT_MS ?? DEFAULT_ESTATE_SOURCE_TIMEOUT_MS)
+  registerEstateMcpRoutes(app, {
+    provider,
+    audit: opts.audit,
+    requestContext,
+    authorise: authoriseDeclared,
+    readable: (c) => requestAuthorisation(c).aggregate(),
+    portals: (c, tool, slugs) => requestAuthorisation(c).estatePortals(tool, slugs),
+    // An estate answer is one ask on every portal it reaches, as a cross-portal ask is.
+    admitAnswers: (c, targets) => {
+      const fanOut = admitEstateFanOut(c, targets)
+      return fanOut.allowed ? null : fanOut.retryAfterSec
+    },
+    beforePortal: (declaration, config, authority) => {
+      toolGuard(declaration, config, authority)
+      try {
+        lifecycle.touch(config.slug, opts.now?.())
+      } catch {
+        console.error('Portal activity could not be recorded')
+      }
+    },
+    sourceTimeoutMs: Number.isFinite(estateTimeoutMs) && estateTimeoutMs > 0
+      ? estateTimeoutMs
+      : DEFAULT_ESTATE_SOURCE_TIMEOUT_MS,
   })
 
   // Keep bookmarks for renamed routes working: a renamed route segment permanently redirects to
@@ -3071,6 +3129,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json(
       merchandiseSummaries(enrichments, config.slug, await provider.listResources(config)),
     )
+  })
+
+  // Every document's display title in one small list, for the header search's suggestions. The
+  // browser fetches it once a session and matches as the reader types, so a keystroke never
+  // reaches this server or the knowledge box. A reader's view of the cached catalogue: bounded.
+  app.get(declaredRoute('GET', '/api/t/:slug/titles'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const resources = await provider.listResources(config, { bounded: true })
+    return c.json({
+      items: merchandiseSummaries(enrichments, config.slug, resources).map((resource) => ({
+        id: resource.id,
+        title: resource.title,
+        type: resource.type,
+        topicIds: resource.topicIds,
+        ...(resource.kind ? { kind: resource.kind } : {}),
+      })),
+    })
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id'), async (c) => {

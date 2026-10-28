@@ -4,6 +4,7 @@ import {
   DECLARATIONS,
   declaredRoute,
   declaredTool,
+  ESTATE_MCP_ROUTE,
   isPrivileged,
   registerInfrastructure,
 } from './permissions.ts'
@@ -44,6 +45,7 @@ import { z } from 'zod/v4'
 import { PORTAL_ROLES, type TenantConfig } from '@research-portal/core'
 import { AragApiError, type RetrievalProvider } from '@research-portal/retrieval'
 import { type McpKeyStoreApi } from './stores.ts'
+import { MAX_ESTATE_PORTALS } from './scoped-key-record.ts'
 import { addressKey, rateLimit, SlidingWindowLimiter } from './rate-limit.ts'
 
 const MCP_ROUTE = '/api/t/:slug/mcp'
@@ -55,6 +57,8 @@ const keyLabelSchema = z.object({
   ),
   role: z.enum(PORTAL_ROLES),
   expiresAt: z.string().optional(),
+  // Other portals the key also reaches at the estate MCP endpoint.
+  estate: z.array(z.string()).max(MAX_ESTATE_PORTALS).optional(),
 }).strict()
 
 const READ_ONLY_TOOL = {
@@ -192,7 +196,7 @@ export function constantTimeHashEqual(left: string, right: string): boolean {
   return difference === 0 && /^[0-9a-f]{64}$/.test(left) && /^[0-9a-f]{64}$/.test(right)
 }
 
-function jsonResult(value: Record<string, unknown>) {
+export function jsonResult(value: Record<string, unknown>) {
   const structuredContent = JSON.parse(JSON.stringify(value)) as Record<string, unknown>
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(structuredContent, null, 2) }],
@@ -207,7 +211,7 @@ function toolError(message: string) {
   }
 }
 
-async function safeTool(call: () => Promise<Record<string, unknown>>) {
+export async function safeTool(call: () => Promise<Record<string, unknown>>) {
   try {
     return jsonResult(await call())
   } catch (error) {
@@ -215,6 +219,50 @@ async function safeTool(call: () => Promise<Record<string, unknown>>) {
     if (error instanceof PortalLifecycleError) return { ...jsonResult(error.body), isError: true }
     return toolError('The corpus could not complete this request. Please try again.')
   }
+}
+
+/** An answer that is neither refused nor backed by a verified citation. */
+export class UnverifiedAnswerError extends Error {
+  constructor() {
+    super('Answer had no verified citations')
+    this.name = 'UnverifiedAnswerError'
+  }
+}
+
+/** One portal's whole answer to `question`, refused or with at least one verified citation. */
+export async function collectVerifiedAnswer(
+  provider: RetrievalProvider,
+  config: TenantConfig,
+  question: string,
+  signal?: AbortSignal,
+) {
+  let answer = ''
+  let refused = false
+  let sources: unknown[] = []
+  const citations: Record<string, unknown>[] = []
+  let quality: Record<string, number | null> | undefined
+
+  for await (const event of provider.ask(config, question)) {
+    signal?.throwIfAborted()
+    if (event.type === 'delta') answer += event.text
+    else if (event.type === 'sources') sources = event.resources
+    else if (event.type === 'citation') citations.push(event.citation)
+    else if (event.type === 'quality') {
+      quality = {
+        answerRelevance: event.answerRelevance,
+        groundedness: event.groundedness,
+        contextRelevance: event.contextRelevance,
+      }
+    } else if (event.type === 'done') {
+      if (event.text) answer = event.text
+      refused = event.refused === true
+    } else if (event.type === 'error') {
+      throw new Error('Answer failed')
+    }
+  }
+
+  if (!refused && citations.length === 0) throw new UnverifiedAnswerError()
+  return { answer, refused, citations, sources, ...(quality ? { quality } : {}) }
 }
 
 export function createMcpServer(opts: McpRoutesOptions): {
@@ -309,43 +357,11 @@ export function createMcpServer(opts: McpRoutesOptions): {
       annotations: { ...READ_ONLY_TOOL, idempotentHint: false },
     },
     ({ question }, context) =>
-      auditedTool('answer_question', context, async (signal) => {
-        let answer = ''
-        let refused = false
-        let sources: unknown[] = []
-        const citations: unknown[] = []
-        let quality: Record<string, number | null> | undefined
-
-        for await (const event of opts.provider.ask(tenantFor(context), question)) {
-          signal?.throwIfAborted()
-          if (event.type === 'delta') answer += event.text
-          else if (event.type === 'sources') sources = event.resources
-          else if (event.type === 'citation') citations.push(event.citation)
-          else if (event.type === 'quality') {
-            quality = {
-              answerRelevance: event.answerRelevance,
-              groundedness: event.groundedness,
-              contextRelevance: event.contextRelevance,
-            }
-          } else if (event.type === 'done') {
-            if (event.text) answer = event.text
-            refused = event.refused === true
-          } else if (event.type === 'error') {
-            throw new Error('Answer failed')
-          }
-        }
-
-        if (!refused && citations.length === 0) {
-          throw new Error('Answer had no verified citations')
-        }
-        return {
-          answer,
-          refused,
-          citations,
-          sources,
-          ...(quality ? { quality } : {}),
-        }
-      }),
+      auditedTool(
+        'answer_question',
+        context,
+        (signal) => collectVerifiedAnswer(opts.provider, tenantFor(context), question, signal),
+      ),
   )
 
   server.registerTool(
@@ -413,10 +429,11 @@ function keySummary(record: ScopedKeySummary) {
     effectiveRole: record.effectiveRole,
     legacy: record.legacy,
     upgradeable: record.upgradeable,
+    ...(record.estate ? { estate: record.estate } : {}),
   }
 }
 
-function withNoStore(response: Response): Response {
+export function withNoStore(response: Response): Response {
   const headers = new Headers(response.headers)
   headers.set('cache-control', 'private, no-store')
   return new Response(response.body, {
@@ -430,17 +447,15 @@ function withNoStore(response: Response): Response {
  * D13: the MCP auth limiter runs as infrastructure ahead of the global request guard, so a
  * failed bearer is counted before key verification and cannot write unbounded audit rows.
  * Register this before the guard; registerMcpRoutes deliberately adds no limiter of its own.
+ * A portal's endpoint and the estate endpoint share one budget per address.
  */
 export function registerMcpAuthRateLimit(app: Hono, opts: McpAuthRateLimitOptions): void {
   const limiter = new SlidingWindowLimiter({
     limit: opts.rateLimitPerMin ?? 60,
     windowMs: 60_000,
   })
-  registerInfrastructure(
-    app,
-    MCP_ROUTE,
-    rateLimit(limiter, (context) => addressKey(opts.clientAddress(context))),
-  )
+  const limit = rateLimit(limiter, (context) => addressKey(opts.clientAddress(context)))
+  for (const route of [MCP_ROUTE, ESTATE_MCP_ROUTE]) registerInfrastructure(app, route, limit)
 }
 
 /** Register role-gated key management and the authenticated Streamable HTTP endpoint. */
@@ -474,6 +489,10 @@ export function registerMcpRoutes(app: Hono, opts: McpRoutesOptions): void {
         selected.provenanceSession,
         opts.authorityDependencies!,
       )
+      // Checked after the creator's roles, so a portal admin cannot probe which portals exist.
+      if (parsed.data.estate?.some((slug) => !opts.tenant(slug))) {
+        return context.json({ error: 'invalid_request' }, 400)
+      }
       issued.commit()
       return context.json({ key: issued.key, credential: keySummary(issued.credential) }, 201)
     } catch (error) {
