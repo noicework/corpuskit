@@ -73,10 +73,10 @@ describe('AccountMenu', () => {
   })
 
   it('announces the menu and its open state only for administrators', () => {
+    // The menu is not in the DOM while closed, so nothing may point at it then.
     expect(accountTriggerAttributes(true, false, 'account-menu')).toEqual({
       'aria-haspopup': 'menu',
       'aria-expanded': false,
-      'aria-controls': 'account-menu',
     })
     expect(accountTriggerAttributes(true, true, 'account-menu')).toEqual({
       'aria-haspopup': 'menu',
