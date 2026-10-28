@@ -1151,7 +1151,8 @@ body {
   );
   background-size: 200% 100%;
   background-repeat: no-repeat;
-  animation: rp-shimmer 1.6s linear infinite;
+  /* Three passes end inside five seconds (WCAG 2.2.2); a skeleton still showing rests static. */
+  animation: rp-shimmer 1.6s linear 3 forwards;
 }
 
 /* Resource thumbnails reserve their parent's box while the platform image is
