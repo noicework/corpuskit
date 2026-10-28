@@ -222,6 +222,49 @@ export function needsFirstPdf(config: Pick<TenantConfig, 'copy'>): boolean {
   return listed.some((scene) => scene.id === 'cited-page' && !scene.href)
 }
 
+// ---- Open across a remount --------------------------------------------------------------
+//
+// The page remounts whenever the window regains focus (the access layer re-reads the session),
+// which would close the tour on every alt-tab. So while the tour is open, the step it is on is
+// kept for the tab; a remount opens it again at that step, and closing it forgets.
+
+const OPEN_KEY = 'rp_demo_tour_open'
+
+function tab(): Storage | null {
+  try {
+    return globalThis.sessionStorage ?? null
+  } catch {
+    return null
+  }
+}
+
+/** The step the tour was open at in this tab, or null when it was not open. */
+export function tourProgress(slug: string): number | null {
+  try {
+    const raw = tab()?.getItem(`${OPEN_KEY}:${slug}`)
+    const step = raw === null || raw === undefined ? NaN : Number(raw)
+    return Number.isInteger(step) && step >= 0 ? step : null
+  } catch {
+    return null
+  }
+}
+
+export function rememberTourProgress(slug: string, step: number): void {
+  try {
+    tab()?.setItem(`${OPEN_KEY}:${slug}`, String(step))
+  } catch {
+    // No tab storage: the tour simply closes on a remount.
+  }
+}
+
+export function forgetTourProgress(slug: string): void {
+  try {
+    tab()?.removeItem(`${OPEN_KEY}:${slug}`)
+  } catch {
+    // Nothing was kept.
+  }
+}
+
 // ---- Once per browser ---------------------------------------------------------------------
 
 const DONE_KEY = 'rp_demo_tour_done'
