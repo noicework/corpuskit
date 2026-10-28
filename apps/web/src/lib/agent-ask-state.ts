@@ -296,6 +296,9 @@ export function applyAgentAskEvent(
         // The citation-checked final text replaces the provisional deltas when the server sends it.
         ...(event.text !== undefined ? { text: event.text } : {}),
       }
+    case 'answer-record':
+      // Saved on the host portal before `done`; this page does not link the record yet.
+      return state
     case 'error':
       return {
         ...state,

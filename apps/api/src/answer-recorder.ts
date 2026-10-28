@@ -21,7 +21,7 @@ const MAX_CALLS = 200
 export class AnswerRecorder {
   readonly answerId = crypto.randomUUID()
   private readonly started: number
-  private readonly value: AnswerRecord
+  protected readonly value: AnswerRecord
   private readonly rawCitations = new Set<string>()
   private readonly finalCitations = new Map<number, Citation>()
   private readonly passageKeys = new Set<string>()
@@ -85,12 +85,12 @@ export class AnswerRecorder {
       truncated: options.question.length > 8000,
     }
   }
-  private now(): number {
+  protected now(): number {
     return (this.options.now ?? Date.now)()
   }
-  private text(value: string, limit = MAX_TEXT): string {
+  protected text(value: string, limit = MAX_TEXT): string {
     if (value.length > limit && this.value) this.value.truncated = true
-    return redactAnswerRecordText(value.slice(0, limit))
+    return redactAnswerRecordText(value).slice(0, limit)
   }
   query(query: string): void {
     const text = this.text(query, 8000)
@@ -155,7 +155,9 @@ export class AnswerRecorder {
     this.value.generation.images = options.images ?? false
     this.value.generation.topK = options.topK ?? null
     this.value.generation.maxTokens = options.maxTokens ?? null
-    for (const prompt of [options.systemPrompt, options.promptAddendum]) {
+    for (
+      const prompt of [options.systemPrompt, options.answerInstructions, options.promptAddendum]
+    ) {
       if (!prompt) continue
       const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(prompt))
       const hash = [...new Uint8Array(digest)].map((v) => v.toString(16).padStart(2, '0')).join('')
@@ -246,10 +248,7 @@ export class AnswerRecorder {
       if (event.refused) this.finalCitations.clear()
     }
   }
-  /** Save before publishing the record event. A storage failure must fail the answer stream. */
-  finish(status?: AnswerRecord['status']): string {
-    if (this.committed) return this.answerId
-    if (status) this.value.status = status
+  protected prepare(): void {
     this.value.cited = [...this.finalCitations.values()].slice(0, MAX_PASSAGES).map(
       (citation): AnswerRecordPassage => {
         const match = this.value.retrieved.find((p) =>
@@ -271,18 +270,38 @@ export class AnswerRecorder {
     const finalKeys = new Set(this.value.cited.map((c) => JSON.stringify([c.resourceId, c.text])))
     this.value.verification.citationsDropped =
       [...this.rawCitations].filter((key) => !finalKeys.has(key)).length
+  }
+  /** Save before publishing the record event. A storage failure must fail the answer stream. */
+  finish(status?: AnswerRecord['status']): string {
+    if (this.committed) return this.answerId
+    if (status) this.value.status = status
+    this.prepare()
     this.value.timing.durationMs = Math.max(0, this.now() - this.started)
     while (new TextEncoder().encode(JSON.stringify(this.value)).byteLength > 384 * 1024) {
       this.value.truncated = true
-      if (this.value.retrieved.length) this.value.retrieved.pop()
-      else if (this.value.cited.length) this.value.cited.pop()
-      else if (this.value.retrievalQueries.length) this.value.retrievalQueries.pop()
-      else if (this.value.calls.length) this.value.calls.pop()
-      else throw new Error('Answer evidence exceeds storage bound')
+      const fields = ['retrieved', 'cited', 'retrievalQueries', 'calls'] as const
+      const field = fields.find((key) => this.value[key].length)
+      if (field) {
+        this.value[field].pop()
+        this.truncate(field)
+      } else {
+        const agent = this.value.agent
+        const extra = agent &&
+          (['citationDecisions', 'lookups', 'steps', 'failedSources', 'sources'] as const)
+            .find((key) => agent[key].length)
+        if (!extra || !agent) throw new Error('Answer evidence exceeds storage bound')
+        agent[extra].pop()
+        this.truncate(`agent.${extra}`)
+      }
     }
     this.options.store.record(this.options.portal, this.value)
     this.committed = true
     return this.answerId
+  }
+  protected truncate(field: string): void {
+    this.value.truncated = true
+    const fields = this.value.truncatedFields ??= []
+    if (!fields.includes(field)) fields.push(field)
   }
   /** The same RetrievalProvider interface, instrumenting only ask and search. No extra calls. */
   provider(provider: RetrievalProvider): RetrievalProvider {

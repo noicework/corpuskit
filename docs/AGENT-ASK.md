@@ -249,6 +249,7 @@ gives up, and `estate-done` never arrives.
 | `delta` | `text` | The next piece of the answer |
 | `citation` | `marker, sourceId, chunkId, title, url?` | What `[marker]` in the answer cites |
 | `done` | `elapsedMs, text?` | The answer is complete; `text`, when present, replaces provisional text with the checked answer |
+| `answer-record` | `answerId` | The host portal's evidence record has been saved, before the terminal event; see [Answer records](ANSWER-RECORDS.md) |
 | `error` | `code, message, retryable` | The stream ended without an answer |
 
 Guarantees a view can rely on:
@@ -334,6 +335,11 @@ of the scrolling column, and the steps sit in a right rail from `xl` up.
 - Assistive technology hears one polite status line: the step the portal is on (at most one
   every few seconds), the failed-source notice once, and the answer's completion; never the
   answer text as it streams. Errors are an alert in the card.
+- A run outlives the page. The access layer withdraws authority on every return to the window
+  and re-reads the session, which remounts the page for a moment; the run is held outside the
+  page (`useAgentAsk`) and its stream is read outside the access generation (`durable` on
+  `streamAgentAsk`), so the page re-attaches to it. A different signed-in identity ends the run,
+  and a page nobody returns to within a few seconds stops it, keeping what arrived.
 
 ## Saving an answer as an evidence brief
 
