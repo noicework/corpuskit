@@ -26,6 +26,7 @@ const tabs = [
   'overview',
   'insights',
   'content',
+  'duplicates',
   'enrichments',
   'taxonomy',
   'graph',

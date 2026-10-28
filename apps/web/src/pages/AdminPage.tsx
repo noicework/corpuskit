@@ -1,3 +1,4 @@
+import { OverlapPanel } from './admin/OverlapPanel.tsx'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink } from 'react-router-dom'
@@ -274,6 +275,7 @@ function AdminContent() {
 
       {data && (
         <div className='mt-6 space-y-6 lg:space-y-8' data-admin-overview>
+          {authority.can('portal.create', { kind: 'platform' }) && <OverlapPanel />}
           <AddPortal />
 
           <div className='space-y-4'>
