@@ -75,6 +75,12 @@ function entry(
   })
 }
 
+/**
+ * The estate MCP endpoint: one credential reaches several portals. A key is accepted here as well
+ * as on its own portal's routes, so authority selection needs this path before any route matches.
+ */
+export const ESTATE_MCP_ROUTE = '/api/estate/mcp'
+
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 /**
  * Turning on the knowledge box's hidden resources, which adding a draft or hiding a resource does
@@ -255,6 +261,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/t/:slug/labelsets', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/suggest', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources', 'portal.read', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/titles', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id/questions', 'portal.read', 'portal', {
     subActions: [
@@ -531,6 +538,16 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('mcp', 'MCP', 'get_document', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'browse_catalogue', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'answer_question', 'portal.ask', 'portal'),
+  // The estate MCP endpoint reaches every portal its caller may use, as a cross-portal ask does.
+  entry('http', 'ALL', ESTATE_MCP_ROUTE, 'portal.read', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
+  entry('mcp', 'MCP', 'search_estate', 'portal.read', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
+  entry('mcp', 'MCP', 'answer_estate', 'portal.ask', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
   entry('http', 'ALL', '/t/*', 'portal.read', 'public', {
     reason: 'Application shell bookmark redirects only; no research data is returned.',
   }),
@@ -739,8 +756,14 @@ export function assertRouteInventory(
     throw new Error('Route permission inventory mismatch')
   }
 }
-export function assertToolInventory(names: readonly string[]): void {
-  const expected = DECLARATIONS.filter((item) => item.kind === 'mcp').map((item) => item.path)
+/** A portal's MCP endpoint lists the portal tools; the estate endpoint lists the aggregate ones. */
+export function assertToolInventory(
+  names: readonly string[],
+  endpoint: 'portal' | 'estate' = 'portal',
+): void {
+  const expected = DECLARATIONS.filter((item) =>
+    item.kind === 'mcp' && (item.aggregate === 'authorised-portals') === (endpoint === 'estate')
+  ).map((item) => item.path)
   if (
     new Set(names).size !== names.length || expected.length !== names.length ||
     names.some((name) => !expected.includes(name))

@@ -2216,7 +2216,12 @@ export class DurableMcpKeyStore implements McpKeyStoreApi {
     const all = this.list(slug)
     const found = all.find((record) => record.id === id)
     if (!found) return false
-    if (!found.revokedAt) found.revokedAt = revokedAt
+    if (!found.revokedAt) {
+      found.revokedAt = revokedAt
+      // A revoked key reaches nothing, so it keeps no estate, and releases before estates can
+      // read its record again.
+      delete found.estate
+    }
     this.state.put(this.storageKey(slug), all)
     return true
   }

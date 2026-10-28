@@ -360,6 +360,8 @@ const actionFields = {
     'suggestionId',
     'suggestionKind',
   ],
+  // One row for each portal an estate MCP tool call queried, in that portal's own log.
+  'estate.query': ['permission', 'operation', 'count', 'keyRole', 'code'],
   'resource.delete': [
     'code',
     'permission',
