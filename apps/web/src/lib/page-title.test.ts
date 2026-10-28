@@ -13,6 +13,8 @@ describe('per-route page titles (D6-14)', () => {
     expect(surfaceName('/t/neuro/library/9cb1d5d7')).toBe('Document')
     expect(surfaceName('/t/neuro/ask')).toBe('Ask')
     expect(surfaceName('/t/neuro/ask/session-1')).toBe('Ask')
+    expect(surfaceName('/t/neuro/agent')).toBe('Agent ask')
+    expect(surfaceName('/t/neuro/agentic')).toBe('Agentic')
     expect(surfaceName('/t/neuro/investigations')).toBe('Investigations')
     expect(surfaceName('/t/neuro/investigations/abc')).toBe('Investigation')
     expect(surfaceName('/t/neuro/generate')).toBe('Generate')

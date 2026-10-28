@@ -19,6 +19,7 @@ import { AskPage } from './pages/AskPage.tsx'
 import { InvestigationsPage } from './pages/InvestigationsPage.tsx'
 import { InvestigationDetailPage } from './pages/InvestigationDetailPage.tsx'
 import { AgenticPage } from './pages/AgenticPage.tsx'
+import { AgentAskPage } from './pages/AgentAskPage.tsx'
 import { GeneratePage } from './pages/GeneratePage.tsx'
 import { AssessmentPage } from './pages/AssessmentPage.tsx'
 import { GraphPage } from './pages/GraphPage.tsx'
@@ -138,6 +139,7 @@ createRoot(container).render(
                 <Route path='investigations' element={<InvestigationsPage />} />
                 <Route path='investigations/:id' element={<InvestigationDetailPage />} />
                 <Route path='agentic' element={<AgenticPage />} />
+                <Route path='agent' element={<AgentAskPage />} />
                 <Route path='generate' element={<GeneratePage />} />
                 <Route path='assessment' element={<AssessmentPage />} />
                 <Route path='graph' element={<GraphPage />} />

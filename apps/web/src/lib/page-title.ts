@@ -19,6 +19,7 @@ const SURFACES: [RegExp, string][] = [
   [/^library(?:\/|$)/, 'Library'],
   [/^investigations\/[^/]+/, 'Investigation'],
   [/^investigations(?:\/|$)/, 'Investigations'],
+  [/^agent(?:\/|$)/, 'Agent ask'],
   [/^agentic(?:\/|$)/, 'Agentic'],
   [/^generate(?:\/|$)/, 'Generate'],
   [/^assessment(?:\/|$)/, 'Assessment'],
