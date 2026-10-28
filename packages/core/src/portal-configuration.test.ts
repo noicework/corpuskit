@@ -65,6 +65,48 @@ Deno.test('configuration export is a complete importable presentation without ac
   expect(exported).not.toHaveProperty('extraction')
 })
 
+Deno.test('the accessibility statement travels with the configuration and takes only safe contacts', () => {
+  const accessibility = {
+    sections: [{ heading: 'What has been tested', paragraphs: ['Every page.', 'Both themes.'] }],
+    contact: {
+      name: 'the portal team',
+      email: 'access@example.org',
+      phone: '1800 000 000',
+      url: 'https://example.org/accessibility',
+      note: 'We reply within five working days.',
+    },
+  }
+  const exported = portalConfigurationExport({ ...config, accessibility })
+  expect(exported.accessibility).toEqual(accessibility)
+  expect(PortalConfigurationImportSchema.parse(exported).accessibility).toEqual(accessibility)
+  expect(portalConfigurationExport(config)).not.toHaveProperty('accessibility')
+  // A contact alone, and an empty statement, are both fine: the page leaves out what is absent.
+  expect(
+    TenantConfigSchema.parse({ ...config, accessibility: { contact: { email: 'a@b.co' } } })
+      .accessibility,
+  ).toEqual({ contact: { email: 'a@b.co' } })
+  expect(TenantConfigSchema.parse({ ...config, accessibility: {} }).accessibility).toEqual({})
+  for (
+    const invalid of [
+      { contact: { email: 'not an address' } },
+      { contact: { url: 'http://example.org/accessibility' } },
+      { contact: { url: 'javascript:alert(1)' } },
+      { contact: { phone: '12' } },
+      { contact: { fax: '1800 000 000' } },
+      { sections: [] },
+      { sections: [{ heading: 'No body', paragraphs: [] }] },
+      { sections: [{ heading: '', paragraphs: ['Body.'] }] },
+      { sections: [{ heading: 'Markup', body: '<p>Body</p>' }] },
+      { conformance: 'AA' },
+    ]
+  ) {
+    expect(TenantConfigSchema.safeParse({ ...config, accessibility: invalid }).success).toBe(false)
+    expect(
+      PortalConfigurationImportSchema.safeParse({ ...exported, accessibility: invalid }).success,
+    ).toBe(false)
+  }
+})
+
 Deno.test('interface wording survives configuration import and export without changing policy', () => {
   const copy = { interfaceMessages: { en: { Graph: 'Knowledge map' }, ja: { Graph: '地図' } } }
   const exported = portalConfigurationExport({ ...config, copy })

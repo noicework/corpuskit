@@ -30,6 +30,8 @@ export function localisePortalConfig<T extends TenantConfig>(
     const leaf = path[path.length - 1]
     if (root === 'searchPlaceholder' || root === 'assessmentHeading') return true
     if (root === 'copy') return field !== 'interfaceMessages'
+    // The statement's headings, paragraphs and contact note; an address is not copy.
+    if (root === 'accessibility') return !['email', 'phone', 'url'].includes(leaf!)
     if (root === 'topics') return leaf === 'label' || leaf === 'description'
     if (root === 'suggestedQuestions') return leaf === 'text'
     if (root !== 'branding') return false
