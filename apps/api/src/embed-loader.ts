@@ -10,6 +10,7 @@ export function embedLoader(options: {
   const closeLabel = japanese ? 'アシスタントを閉じる' : 'Close assistant'
   const host = document.createElement('div')
   host.dataset.corpuskitWidget = ''
+  host.lang = japanese ? 'ja' : 'en'
   script.after(host)
   const root = host.attachShadow({ mode: 'open' })
   const style = document.createElement('style')

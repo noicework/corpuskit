@@ -6,7 +6,7 @@ export const EmbeddingOriginSchema = z.string().trim().max(300).transform((value
     const url = new URL(value)
     if (
       url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' ||
-      url.search || url.hash || value.includes('*') || !/^https:\/\/[^/]+\/?$/i.test(value)
+      url.search || url.hash || value.includes('*') || !/^https:\/\/[^\s/?#@\\]+\/?$/i.test(value)
     ) throw new Error('Invalid origin')
     return url.origin
   } catch {

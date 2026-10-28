@@ -26,7 +26,10 @@ import {
 } from '../lib/theme.ts'
 import { applyAnswerEvent, EMPTY_ANSWER, type StreamedAnswer } from '../lib/answer-trust.ts'
 
-type AgentCitation = Extract<AgentAskEvent, { type: 'citation' }> & { passage?: string }
+type AgentCitation = Extract<AgentAskEvent, { type: 'citation' }> & {
+  passage?: string
+  resourceId?: string
+}
 type AgentAnswer = {
   text: string
   citations: AgentCitation[]
@@ -45,7 +48,12 @@ function PartnerAnswer({ answer }: { answer: AgentAnswer }) {
   const { ui } = usePortalLocale()
   const href = (citation: AgentCitation) => {
     const source = answer.sources.find((item) => item.id === citation.sourceId)
-    return citation.url ?? (source?.portal ? `/t/${source.portal}/ask` : undefined)
+    return citation.url ??
+      (source?.portal && citation.resourceId
+        ? `/t/${encodeURIComponent(source.portal)}/library/${
+          encodeURIComponent(citation.resourceId)
+        }`
+        : undefined)
   }
   return (
     <>
@@ -138,12 +146,12 @@ function EmbedAsk({ config, view }: { config: TenantConfig; view: string | null 
     let completed = false
     try {
       if (partners && canFederate) {
-        const passages = new Map<string, string>()
+        const passages = new Map<string, { text: string; resourceId?: string }>()
         await streamAgentAsk(config.slug, { query: query.trim() }, (item) => {
           access.controller.assertCurrent(context)
           if (item.type === 'agent-sources') {
             for (const chunk of item.chunks) {
-              passages.set(`${item.source.id}:${chunk.id}`, chunk.text)
+              passages.set(`${item.source.id}:${chunk.id}`, chunk)
             }
           }
           if (item.type === 'error') {
@@ -153,13 +161,17 @@ function EmbedAsk({ config, view }: { config: TenantConfig; view: string | null 
           setAgent((value) => {
             if (item.type === 'agent-start') return { ...value, sources: item.sources }
             if (item.type === 'delta') return { ...value, text: value.text + item.text }
+            if (item.type === 'done' && item.text !== undefined) {
+              return { ...value, text: item.text }
+            }
             if (item.type === 'sources-failed') return { ...value, failed: true }
             if (item.type === 'citation') {
               return {
                 ...value,
                 citations: [...value.citations, {
                   ...item,
-                  passage: passages.get(`${item.sourceId}:${item.chunkId}`),
+                  passage: passages.get(`${item.sourceId}:${item.chunkId}`)?.text,
+                  resourceId: passages.get(`${item.sourceId}:${item.chunkId}`)?.resourceId,
                 }],
               }
             }
@@ -179,6 +191,7 @@ function EmbedAsk({ config, view }: { config: TenantConfig; view: string | null 
       if (!completed) throw new Error(ui('The answer could not be completed. Try again.'))
     } catch (cause) {
       if (context !== access.controller.context) return
+      if (partners && canFederate) setAgent(EMPTY_AGENT)
       setError(
         controller.signal.aborted
           ? ui('Answer stopped.')
@@ -414,11 +427,17 @@ export function EmbedPage() {
                 : <p role='status'>{ui('Embedding is disabled for this portal.')}</p>
             )
             : (
-              <div className='mt-6' data-embed-private>
-                <h2 className='rp-display text-xl'>{ui('This portal requires sign-in.')}</h2>
+              <div className='mt-6' data-embed-private role='status'>
+                <h2 className='rp-display text-xl'>
+                  {access.state.session?.authenticated
+                    ? ui('{name} is unavailable', { name: branding.productName })
+                    : ui('This portal requires sign-in.')}
+                </h2>
                 <p className='mt-3 text-sm text-ink-2'>
                   {ui(
-                    'Open the full portal in a new tab to sign in. Your browser may prevent sign-in inside an embedded frame.',
+                    access.state.session?.authenticated
+                      ? 'You cannot open this portal with your current account.'
+                      : 'Open the full portal in a new tab to sign in. Your browser may prevent sign-in inside an embedded frame.',
                   )}
                 </p>
               </div>
