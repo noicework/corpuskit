@@ -168,6 +168,8 @@ interface CatalogueListing {
   items: CatalogItem[]
   /** False when a page failed or timed out and the listing stops short of the catalogue. */
   complete: boolean
+  /** A short final page proved the inventory ended before the reader page cap. */
+  exhaustive: boolean
 }
 
 /** A walk of the catalogue under way, shared by every request for the portal. */
@@ -1497,6 +1499,7 @@ export class AragProvider implements RetrievalProvider {
   ): Promise<ResourceSummary[]> {
     if (options.includeHidden) {
       const resources: ResourceSummary[] = []
+      let exhaustive = false
       for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
         options.signal?.throwIfAborted()
         const catalog = await within(
@@ -1509,12 +1512,22 @@ export class AragProvider implements RetrievalProvider {
         )
         const batch = Object.entries(catalog.resources ?? {})
         for (const [id, raw] of batch) resources.push(this.toSummary(id, raw))
-        if (batch.length < CATALOG_PAGE_SIZE) break
+        if (batch.length < CATALOG_PAGE_SIZE) {
+          exhaustive = true
+          break
+        }
+      }
+      if (options.requireComplete && !exhaustive) {
+        throw new Error('The catalogue inventory could not be read in full')
       }
       // Administrative rows never enter the reader's catalogue cache.
       return resources
     }
-    return (await this.loadCatalogue(tenant, options.bounded === true)).resources
+    const listing = await this.loadCatalogue(tenant, options.bounded === true)
+    if (options.requireComplete && !listing.exhaustive) {
+      throw new Error('The catalogue inventory could not be read in full')
+    }
+    return listing.resources
   }
 
   /** Administrative export uses fresh provider pages, with no reader visibility filters. */
@@ -1567,7 +1580,7 @@ export class AragProvider implements RetrievalProvider {
   private async loadCatalogue(
     tenant: TenantConfig,
     bounded: boolean,
-  ): Promise<{ resources: ResourceSummary[]; items: CatalogItem[] }> {
+  ): Promise<{ resources: ResourceSummary[]; items: CatalogItem[]; exhaustive?: boolean }> {
     const cached = this.catalogCache.get(tenant.slug)
     const now = Date.now()
     const fresh = cached !== undefined && now - cached.at < CATALOG_TTL_MS
@@ -1622,6 +1635,7 @@ export class AragProvider implements RetrievalProvider {
     const progress = { resources: [] as ResourceSummary[], items: [] as CatalogItem[] }
     const done = (async () => {
       let complete = false
+      let exhaustive = false
       let failure: unknown
       try {
         for (let page = 0; page < CATALOG_MAX_PAGES; page++) {
@@ -1645,7 +1659,10 @@ export class AragProvider implements RetrievalProvider {
             progress.resources.push(this.toSummary(id, raw))
             progress.items.push(catalogItemFromRaw(id, raw))
           }
-          if (batch.length < CATALOG_PAGE_SIZE) break
+          if (batch.length < CATALOG_PAGE_SIZE) {
+            exhaustive = true
+            break
+          }
         }
         // Past the page cap the listing is the first 8,000 resources, as it always was.
         complete = true
@@ -1657,6 +1674,7 @@ export class AragProvider implements RetrievalProvider {
         resources: [...progress.resources].sort(byPublishedDesc),
         items: [...progress.items],
         complete,
+        exhaustive,
       }
       if ((this.catalogGenerations.get(tenant.slug) ?? 0) === generation) {
         this.catalogAttempts.set(tenant.slug, listing.at)
@@ -4758,6 +4776,7 @@ export class AragProvider implements RetrievalProvider {
             if (tokens || timings) {
               yield {
                 type: 'usage',
+                tokensReported: tokens != null,
                 inputTokens: tokens?.input ?? 0,
                 outputTokens: tokens?.output ?? 0,
                 firstChunkSec: timings?.generative_first_chunk,

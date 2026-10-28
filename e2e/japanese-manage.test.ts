@@ -68,6 +68,9 @@ const retainedEnglish = new Set([
   'fixture-portal-admin',
   'fixture-viewer',
   'marine',
+  // Estate key choices retain the other portal's authored title and technical slug.
+  'Dryland Cropping Research Portal',
+  'grains',
   // The extraction sandbox's technical slug is authored fixture data, not UI copy.
   '(marine-lab)',
   'pending@example.test',
@@ -135,6 +138,7 @@ async function assertButtonDensity(page: Page) {
 }
 
 async function navigate(page: Page, tab: string) {
+  await page.bringToFront()
   await page.evaluate((tab) => {
     history.pushState(null, '', `/t/marine/manage?tab=${tab}`)
     dispatchEvent(new PopStateEvent('popstate'))
@@ -167,6 +171,8 @@ async function pickArchive(page: Page, text: string) {
 Deno.test('Japanese Manage covers every panel, retains source values and switches retained import results', async () => {
   const server = startTestServer({ identity: { role: 'owner' }, management })
   const config = server.tenants.get('marine')!
+  // Topic labels are portal-authored catalogue data, retained unless the portal translates them.
+  const portalAuthoredEnglish = new Set([...retainedEnglish, ...config.topics.map((t) => t.label)])
   server.tenants.patch('marine', {
     branding: {
       ...config.branding,
@@ -253,7 +259,7 @@ Deno.test('Japanese Manage covers every panel, retains source values and switche
         return [...candidates].sort()
       })
       inventory.push({ tab, english })
-      expect(english.filter((text) => !retainedEnglish.has(text))).toEqual([])
+      expect(english.filter((text) => !portalAuthoredEnglish.has(text))).toEqual([])
       await assertButtonBounds(page)
       if (tab === 'behaviour') {
         expect(

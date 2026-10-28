@@ -3,8 +3,8 @@ export const FEDERATION_JA: Readonly<Record<string, string>> = {
   'Choose how this portal shares research with partner collections.':
     'このポータルの研究資料を連携先コレクションと共有する方法を設定します。',
   'Participation': '連携への参加',
-  "Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal searching partner collections when it composes an answer. Agent ask stays available for this portal's own collection.":
-    '参加すると、他のポータルの連携回答と検索にこのコレクションを含めることができます。参加を停止すると、このポータルが統合回答を作成する際に連携先コレクションを検索しなくなります。このポータルのコレクションに対するエージェントへの質問は引き続き利用できます。',
+  "Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal searching partner collections for composed answers and shared search. Agent ask stays available for this portal's own collection.":
+    '参加すると、他のポータルの連携回答と検索にこのコレクションを含めることができます。参加を停止すると、このポータルの統合回答と共有検索で連携先コレクションを検索しなくなります。このポータルのコレクションに対するエージェントへの質問は引き続き利用できます。',
   "Take part in other portals' federated answers and search":
     '他のポータルの連携回答と検索に参加する',
   'This portal takes part in federation.': 'このポータルは連携に参加しています。',
@@ -34,8 +34,8 @@ export const FEDERATION_JA: Readonly<Record<string, string>> = {
   'Partner saved.': '連携先を保存しました。',
   'Partner key saved.': '連携先のキーを保存しました。',
   'Excluded documents': '連携から除外した資料',
-  "Excluded documents can still be used in this portal's answers. Other portals leave them out when composing an answer from this collection. Separate answers from each portal and federated search do not use this exclusion.":
-    '除外した資料は、このポータルの回答で引き続き使用できます。他のポータルがこのコレクションから回答を作成する際には使用されません。ポータルごとの個別回答と連携検索には、この除外設定は適用されません。',
+  'Excluded documents still answer and appear in searches here. Other portals leave them out when searching partner collections or composing answers. Separate answers from each portal are unaffected.':
+    '除外した資料は、このポータルの回答と検索結果で引き続き利用できます。他のポータルが連携先コレクションを検索したり、統合回答を作成したりする際には使用されません。ポータルごとの個別回答には影響しません。',
   'Loading documents...': '資料を読み込み中...',
   'Could not load federation documents.': '連携対象の資料を読み込めませんでした。',
   'No documents are excluded.': '除外された資料はありません。',

@@ -154,7 +154,7 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
         <h3 className='mt-5 font-semibold'>{ui('Participation')}</h3>
         <p className='mt-2 max-w-prose text-sm text-ink-2'>
           {ui(
-            "Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal searching partner collections when it composes an answer. Agent ask stays available for this portal's own collection.",
+            "Taking part lets other portals include this collection in federated answers and search. Turning it off also stops this portal searching partner collections for composed answers and shared search. Agent ask stays available for this portal's own collection.",
           )}
         </p>
         {can('behaviour.write')
@@ -399,7 +399,7 @@ export function FederationPanel({ config }: { config: TenantConfig }) {
             className='rp-manage-section-head'
             title={ui('Excluded documents')}
             description={ui(
-              "Excluded documents can still be used in this portal's answers. Other portals leave them out when composing an answer from this collection. Separate answers from each portal and federated search do not use this exclusion.",
+              'Excluded documents still answer and appear in searches here. Other portals leave them out when searching partner collections or composing answers. Separate answers from each portal are unaffected.',
             )}
           />
           {documents.isLoading && (

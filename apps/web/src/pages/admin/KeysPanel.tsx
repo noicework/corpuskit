@@ -14,6 +14,7 @@ import {
   keyRoles,
   type KeySummary,
   keyUnconfirmed,
+  listKeyPortals,
   listKeys,
   revokeKey,
 } from '../../api/keys.ts'
@@ -47,6 +48,7 @@ function KeyManager({ slug }: { slug: string }) {
   const [label, setLabel] = useState('')
   const [role, setRole] = useState<PortalRole>('viewer')
   const [expiry, setExpiry] = useState('')
+  const [estate, setEstate] = useState<string[]>([])
   const [issued, setIssued] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [uncertain, setUncertain] = useState(false)
@@ -74,6 +76,11 @@ function KeyManager({ slug }: { slug: string }) {
   useLayoutEffect(() => {
     if (error) errorRef.current?.focus()
   }, [error])
+  const portals = useQuery({
+    queryKey: ['key-portals', slug, access.identityKey, access.generation],
+    queryFn: ({ signal }) => listKeyPortals(slug, { ...options, signal }),
+    retry: false,
+  })
   const rows = useQuery({
     queryKey: ['scoped-keys', slug, access.identityKey, access.generation],
     queryFn: ({ signal }) => listKeys(slug, { ...options, signal }),
@@ -118,6 +125,7 @@ function KeyManager({ slug }: { slug: string }) {
   async function refreshList() {
     const signal = lifetime.current?.signal
     if (!signal || !current(signal)) return
+    void portals.refetch()
     const result = await rows.refetch()
     if (current(signal) && result.isSuccess) {
       setUncertain(false)
@@ -134,7 +142,12 @@ function KeyManager({ slug }: { slug: string }) {
     setNotice(null)
     try {
       const expiresAt = expiry ? new Date(expiry).toISOString() : undefined
-      const result = await createKey(slug, { label, role, ...(expiresAt ? { expiresAt } : {}) }, {
+      const result = await createKey(slug, {
+        label,
+        role,
+        ...(expiresAt ? { expiresAt } : {}),
+        ...(estate.length ? { estate } : {}),
+      }, {
         ...options,
         signal,
       })
@@ -143,6 +156,7 @@ function KeyManager({ slug }: { slug: string }) {
       setLabel('')
       setRole('viewer')
       setExpiry('')
+      setEstate([])
       void rows.refetch()
     } catch (failure) {
       if (current(signal)) {
@@ -253,6 +267,54 @@ function KeyManager({ slug }: { slug: string }) {
               onChange={(e) => setExpiry(e.target.value)}
             />
           </label>
+          <fieldset className='min-w-0 lg:col-span-3' aria-describedby={`${id}-coverage-help`}>
+            <legend className='text-sm font-semibold'>{ui('Portals covered')}</legend>
+            <p id={`${id}-coverage-help`} className='mt-2 text-sm text-ink-2'>
+              {ui('This portal is always included. Add portals you administer for an estate key.')}
+            </p>
+            {portals.isPending
+              ? <p role='status' className='mt-2 text-sm'>{ui('Loading available portals...')}</p>
+              : portals.isError
+              ? (
+                <p role='alert' className='mt-2 text-sm'>
+                  {ui('Could not load available portals. Refresh the key list to try again.')}
+                </p>
+              )
+              : portals.data?.some((portal) => portal.slug !== slug)
+              ? (
+                <div className='mt-2 grid min-w-0 gap-2 sm:grid-cols-2'>
+                  {portals.data.filter((portal) => portal.slug !== slug).map((portal) => (
+                    <label
+                      key={portal.slug}
+                      className='rp-focus flex min-h-11 min-w-0 flex-wrap cursor-pointer items-center gap-3 rounded-[var(--rp-radius-input)] border border-[var(--rp-field)] p-3 text-sm [overflow-wrap:anywhere] focus-within:ring-2 focus-within:ring-[var(--rp-focus)]'
+                    >
+                      <input
+                        type='checkbox'
+                        data-key-portal={portal.slug}
+                        className='h-6 w-6 shrink-0 accent-[var(--rp-primary)]'
+                        checked={estate.includes(portal.slug)}
+                        disabled={!estate.includes(portal.slug) && estate.length >= 19}
+                        onChange={(event) =>
+                          setEstate((current) =>
+                            event.target.checked
+                              ? [...current, portal.slug]
+                              : current.filter((value) => value !== portal.slug)
+                          )}
+                      />
+                      <span className='min-w-0 flex-1 basis-48'>
+                        {portal.title} <span className='text-ink-2'>({portal.slug})</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              )
+              : null}
+            <KeyEndpoint
+              key={estate.length > 0 ? 'estate' : slug}
+              slug={slug}
+              estate={estate.length > 0}
+            />
+          </fieldset>
           <Button
             type='submit'
             className='justify-self-start'
@@ -314,6 +376,17 @@ function KeyManager({ slug }: { slug: string }) {
                     {ui('. Effective role:')}{' '}
                     {row.effectiveRole ? ui(roleLabel(row.effectiveRole)) : ui('None')}.
                   </p>
+                  <p data-key-coverage className='mt-2'>
+                    {row.revokedAt
+                      ? ui('Portal access revoked')
+                      : ui('Portals covered: {portals}', {
+                        portals: [slug, ...(row.estate ?? [])].map((covered) =>
+                          portals.data?.find((portal) => portal.slug === covered)?.title ??
+                            ui('Portal name unavailable')
+                        ).join(', '),
+                      })}
+                  </p>
+                  {!row.revokedAt && <KeyEndpoint slug={slug} estate={!!row.estate?.length} />}
                   {row.effectiveRole && row.effectiveRole !== row.role && (
                     <p className='mt-2'>{ui("The creator's current access limits this key.")}</p>
                   )}
@@ -345,6 +418,7 @@ function KeyManager({ slug }: { slug: string }) {
                 </div>
                 {!row.revokedAt && (
                   <Button
+                    data-key-revoke
                     variant='danger'
                     size='sm'
                     leadingIcon={Trash}
@@ -386,6 +460,43 @@ function KeyManager({ slug }: { slug: string }) {
         />
       )}
     </section>
+  )
+}
+function KeyEndpoint({ slug, estate }: { slug: string; estate: boolean }) {
+  const { ui } = usePortalLocale()
+  const url = `${globalThis.location?.origin ?? ''}${
+    estate ? '/api/estate/mcp' : `/api/t/${encodeURIComponent(slug)}/mcp`
+  }`
+  const [status, setStatus] = useState('')
+  const alive = useRef(false)
+  useLayoutEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  async function copy() {
+    setStatus('')
+    try {
+      await navigator.clipboard.writeText(url)
+      if (alive.current) setStatus('Copied')
+    } catch {
+      if (alive.current) setStatus('Could not copy the URL. Select it and copy it manually.')
+    }
+  }
+  return (
+    <div data-key-endpoint className='mt-2 min-w-0 text-sm text-ink-2'>
+      <p>
+        {ui(estate ? 'Use the estate MCP endpoint:' : 'Use the portal MCP endpoint:')}{' '}
+        <code className='[overflow-wrap:anywhere]'>{url}</code>
+      </p>
+      <div className='mt-2 flex flex-wrap items-center gap-2'>
+        <Button variant='outline' size='sm' leadingIcon={Copy} onClick={() => void copy()}>
+          {ui('Copy')}
+        </Button>
+        <span role='status'>{ui(status)}</span>
+      </div>
+    </div>
   )
 }
 function keyExplanation(row: KeySummary) {

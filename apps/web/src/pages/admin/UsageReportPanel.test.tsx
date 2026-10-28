@@ -7,6 +7,17 @@ import { missingPortalMessages } from '../../lib/locale-messages.ts'
 import { usageMonths, UsageReportDocument } from './UsageReportPanel.tsx'
 
 const counts = {
+  topics: [],
+  searches: 0,
+  searchP50: null,
+  searchP90: null,
+  searchP95: null,
+  opens: 0,
+  openRate: null,
+  meanOpenRank: null,
+  consumptionAnswers: 0,
+  inputTokens: null,
+  outputTokens: null,
   questions: 3,
   answered: 2,
   unanswered: 1,
@@ -83,11 +94,11 @@ describe('Usage report', () => {
   it('is a table with column and row headers, a caption and a total row', () => {
     const markup = render(report)
     expect(markup).toContain('<caption class="sr-only">Usage by day for July 2026')
-    const daily = USAGE_COLUMNS.filter((c) => c.key !== 'notes' && !c.timing)
+    const daily = USAGE_COLUMNS.filter((c) => c.key !== 'notes' && c.key !== 'topics' && !c.timing)
     // The daily table's columns, then the response times table's measure, p50 to p95 and count.
     expect(markup.match(/<th scope="col"/g)).toHaveLength(daily.length + 5)
     // One row header per day and one for the total, then one per response time.
-    expect(markup.match(/<th scope="row"/g)).toHaveLength(3 + 3)
+    expect(markup.match(/<th scope="row"/g)).toHaveLength(3 + 4)
     expect(markup).toMatch(/<tfoot>.*<th scope="row"[^>]*>Total<\/th>/)
     expect(markup).toContain('role="region"')
     expect(markup).toContain('aria-label="Usage by day"')
@@ -121,7 +132,7 @@ describe('Usage report', () => {
     expect(markup).toMatch(/Answer time<\/th><td[^>]*>6\.4s<\/td><td[^>]*>9\.0s<\/td>/)
     // No generation time was reported: not measured, not zero.
     expect(markup).toContain('<span class="sr-only">Not measured</span>')
-    expect(markup).toContain('Search response times are not measured.')
+    expect(markup).toContain('Search times run from server receipt to response preparation')
   })
 
   it('says so when the knowledge box could not be read', () => {

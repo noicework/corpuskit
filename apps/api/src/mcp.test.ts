@@ -937,6 +937,8 @@ Deno.test('real MCP inventory and tool calls use session, key and public anonymo
       expect(list.status).toBe(200)
       assertToolInventory(
         (await list.json()).result.tools.map((tool: { name: string }) => tool.name),
+        'portal',
+        true,
       )
       for (const [name, args] of toolsToCall) {
         const result = await f.requestAs(
