@@ -390,6 +390,7 @@ function EvidenceRow({
           compact
           evidence={{
             passage: passage || source.title,
+            ...(passage && !summaryMatch && source.matchedPage ? { page: source.matchedPage } : {}),
             resourceId: source.id,
             resourceTitle: source.title,
             score: source.score ?? undefined,
