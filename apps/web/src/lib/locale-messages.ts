@@ -1,3 +1,4 @@
+import { AGENT_JA } from './messages/agent-ja.ts'
 import { ANSWER_RECORD_JA } from './messages/answer-record-ja.ts'
 import { EVALUATIONS_JA } from './messages/evaluations-ja.ts'
 import { LINK_HEALTH_JA } from './messages/link-health-ja.ts'
@@ -45,6 +46,7 @@ export const JAPANESE_MESSAGES = combineJapaneseCatalogs(
   DUPLICATES_JA,
   GRAPH_JA,
   USAGE_JA,
+  AGENT_JA,
 )
 
 /** Completeness audits must inspect missing keys instead of treating English fallback as translated. */
