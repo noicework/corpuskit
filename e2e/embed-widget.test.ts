@@ -68,6 +68,51 @@ async function shot(page: Page, name: string, width: number, scheme: string) {
   await Deno.writeFile(`${review}/${name}-${width}-${scheme}.png`, await page.screenshot())
 }
 
+async function assertFallbackSpacing(page: Page) {
+  expect(
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-corpuskit-widget]')!.shadowRoot!
+      const frame = root.querySelector('iframe')!.getBoundingClientRect()
+      const link = root.querySelector('a')!.getBoundingClientRect()
+      return link.top - frame.bottom >= 8 && link.right <= innerWidth &&
+        document.documentElement.scrollWidth <= innerWidth
+    }),
+  ).toBe(true)
+}
+
+/** Real line boxes and keyboard activation, in both the framed and standalone answer. */
+async function assertCitationFlow(page: Page, framed: boolean) {
+  const evaluate = async <T>(expression: string): Promise<T> => {
+    if (framed) return await inFrame<T>(page, expression)
+    const result = await page.unsafelyGetCelestialBindings().Runtime.evaluate({
+      expression,
+      returnByValue: true,
+    })
+    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails))
+    return result.result.value as T
+  }
+  expect(await evaluate<number>('document.querySelectorAll("section sup a").length'))
+    .toBeGreaterThan(0)
+  expect(
+    await evaluate<boolean>(`(() => {
+      const links = [...document.querySelectorAll('section sup a')];
+      return links.every(link => getComputedStyle(link).display === 'inline' &&
+        link.getBoundingClientRect().height <= parseFloat(getComputedStyle(link.closest('p, li')).fontSize) * 1.5) &&
+        ![...document.querySelectorAll('section p')].some(p => /^\\[\\d+\\]$/.test(p.textContent.trim())) &&
+        document.documentElement.scrollWidth <= innerWidth;
+    })()`),
+  ).toBe(true)
+  await evaluate("document.querySelector('section sup a').focus()")
+  await page.keyboard.press('Enter')
+  expect(
+    await evaluate<boolean>(`(() => {
+      const link = document.querySelector('section sup a');
+      const card = document.querySelector(new URL(link.href).hash);
+      return card?.matches('li') && document.activeElement === card;
+    })()`),
+  ).toBe(true)
+}
+
 Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard, Japanese and visual matrix', async () => {
   const peer = {
     zone: 'fixture-zone',
@@ -385,6 +430,11 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
         expect(await inFrame<string>(page, 'document.body.textContent')).toContain(
           '連携先のコレクションも検索',
         )
+        // These are authored portal names; the surrounding interface is Japanese.
+        expect(await inFrame<string>(page, "document.querySelector('h1').textContent"))
+          .toBe('Research collection')
+        expect(await inFrame<string>(page, "document.querySelector('.rp-eyebrow').textContent"))
+          .toBe('Fisheries research')
         expect(await inFrame(page, 'document.documentElement.scrollWidth <= innerWidth')).toBe(true)
         expect(await page.evaluate(() => innerWidth)).toBe(width)
         expect(
@@ -399,14 +449,18 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
             "(() => { const q = document.querySelector('#embed-question'); return getComputedStyle(q).borderRadius === getComputedStyle(q).getPropertyValue('--rp-radius-input').trim() })()",
           ),
         ).toBe(true)
+        await assertFallbackSpacing(page)
         if (width !== 320) await shot(page, 'inline', width, scheme)
         if (width === 390 && scheme === 'light') {
+          await page.evaluate(() => document.documentElement.style.fontSize = '200%')
           await inFrame(page, "document.documentElement.style.fontSize = '200%'")
           expect(await inFrame(page, 'document.documentElement.scrollWidth <= innerWidth')).toBe(
             true,
           )
+          await assertFallbackSpacing(page)
           await shot(page, 'inline-text200', width, scheme)
           await inFrame(page, "document.documentElement.style.fontSize = ''")
+          await page.evaluate(() => document.documentElement.style.fontSize = '')
         }
         await focusQuestion(page)
         await page.unsafelyGetCelestialBindings().Input.insertText({
@@ -451,13 +505,18 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
             '!!document.querySelector(\'section ol a[href*="/library/"][target=_blank]\')',
           ),
         ).toBe(true)
+        await assertCitationFlow(page, true)
+        await assertFallbackSpacing(page)
         await inFrame(page, "document.querySelector('section').scrollIntoView()")
         if (width !== 320) await shot(page, 'federated-answer', width, scheme)
         if (width === 390 && scheme === 'light') {
+          await page.evaluate(() => document.documentElement.style.fontSize = '200%')
           await inFrame(page, "document.documentElement.style.fontSize = '200%'")
           expect(await inFrame(page, 'document.documentElement.scrollWidth <= innerWidth')).toBe(
             true,
           )
+          await assertCitationFlow(page, true)
+          await assertFallbackSpacing(page)
           await inFrame(page, "document.querySelector('section').scrollIntoView()")
           await shot(page, 'federated-answer-text200', width, scheme)
         }
@@ -496,6 +555,7 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
         await page.keyboard.press('Tab')
         await page.keyboard.press('Enter')
         await page.waitForFunction(() => document.body.textContent?.includes('Answer ready.'))
+        await assertCitationFlow(page, false)
         await page.evaluate(() => document.querySelector('section')!.scrollIntoView())
         if (width !== 320) await shot(page, 'own-answer', width, scheme)
         if (width === 320) {
@@ -507,6 +567,7 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
           })
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
             .toBe(true)
+          await assertCitationFlow(page, false)
         }
         if (width === 390 && scheme === 'light') {
           await page.evaluate(() => {
@@ -514,6 +575,7 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
           })
           expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth))
             .toBe(true)
+          await assertCitationFlow(page, false)
           await page.evaluate(() => document.querySelector('section')!.scrollIntoView())
           await shot(page, 'own-answer-text200', width, scheme)
         }

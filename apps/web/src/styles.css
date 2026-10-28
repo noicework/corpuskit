@@ -3999,21 +3999,15 @@ button:disabled,
   overflow-wrap: anywhere;
 }
 .rp-embed-link {
-  min-height: max(24px, 1.5rem);
-  min-width: max(24px, 1.5rem);
-}
-.rp-embed-citation,
-.rp-embed sup a {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
   min-height: max(24px, 1.5rem);
   min-width: max(24px, 1.5rem);
 }
+/* Citation links are within prose (WCAG 2.5.8's inline exception). Keep the
+   normal superscript line box; full source links below have larger targets. */
 @media (pointer: coarse) {
-  .rp-embed-link,
-  .rp-embed-citation,
-  .rp-embed sup a {
+  .rp-embed-link {
     min-height: max(44px, 2.75rem);
     min-width: max(44px, 2.75rem);
   }

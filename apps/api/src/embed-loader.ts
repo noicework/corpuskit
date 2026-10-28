@@ -19,6 +19,7 @@ export function embedLoader(options: {
     Object.entries(options.tokens).map(([key, value]) => `${key}:${value}`).join(';')
   } }
     * { box-sizing:border-box }
+    .inline { display:grid; gap:.75rem; min-width:0 }
     button, a { font:inherit; min-height:max(44px,2.75rem); min-width:max(44px,2.75rem); padding:.65rem 1rem;
       border:2px solid var(--rp-primary); border-radius:var(--rp-radius-btn);
       background:var(--rp-primary); color:var(--rp-on-primary); cursor:pointer }
@@ -32,7 +33,7 @@ export function embedLoader(options: {
     iframe { display:block; width:100%; max-width:100%; border:1px solid var(--rp-field);
       border-radius:var(--rp-radius); background:var(--rp-app) }
     dialog iframe { max-height:calc(100dvh - 6rem) }
-    a { display:inline-flex; align-items:center; margin-top:.5rem }
+    a { display:flex; align-items:center; width:fit-content; max-width:100%; overflow-wrap:anywhere }
     @media (prefers-reduced-motion:reduce) { * { animation:none; transition:none } }
   `
   root.append(style)
@@ -58,14 +59,16 @@ export function embedLoader(options: {
     return frame
   }
   if (script.dataset.mode === 'inline') {
-    root.append(makeFrame())
+    const inline = document.createElement('div')
+    inline.className = 'inline'
     // A usable destination also remains when a browser or host policy refuses the frame.
     const fallback = document.createElement('a')
     fallback.href = src.href.replace(/\/embed(?=\?|$)/, '/ask')
     fallback.target = '_blank'
     fallback.rel = 'noopener noreferrer'
     fallback.textContent = japanese ? '別のタブで開く' : 'Open in a new tab'
-    root.append(fallback)
+    inline.append(makeFrame(), fallback)
+    root.append(inline)
     return
   }
   const button = document.createElement('button')

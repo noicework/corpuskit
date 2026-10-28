@@ -60,26 +60,37 @@ function PartnerAnswer({ answer }: { answer: AgentAnswer }) {
       <AnswerMarkdown
         text={answer.text}
         renderInline={(run, key) =>
-          run.split(/(\[[^\]\n]+\])/g).map((part, index) => {
-            const citation = answer.citations.find((item) => `[${item.marker}]` === part)
-            const url = citation && href(citation)
-            return citation
-              ? (
-                <a
-                  key={`${key}-${index}`}
-                  className='rp-focus rp-embed-citation text-accent-fg underline'
-                  href={url ?? `#embed-source-${citation.marker}`}
-                  {...(url ? external : {})}
-                  aria-label={ui('Source {index}, {title}', {
-                    index: citation.marker,
-                    title: citation.title,
-                  })}
-                >
-                  {part}
-                </a>
-              )
-              : <span key={`${key}-${index}`}>{part}</span>
-          })}
+          run.replace(/[ \t]+(?=\[[^\]\n]+\])/g, '\u2060').split(/(\[[^\]\n]+\])/g).map(
+            (part, index) => {
+              const citation = answer.citations.find((item) => `[${item.marker}]` === part)
+              return citation
+                ? (
+                  <sup key={`${key}-${index}`}>
+                    <a
+                      className='rp-focus rp-embed-citation rounded-[var(--rp-radius-chip)] px-0.5 font-semibold text-accent-fg no-underline'
+                      href={`#embed-source-${citation.marker}`}
+                      onClick={(event) => {
+                        if (
+                          event.ctrlKey || event.metaKey || event.shiftKey || event.altKey
+                        ) return
+                        const card = document.getElementById(`embed-source-${citation.marker}`)
+                        if (!card) return
+                        event.preventDefault()
+                        card.focus({ preventScroll: true })
+                        card.scrollIntoView({ block: 'nearest' })
+                      }}
+                      aria-label={ui('Source {index}, {title}', {
+                        index: citation.marker,
+                        title: citation.title,
+                      })}
+                    >
+                      {part}
+                    </a>
+                  </sup>
+                )
+                : <span key={`${key}-${index}`}>{part}</span>
+            },
+          )}
       />
       {answer.failed && <p role='status'>{ui('Some partner collections could not be searched.')}
       </p>}
@@ -91,7 +102,8 @@ function PartnerAnswer({ answer }: { answer: AgentAnswer }) {
             <li
               key={citation.marker}
               id={`embed-source-${citation.marker}`}
-              className='rp-card p-3'
+              tabIndex={-1}
+              className='rp-card rp-focus scroll-m-3 p-3'
             >
               <p className='text-xs text-ink-2'>{source?.label}</p>
               {url
@@ -260,10 +272,10 @@ function EmbedAsk({ config, view }: { config: TenantConfig; view: string | null 
                   ? (
                     <AnswerText
                       {...answer}
+                      text={answer.text.replace(/[ \t]+(?=\[\d+\])/g, '\u2060')}
                       slug={config.slug}
                       streaming={busy}
-                      citationTarget='_blank'
-                      citationHint='Opens in a new tab'
+                      citationSourceId={(citation) => `embed-source-${citation.index}`}
                     />
                   )
                   : <p>{ui('No cited answer was available. Try another question.')}</p>}
@@ -275,15 +287,18 @@ function EmbedAsk({ config, view }: { config: TenantConfig; view: string | null 
                 )}
                 <ol className='mt-5 space-y-4' aria-label={ui('Sources')}>
                   {answer.citations.map((citation) => (
-                    <li key={citation.index} className='rp-card p-3'>
+                    <li
+                      key={citation.index}
+                      id={`embed-source-${citation.index}`}
+                      tabIndex={-1}
+                      className='rp-card rp-focus scroll-m-3 p-3'
+                    >
                       <a
                         className='rp-focus rp-embed-link text-accent-fg underline'
                         href={citationLink(
                           config.slug,
                           citation,
-                          answer.sources.find((source) =>
-                            source.id === citation.resourceId
-                          ),
+                          answer.sources.find((source) => source.id === citation.resourceId),
                         )}
                         {...external}
                       >

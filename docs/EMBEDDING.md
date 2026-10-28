@@ -41,6 +41,10 @@ links opening the full portal in a new tab. It shares Ask's answer renderer. The
 renderer shares Ask's markdown renderer and displays source labels, passages and permitted links;
 it does not include the agent page's planning UI. "Powered by CorpusKit" appears by default;
 an explicitly configured portal footer follows its `poweredBy` choice.
+Citation markers sit inline with the answer and move keyboard focus to their source card.
+Source links open the full portal or partner document in a new tab. Organisation and product
+names come from the portal's branding, including any configured translations, rather than
+the interface catalogue.
 
 ## Access and framing
 

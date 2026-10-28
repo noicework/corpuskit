@@ -32,6 +32,8 @@ export interface InlineOptions {
   /** Added to a marker's tooltip, to say where else the reader finds the source. */
   citationHint?: string
   citationTarget?: '_blank'
+  /** Embedded answers can focus an in-page source card instead of leaving the frame. */
+  citationSourceId?: (citation: Citation) => string
   /** Application-copy translator; source text and citation titles remain verbatim. */
   ui?: ResearchUi
 }
@@ -85,10 +87,21 @@ export function renderCitationMarkers(
       : citations.find((item) => item.index === citationIndex)
     if (citation) {
       const source = sources.find((s) => s.id === citation.resourceId)
+      const sourceId = options.citationSourceId?.(citation)
       return (
         <sup key={key}>
           <Link
-            to={citationLink(slug, citation, source)}
+            to={sourceId ? `#${sourceId}` : citationLink(slug, citation, source)}
+            onClick={sourceId
+              ? (event) => {
+                if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+                const card = document.getElementById(sourceId)
+                if (!card) return
+                event.preventDefault()
+                card.focus({ preventScroll: true })
+                card.scrollIntoView({ block: 'nearest' })
+              }
+              : undefined}
             target={options.citationTarget}
             rel={options.citationTarget ? 'noopener noreferrer' : undefined}
             className='rp-focus rounded-[var(--rp-radius-chip)] px-0.5 font-semibold no-underline'
@@ -164,6 +177,7 @@ export function AnswerText({
   streaming,
   citationHint,
   citationTarget,
+  citationSourceId,
   bodyClassName,
 }: {
   text: string
@@ -174,6 +188,7 @@ export function AnswerText({
   streaming: boolean
   citationHint?: string
   citationTarget?: '_blank'
+  citationSourceId?: InlineOptions['citationSourceId']
   bodyClassName?: string
 }) {
   const { ui } = usePortalLocale()
@@ -183,6 +198,7 @@ export function AnswerText({
     streaming,
     ...(citationHint ? { citationHint } : {}),
     ...(citationTarget ? { citationTarget } : {}),
+    ...(citationSourceId ? { citationSourceId } : {}),
   }
   return (
     <AnswerMarkdown
