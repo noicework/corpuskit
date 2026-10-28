@@ -392,8 +392,8 @@ gain access through it, and a deployment without Entra refuses such an assignmen
 
 Portal updates accept the appearance fields (`name`, `organisation`, `tagline`, `colours`,
 `typography`, `shape`, `textScale`, `density`, `colourScheme`, `paletteId` and `layout`, see
-[Portal layout](#portal-layout)) and the behaviour fields `searchPlaceholder` and
-`regionalDiscovery`. A portal follows each viewer's system light or dark setting and offers a
+[Portal layout](#portal-layout)) and the behaviour fields `searchPlaceholder`,
+`regionalDiscovery` and `siteFeedback` (see [Reader feedback](#reader-feedback)). A portal follows each viewer's system light or dark setting and offers a
 toggle in the header; send `{"colourScheme": "light"}` to keep it light for every viewer, sign-in
 screen included, with no toggle, and `{"colourScheme": "viewer"}` to offer both again. Manage >
 Appearance sets the same choice. The regional discovery band on Explore is off unless
@@ -1079,7 +1079,7 @@ lifecycle records. Only the portal's own hostname is detached from the Worker; a
 left to the hosting operator that routed them. After that it revokes every
 member row and group mapping scoped to the portal, each recorded as an `assignment.delete` audit
 event, and every data key issued for it. The portal's other records (sources, enrichments, insights,
-answer feedback, suggestions, knowledge graph proposals, research sessions, investigations, watches
+answer feedback, reader feedback, suggestions, knowledge graph proposals, research sessions, investigations, watches
 and branding)
 stay stored under the retired slug, where no portal route can reach them, until they are
 [erased](#erasing-a-deleted-portal). Its audit events stay in the platform audit log until then
@@ -1095,7 +1095,7 @@ portals whenever they have no portal record. Deleting one there is undone on the
 start: the portal comes back under the same slug with its seeded configuration, and the slug
 stays retired, so `POST /api/admin/tenants` still passes over it. The seed first clears every
 record the removed portal left stored under the slug (sources, enrichments and cached questions,
-insights, answer feedback, suggestions, knowledge graph proposals, research sessions,
+insights, answer feedback, reader feedback, suggestions, knowledge graph proposals, research sessions,
 investigations, watches, branding and routing decisions), so the seeded portal starts empty. Its members, group mappings
 and data keys were already revoked when it was deleted; the revoked key records and its audit
 events stay on record. No other Worker seeds portals.
@@ -1158,6 +1158,63 @@ counts the same way, and a refused one is a tool error with the same body. A req
 answered `429 {"error":"rate_limited"}` with a `Retry-After` header, and an ask it had counted
 toward `asksPerDay` is given back.
 
+## Reader feedback
+
+A portal can let its readers send its team a message: what the message is about (general
+feedback, answer quality, a problem with the portal or an idea for improvement), the message
+itself, up to 4,000 characters, and a reply address if they want one. It is off unless the portal
+opts in, and it needs somewhere to deliver the messages. Both are needed: until then the header
+shows no control and `POST /api/t/:slug/site-feedback` answers `404 {"error":"not_found"}`, as for
+a route that does not exist.
+
+To turn it on for a portal, a portal administrator or the operator credential sends
+`PATCH /api/admin/tenants/<slug>` with `{"siteFeedback": true}`; `{"siteFeedback": false}` turns
+it off again. The setting is a behaviour field (`behaviour.write`). It is not part of the
+configuration import and export.
+
+Delivery is by email, on Cloudflare only: the local server has no email transport, so no portal
+it serves takes feedback. The Worker sends through a Cloudflare Email Service
+[`send_email` binding](CLOUDFLARE.md#reader-feedback-email) and these variables:
+
+| Variable | Meaning |
+|---|---|
+| `SITE_FEEDBACK_FROM` | The sender address. Its domain must be onboarded to Email Service sending. |
+| `SITE_FEEDBACK_TO` | The address every message goes to. |
+| `SITE_FEEDBACK_EMAIL_BINDING` | The name of the `send_email` binding to send with. `SITE_FEEDBACK_EMAIL` when unset. |
+
+Without both addresses and the binding, reader feedback is off for every portal. When some but not
+all of it is set, the Worker logs one start-up warning, without the values. The sender and
+recipient come only from these settings; a reader's address is used only as the reply-to. Each
+email names the portal, the kind of feedback, the page it was sent from (its address without the
+query string or fragment, which can hold what the reader typed), the reply address and the
+message, and carries a reference that matches the stored record.
+
+Readers send it from the header, or from the menu on a phone. The control shows only to people the
+portal lets ask questions (`portal.ask`), and the route has the same permission. It is accepted in
+read-only mode, like answer ratings. A message is accepted only as JSON from a page of the portal's
+own host (its `Origin`), so another site cannot send mail through it from a visitor's browser. A
+message that is not valid is refused with `400 {"error":"invalid_request"}`, and a body over 24 KB
+with `413`. A hidden field that only form-filling bots complete makes the route answer `202` and
+keep and send nothing.
+
+Each address may send one portal 5 messages in 10 minutes, and a portal takes 60 an hour from every
+address together. Both limits use the client address the runtime reports (see
+[Client addresses and rate limits](#client-addresses-and-rate-limits)). A request over either is
+answered `429 {"error":"rate_limited"}` with `Retry-After`. A refused or bot request gives the
+portal its turn back but not the address. These limits are fixed.
+
+Every message is kept before it is sent, so a failed delivery never loses it: the route answers
+`502 {"error":"site_feedback_failed","id":"..."}`, the record keeps `delivery: "failed"`, and the
+reader keeps their draft. A delivered message answers `201` and is recorded as `sent` with the
+provider's message id. A portal keeps its newest 500 messages for 90 days. The daily maintenance
+pass removes older ones on every portal, and they are [erased](#erasing-a-deleted-portal) with the
+portal. `GET /api/admin/t/<slug>/site-feedback?limit=50` (`content.write`, up to 100) lists them,
+newest first, whether or not the portal still takes feedback. What a reader writes never enters
+the audit log.
+
+On the Durable Object they are rows of the `site_feedback` table; on the local server,
+`DATA_DIR/site-feedback/<slug>.json`.
+
 ## Scheduled maintenance
 
 Once a day (the Worker's cron trigger, or a timer in the local server) the deployment runs one
@@ -1175,8 +1232,8 @@ unit. One failing unit never stops the others:
   source, where Manage shows it. The pass then moves on.
 - Every job still runs. Once the pass is over, the failures are raised together as one error, so
   the runtime records a failed invocation. It names each failed unit by job, portal and kind,
-  never by upstream detail, and it also counts a failure to remove expired answer feedback, which
-  the pass does before its jobs. Each job's platform-level `maintenance.run` record carries
+  never by upstream detail, and it also counts a failure to remove expired answer feedback or
+  reader feedback, which the pass does before its jobs. Each job's platform-level `maintenance.run` record carries
   `count`, the number of its units that failed.
 - The pass stops early only when the platform account that every portal shares answers 429
   (a rate limit, or indexing or ingest back-pressure, which the platform measures across all its
@@ -2006,6 +2063,7 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `sources` | The source registry | `sources:<slug>` row | `DATA_DIR/sources/<slug>.json` |
 | `insights` | The ask log, which holds the questions asked | `insights:<slug>` row | `DATA_DIR/insights/<slug>.jsonl` |
 | `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
+| `siteFeedback` | [Reader feedback](#reader-feedback): readers' messages to the portal team and any reply address they gave (at most 500, kept 90 days) | `site_feedback` rows | `DATA_DIR/site-feedback/<slug>.json` |
 | `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |
 | `enrichments` | Generated enrichments and cached suggested questions | `enrichment_records` rows, `enrichments:<slug>` row | `DATA_DIR/enrichments/<slug>.json` |
 | `kgProposals` | The last knowledge graph proposal | Entry in the `kg-proposals` row | Entry in `KG_PROPOSALS_PATH` |
@@ -2020,18 +2078,18 @@ Durable Object's SQLite database, not in R2 or another blob store, and locally i
 `BRANDING_PATH`. Stores that cache records in memory (bindings, enrichments, knowledge graph
 proposals and the local portal registry) drop them too.
 
-Answer feedback also leaves a live portal on its own: the daily maintenance pass (the one that
-applies `AUDIT_RETENTION_DAYS`) removes every rating older than 90 days, comment included, on
-every portal.
+Answer feedback and reader feedback also leave a live portal on their own: the daily maintenance
+pass (the one that applies `AUDIT_RETENTION_DAYS`) removes every rating, comment included, and
+every reader's message older than 90 days, on every portal.
 
 ```json
 200 { "ok": true, "slug": "acme",
       "erased": { "configuration": 0, "aliases": 0, "bindings": 0, "lifecycle": 0,
                   "sessions": 12, "investigations": 3, "watches": 1, "sources": 1,
-                  "insights": 1, "feedback": 3, "suggestions": 1, "enrichments": 214,
-                  "kgProposals": 1, "branding": 2, "routing": 1, "mcpKeys": 1,
-                  "assignments": 0, "auditEvents": 318 },
-      "total": 560 }
+                  "insights": 1, "feedback": 3, "siteFeedback": 2, "suggestions": 1,
+                  "enrichments": 214, "kgProposals": 1, "branding": 2, "routing": 1,
+                  "mcpKeys": 1, "assignments": 0, "auditEvents": 318 },
+      "total": 562 }
 ```
 
 `erased` always lists the kinds above, in that order. Each count is the number of stored records

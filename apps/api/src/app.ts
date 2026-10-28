@@ -325,11 +325,19 @@ import {
   type RoutingLogApi,
   SessionsStore,
   type SessionsStoreApi,
+  SiteFeedbackStore,
   SourceStore,
   type SourceStoreApi,
   WatchStore,
   type WatchStoreApi,
 } from './stores.ts'
+import {
+  siteFeedbackAvailable,
+  siteFeedbackHandler,
+  siteFeedbackHistoryHandler,
+  type SiteFeedbackNotifier,
+  type SiteFeedbackStoreApi,
+} from './site-feedback.ts'
 import { MAX_SYNC_CAP, READ_ONLY_BOX_MESSAGE, recordSyncFailure, syncSource } from './scheduler.ts'
 import {
   implementSuggestion,
@@ -856,6 +864,8 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
+  siteFeedback: z.boolean().optional(),
   /**
    * The portal's header links, footer and home page, or null to clear them. Checked against
    * `PortalLayoutSchema` only after authorisation, so a caller who may not change the portal's
@@ -867,6 +877,7 @@ const renameTenantSchema = z.object({
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
+  'siteFeedback',
 ])
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
@@ -1036,6 +1047,13 @@ export interface BuildAppOptions {
   insights?: InsightsStoreApi
   /** Readers' ratings of answers, kept for the portal's curators; the on-disk store when omitted. */
   feedback?: FeedbackStoreApi
+  /** Readers' messages to the portal team, kept as they are sent; the on-disk store when omitted. */
+  siteFeedback?: SiteFeedbackStoreApi
+  /**
+   * Where readers' messages go (the Worker's email binding). Without it no portal takes feedback,
+   * whatever its `siteFeedback` setting says.
+   */
+  siteFeedbackNotifier?: SiteFeedbackNotifier
   sessions?: SessionsStoreApi
   /** Source registry; shared with startScheduler in server.ts so a scheduled sync and a
    *  concurrent HTTP write don't clobber each other. A fresh store when omitted (tests). */
@@ -1196,6 +1214,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
   const insights = opts.insights ?? new InsightsStore()
   const feedback = opts.feedback ?? new FeedbackStore()
+  const siteFeedback = opts.siteFeedback ?? new SiteFeedbackStore()
   const routing = opts.routing ?? new RoutingLog()
   const sessions = opts.sessions ?? new SessionsStore()
   const watches = opts.watches ?? new WatchStore()
@@ -2615,7 +2634,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (safeMetadataRequests.has(c.req.raw)) return c.json(safeProjection(config))
     // Readers learn the hosting status (the SPA's read-only banner). A suspended portal
     // never gets here: its 423 carries the safe projection and status instead.
-    return c.json({ ...withBrandingUrls(config), status: lifecycle.get(config.slug).status })
+    const { siteFeedback: _optIn, ...served } = withBrandingUrls(config)
+    return c.json({
+      ...served,
+      // Readers see the opt-in only where this deployment can deliver what they send.
+      ...(siteFeedbackAvailable(config, opts.siteFeedbackNotifier) ? { siteFeedback: true } : {}),
+      status: lifecycle.get(config.slug).status,
+    })
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/branding/:kind'), (c) => {
@@ -3816,6 +3841,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
+  const siteFeedbackRoutes = {
+    portal: tenant,
+    store: siteFeedback,
+    notifier: opts.siteFeedbackNotifier,
+    clientAddress: callerAddress,
+    now: opts.now,
+  }
+  app.post(
+    declaredRoute('POST', '/api/t/:slug/site-feedback'),
+    siteFeedbackHandler(siteFeedbackRoutes),
+  )
+
   app.post(declaredRoute('POST', '/api/t/:slug/summarize'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
@@ -4773,6 +4810,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     sources,
     insights,
     feedback,
+    siteFeedback,
     suggestions,
     enrichments,
     kgProposals,
@@ -5334,12 +5372,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
       name,
       searchPlaceholder,
       regionalDiscovery,
+      siteFeedback: siteFeedbackSetting,
       layout: _layout,
       ...branding
     } = parsed.data
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+      ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
     const appearanceFields = fields.filter((field) => !TENANT_BEHAVIOUR_FIELDS.has(field))
@@ -6104,6 +6144,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
     })
   })
+
+  app.get(
+    declaredRoute('GET', '/api/admin/t/:slug/site-feedback'),
+    siteFeedbackHistoryHandler(siteFeedbackRoutes),
+  )
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), (c) => {
     const config = tenant(c.req.param('slug'))

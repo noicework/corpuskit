@@ -147,7 +147,7 @@ export function Hero({
               {ui('Ask')} {config.branding.productName}
             </label>
             <div className='relative max-w-2xl'>
-              <div className='rp-field rp-shadow-xl flex items-center gap-2 rounded-[var(--rp-radius-input)] border bg-surface p-1.5 pl-3.5'>
+              <div className='rp-field rp-hero-field rp-shadow-xl flex items-center gap-2 rounded-[var(--rp-radius-input)] border bg-surface p-1.5 pl-3.5'>
                 <Search className='shrink-0 text-ink-3' />
                 {
                   /* No placeholder: the tenant's corpus blurb is far longer than
