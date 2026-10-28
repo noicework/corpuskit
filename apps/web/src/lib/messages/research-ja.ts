@@ -1107,4 +1107,23 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   'Full screen': '全画面表示',
   'Exit full screen': '全画面表示を終了',
   'Full screen is unavailable.': '全画面表示を利用できません。',
+  // The evidence brief: an agent ask answer saved as a Word document.
+  'Evidence brief': '根拠ブリーフ',
+  'Answered by a retrieval agent across {count} collections':
+    '検索エージェントが{count}件のコレクションを横断して回答',
+  'Answered by a retrieval agent from one collection':
+    '検索エージェントが1件のコレクションから回答',
+  'Answered by a retrieval agent': '検索エージェントによる回答',
+  'Composed by {product} across {count} collections':
+    '{product}が{count}件のコレクションを横断して構成',
+  'Composed by {product} from one collection': '{product}が1件のコレクションから構成',
+  'Composed by {product}': '{product}による構成',
+  '{count} passages': '{count}件の抜粋',
+  '1 passage': '1件の抜粋',
+  'No answer within the time limit': '制限時間内に回答がありませんでした',
+  'Could not be searched': '検索できませんでした',
+  'Collections not searched': '検索できなかったコレクション',
+  'Collections': 'コレクション',
+  'Save this answer trail as a Word document with references grouped by collection':
+    'この回答の記録を、コレクションごとにまとめた参考資料付きのWord文書として保存',
 }
