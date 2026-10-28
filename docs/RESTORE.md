@@ -70,8 +70,9 @@ with this release before relying on restore.
    procedure. Periodically run the drill below and compare the retained records.
 
 With successful backups no more than 24 hours apart, the portal-record **RPO is at most 24
-hours**, measured from the last successful completed export. A missed backup extends that
-window. Stores and provider inventories are read during export rather than as a single
+hours**, measured from `manifest.startedAt` in the last successful complete bundle.
+Schedule and alert against that capture time; a missed backup extends the window. Stores and
+provider inventories are read during export rather than as a single
 cross-system snapshot; the bundle does not promise a transactionally consistent provider
 snapshot. Provider RPO must be specified separately.
 
@@ -129,19 +130,25 @@ Local fixture measurement on 29 October 2026, Deno 2.9.7, a shared development m
 
 | Runtime path | Fixture | ZIP bytes | Measured HTTP import |
 |---|---|---:|---:|
-| Deno DATA_DIR and SQLite | 100 sessions, 100 investigations, 100 answer records, 1,000 enrichments, 500 usage rows, 500 routing rows, 20 duplicate decisions, one evaluation set, configuration/lifecycle and seven audit events | 677,202 | 7.201 seconds |
-| Worker ingress and Durable Object SQLite adapter, locally doubled provider | 100 sessions, 100 investigations, 1,000 enrichments, 500 usage rows and configuration/lifecycle | 318,576 | 0.022 seconds |
+| Deno DATA_DIR and SQLite | 100 sessions, 100 investigations, 100 answer records, 1,000 enrichments, 500 usage rows, 500 routing rows, 20 duplicate decisions, one evaluation set, configuration/lifecycle and seven audit events | 677,362 | 17.206 seconds |
+| Worker ingress and Durable Object SQLite adapter, locally doubled provider | 100 sessions, 100 investigations, 1,000 enrichments, 500 usage rows and configuration/lifecycle | 318,522 | 0.035 seconds |
 
+The local sample ran alongside repository test suites, so filesystem contention is included.
 These are measured **portal-state restore operation times**, from the import request through
 its parsed response. They include validation and persistence. They are not a production
-Cloudflare latency measurement or an end-to-end outage RTO. Recovery-time planning must add
+Cloudflare latency measurement or an end-to-end outage RTO. The Worker drill uses a local
+DurableObject base-class shim and SQLite backing; it does not execute a hosted deployment.
+Recovery-time planning must add
 provisioning, provider recovery/reconnection, access setup and acceptance checks; those steps
 were not timed. Re-run the drill on the intended hosting platform and record its operational
 RTO before making an availability commitment.
 
 `e2e/portal-restore.test.ts` exports, resets and imports the realistic local fixture, compares
 records, checks operator audit identity, repeats import, and imports the same local ZIP into
-the Durable Object adapter under another slug. `apps/cloudflare/src/operator-integration.test.ts`
+the Durable Object adapter under another slug, then returns a managed bundle to local storage.
+The same e2e file also starts the actual Deno server process with loopback-only networking,
+imports a doubled-provider bundle and verifies persisted records and idempotency.
+`apps/cloudflare/src/operator-integration.test.ts`
 exercises export/restore through the real Worker ingress with a doubled retrieval provider.
 Unit tests cover malformed ZIPs and manifests, hashes, counts, permission boundaries,
 idempotency, required-audit rollback on both adapters and journal recovery after interruption.

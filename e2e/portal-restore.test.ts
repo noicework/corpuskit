@@ -205,3 +205,120 @@ Deno.test('local operator exports, resets and restores realistic portal records 
     await server.close()
   }
 })
+
+Deno.test('actual local Deno process restores a DoubleProvider bundle with loopback-only networking', async () => {
+  const { TenantStore } = await import('../apps/api/src/tenants.ts')
+  const fixture = createEnforcementFixture()
+  let bytes: Uint8Array<ArrayBuffer>
+  const owner = { kind: 'anonymous' as const, clientId: 'process-restore-reader' }
+  try {
+    fixture.stores.sessions.put('public-a', owner, {
+      id: 'process-session',
+      title: 'Recovered research trail',
+      updatedAt: new Date().toISOString(),
+      messages: [],
+    })
+    const exported = await fixture.requestAs(
+      fixture.sessionFor('platform-admin'),
+      '/api/admin/t/public-a/export',
+    )
+    expect(exported.status).toBe(200)
+    bytes = new Uint8Array(await exported.arrayBuffer())
+  } finally {
+    fixture.close()
+  }
+  const directory = await Deno.makeTempDir({ prefix: 'restore-process-' })
+  const socket = Deno.listen({ hostname: '127.0.0.1', port: 0 })
+  const port = socket.addr.port
+  socket.close()
+  const env = {
+    DATA_DIR: directory,
+    TENANTS_PATH: `${directory}/tenants.json`,
+    BINDINGS_PATH: `${directory}/bindings.json`,
+    BRANDING_PATH: `${directory}/branding`,
+    KG_PROPOSALS_PATH: `${directory}/kg.json`,
+    RBAC_PATH: `${directory}/rbac.sqlite`,
+    HOST: '127.0.0.1',
+    PORT: String(port),
+    ENVIRONMENT: 'test',
+    SHOWCASE_PORTALS: '',
+    PLATFORM_DOMAIN: 'research.example.test',
+    MAX_PORTAL_ALIASES: '0',
+    LOCAL_SCHEDULER_ENABLED: 'false',
+    ENTRA_TENANT_ID: '',
+    ENTRA_CLIENT_ID: '',
+    ENTRA_CLIENT_SECRET: '',
+    ENTRA_REDIRECT_URI: '',
+    EXTERNAL_LOGIN_ISSUER: '',
+    EXTERNAL_LOGIN_JWK: '',
+    OPERATOR_API_KEY: operatorKey,
+    OPERATOR_ID: 'restore-process',
+    ADMIN_BREAK_GLASS: 'false',
+    ADMIN_PASSCODE: '',
+    ARAG_NUA_KEY: '',
+    ARAG_ACCOUNT: '',
+  }
+  const target = new TenantStore(env).add({ name: 'Recovered research' })
+  const child = new Deno.Command(Deno.execPath(), {
+    args: [
+      'run',
+      '--cached-only',
+      '--allow-env',
+      '--allow-read',
+      '--allow-write',
+      '--allow-net=127.0.0.1',
+      new URL('../apps/api/src/server.ts', import.meta.url).pathname,
+    ],
+    env,
+    stdout: 'piped',
+    stderr: 'piped',
+  }).spawn()
+  const output = child.output()
+  let exited = false
+  void output.then(() => {
+    exited = true
+  })
+  try {
+    const origin = `http://127.0.0.1:${port}`
+    let ready = false
+    for (let i = 0; i < 150 && !exited; i++) {
+      try {
+        const health = await fetch(`${origin}/api/health`)
+        ready = health.status === 200
+        await health.body?.cancel()
+        if (ready) break
+      } catch { /* The isolated process has not started listening yet. */ }
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    expect(ready).toBe(true)
+    const imported = await fetch(
+      `${origin}/api/admin/t/${target.slug}/import?targetSlug=${target.slug}`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/zip' },
+        body: bytes,
+      },
+    )
+    expect(imported.status, await imported.clone().text()).toBe(200)
+    expect(await imported.json()).toMatchObject({
+      knowledgeBoxRestored: false,
+      counts: { configuration: 1, sessions: 1 },
+    })
+    expect(new SessionsStore(directory).get(target.slug, owner, 'process-session')!.title).toBe(
+      'Recovered research trail',
+    )
+    const repeated = await fetch(
+      `${origin}/api/admin/t/${target.slug}/import?targetSlug=${target.slug}`,
+      {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/zip' },
+        body: bytes,
+      },
+    )
+    expect(await repeated.json()).toMatchObject({ alreadyImported: true })
+  } finally {
+    if (!exited) child.kill('SIGTERM')
+    await output
+    await Deno.remove(directory, { recursive: true })
+  }
+})
