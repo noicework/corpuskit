@@ -40,6 +40,15 @@ describe('findPassageRange', () => {
     expect(range).toEqual({ start: 1, end: 3 })
   })
 
+  it('highlights the whole passage, not only the opening that found it', () => {
+    const range = findPassageRange(
+      items,
+      'The propensity for seizures to follow circadian and multiday (i.e., weekly, monthly, or ' +
+        'seasonal) rhythms has been documented for centuries',
+    )
+    expect(range).toEqual({ start: 1, end: 3 })
+  })
+
   it('falls back to a shorter needle when the passage start is cut mid-word', () => {
     const range = findPassageRange(
       items,

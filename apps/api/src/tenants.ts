@@ -243,6 +243,8 @@ export interface TenantPatch {
   relationTypes?: TenantConfig['relationTypes']
   timezone?: TenantConfig['timezone']
   copy?: TenantConfig['copy']
+  /** The accessibility statement's own sections and contact (see TenantConfigSchema). */
+  accessibility?: TenantConfig['accessibility']
   accessMode?: AccessMode
   hostname?: TenantConfig['hostname']
   topics?: TenantConfig['topics']

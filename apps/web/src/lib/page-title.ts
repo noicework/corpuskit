@@ -27,6 +27,7 @@ const SURFACES: [RegExp, string][] = [
   [/^tools(?:\/|$)/, 'Tools'],
   [/^help(?:\/|$)/, 'Help'],
   [/^how-it-works(?:\/|$)/, 'How this works'],
+  [/^accessibility(?:\/|$)/, 'Accessibility'],
   [/^taxonomy(?:\/|$)/, 'Taxonomy'],
   [/^manage(?:\/|$)/, 'Manage'],
 ]

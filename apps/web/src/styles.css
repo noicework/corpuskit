@@ -1202,7 +1202,9 @@ body {
   );
   background-size: 200% 100%;
   background-repeat: no-repeat;
-  animation: rp-shimmer 1.6s linear infinite;
+  /* Three passes end inside five seconds (WCAG 2.2.2), and the last frame leaves the highlight
+   * off the tile, so a slow image rests on the static folio mark. */
+  animation: rp-shimmer 1.6s linear 3 forwards;
 }
 
 .rp-thumb-placeholder-mark {
@@ -1330,6 +1332,28 @@ body {
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* A reader's own letter or word spacing (WCAG 1.4.12) fits fewer words into a clamped line, so
+ * while it applies the clamps let go and show the whole text. `lib/text-spacing.ts` sets the
+ * attribute from the probe below, whose pinned spacing only the reader's `!important` rules
+ * can move. */
+:root[data-text-spacing='custom'] :is(.rp-clamp-2, .rp-clamp-3, .rp-clamp-4) {
+  display: block;
+  -webkit-line-clamp: none;
+  overflow: visible;
+}
+
+.rp-spacing-probe {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+  font-size: 16px;
+  letter-spacing: 0;
+  word-spacing: 0;
 }
 
 /* ---------------------------------------------------------------------------
