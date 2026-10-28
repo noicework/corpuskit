@@ -301,11 +301,11 @@ export function AgentAnswer(
 
       {hasText
         ? (
-          <div className='rp-answer-in rp-prose mt-4 text-base text-ink sm:text-sm' data-agent-text>
+          <div className='rp-answer-in mt-4' data-agent-text>
             <AnswerMarkdown
               text={text}
               renderInline={(run, keyPrefix) => renderInline(run, renderMarker, keyPrefix)}
-              bodyClassName='rp-measure leading-relaxed'
+              bodyClassName='rp-prose rp-measure text-base text-ink-2'
             />
             {streaming
               ? (
