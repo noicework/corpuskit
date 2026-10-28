@@ -466,6 +466,9 @@ describe('independent admin route permission matrix', () => {
       url: 'https://aws-ap-southeast-2-1.rag.progress.cloud/api/v1/kb/fixture-knowledge-box',
       token: 'fixture-service-account-token',
     }],
+    ['PUT', 'federation/peers/:peerId/key', 'bindings.write', {
+      token: 'fixture-peer-service-account-token',
+    }],
   ]
   const curatorPermissions = new Set<Permission>([
     'content.write',
@@ -791,6 +794,7 @@ describe('independent admin route permission matrix', () => {
             template.replace(':slug', 'a').replace(':taskId', 'task-a').replace(':kind', 'logo')
               .replace(':name', 'banner')
               .replace(':hostname', 'research.example.org')
+              .replace(':peerId', 'fixture-peer')
               .replace(
                 ':id',
                 suffix.startsWith('answer-records')

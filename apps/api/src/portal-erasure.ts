@@ -39,7 +39,7 @@ export interface PortalErasureStores {
   duplicates: Pick<DuplicateReviewStore, 'erase'>
   evaluations?: Pick<EvaluationStore, 'erase'>
   tenants: Pick<TenantStoreApi, 'erase'>
-  bindings: Pick<BindingStoreApi, 'status' | 'remove'>
+  bindings: Pick<BindingStoreApi, 'status' | 'remove' | 'removePeers'>
   lifecycle: Pick<PortalLifecycleStore, 'erase'>
   sessions: Pick<SessionsStoreApi, 'erase'>
   investigations: Pick<InvestigationStoreApi, 'erase'>
@@ -142,6 +142,8 @@ export function erasePortal(
       stores.bindings.remove(slug)
       erased.bindings = 1
     }
+    // Federation peer keys are kept beside the binding, under the portal's slug.
+    erased.bindings += stores.bindings.removePeers(slug)
     erased.duplicates = stores.duplicates.erase(slug)
     erased.evaluations = stores.evaluations?.erase(slug) ?? 0
     erased.lifecycle = stores.lifecycle.erase(slug)

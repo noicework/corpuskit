@@ -415,3 +415,18 @@ Deno.test('estate answers count against the caller rate limit and failed bearers
     f.close()
   }
 })
+
+Deno.test('a portal that does not take part in federated answers is left out of the estate', async () => {
+  const { f } = estateFixture()
+  try {
+    const { key } = await issued(f)
+    f.stores.tenants.patch('b', { federation: { participates: false } })
+    const before = f.providerCalls.length
+    const answer = await callTool(f, key, 'answer_estate', { question: 'Abalone stock health?' })
+    const content = answer.result.structuredContent
+    expect(content.portals.map((p: { portal: string }) => p.portal)).toEqual(['a'])
+    expect(queried(f, 'ask', before)).toEqual(['a'])
+  } finally {
+    f.close()
+  }
+})

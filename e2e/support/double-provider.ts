@@ -9,6 +9,7 @@
 // a resource so the AI Answer panel's citation marker click-through works.
 // ---------------------------------------------------------------------------
 import type {
+  AgentAskEvent,
   AskEvent,
   CatalogPage,
   FacetCounts,
@@ -18,7 +19,14 @@ import type {
   SearchResults,
   TenantConfig,
 } from '@research-portal/core'
-import type { ExportResource, RetrievalProvider } from '@research-portal/retrieval'
+import {
+  AgentAskError,
+  type AgentAskOptions,
+  type ComposePassage,
+  type ExportResource,
+  type RetrievalProvider,
+} from '@research-portal/retrieval'
+import { agentScenarioFor, replayAgentAsk } from './agent-replay.ts'
 
 export const RESOURCE_ONE: ResourceSummary = {
   id: 'res-1',
@@ -53,6 +61,10 @@ export const CITED_PAGE = 3
 export class DoubleProvider implements RetrievalProvider {
   /** Protected so a journey that deletes a document can take it out of the collection. */
   protected resources: ResourceSummary[] = [RESOURCE_ONE, RESOURCE_TWO]
+  /** The pace agent asks replay their fixture at: 0 without waiting, 1 as recorded. */
+  agentReplaySpeed = 0
+  /** Agent asks still streaming: back to zero once a reader's abort has ended each one. */
+  agentAsksOpen = 0
 
   /**
    * A provider for portals whose collection is still empty. A factory, not a constructor
@@ -177,6 +189,50 @@ export class DoubleProvider implements RetrievalProvider {
 
   suggest(_tenant: TenantConfig): Promise<Question[]> {
     return Promise.resolve([{ id: 'sq-1', text: 'What is known about abalone stock health?' }])
+  }
+
+  /** A recorded agent session replayed (docs/AGENT-ASK.md): `#error`, `#slow`, `#fast` steer it. */
+  async *agentAsk(
+    _tenant: TenantConfig,
+    question: string,
+    opts: AgentAskOptions = {},
+  ): AsyncIterable<AgentAskEvent> {
+    const { scenario, fast, compose } = agentScenarioFor(question)
+    if (compose) throw new AgentAskError('not_configured', 'No agent in this replay')
+    this.agentAsksOpen++
+    try {
+      yield* replayAgentAsk(scenario, {
+        speed: fast ? 0 : this.agentReplaySpeed,
+        signal: opts.signal,
+      })
+    } finally {
+      this.agentAsksOpen--
+    }
+  }
+
+  /**
+   * A deterministic composition: the first sentence of each passage, cited, a paragraph per
+   * collection, after one opening line. Every sentence is its passage's own, so each citation
+   * passes the binding check.
+   */
+  compose(
+    _tenant: TenantConfig,
+    _question: string,
+    passages: readonly ComposePassage[],
+  ): Promise<string> {
+    const paragraphs = new Map<string, string[]>()
+    passages.forEach((passage, index) => {
+      const sentence = /^.*?[.!?](?=\s|$)/s.exec(passage.text.trim())?.[0] ?? passage.text.trim()
+      if (!sentence) return
+      const paragraph = paragraphs.get(passage.source) ?? []
+      paragraph.push(`${sentence} [${index + 1}]`)
+      paragraphs.set(passage.source, paragraph)
+    })
+    return Promise.resolve(
+      ['Here is what the collections hold on this question.', ...paragraphs.values()]
+        .map((paragraph) => typeof paragraph === 'string' ? paragraph : paragraph.join(' '))
+        .join('\n\n'),
+    )
   }
 
   async *ask(_tenant: TenantConfig, query: string): AsyncIterable<AskEvent> {

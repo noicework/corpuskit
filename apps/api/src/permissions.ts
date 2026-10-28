@@ -329,6 +329,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/ask-estate', 'portal.ask', 'portal', {
     aggregate: 'authorised-portals',
   }),
+  entry('http', 'POST', '/api/ask-agent', 'portal.ask', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
   entry('http', 'GET', '/api/t/:slug/investigations', 'portal.read', 'portal', {
     owned: 'research',
   }),
@@ -450,7 +453,13 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
         action: 'tenant.behaviour.update',
         permission: 'behaviour.write',
         scope: 'portal',
-        fields: ['searchPlaceholder', 'regionalDiscovery', 'siteFeedback'],
+        fields: [
+          'searchPlaceholder',
+          'regionalDiscovery',
+          'agentAsk',
+          'siteFeedback',
+          'federation',
+        ],
       },
     ],
   }),
@@ -561,8 +570,19 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal', {
     operator: true,
   }),
+  entry(
+    'http',
+    'PUT',
+    '/api/admin/t/:slug/federation/peers/:peerId/key',
+    'bindings.write',
+    'portal',
+    {
+      operator: true,
+    },
+  ),
   entry('http', 'POST', '/api/t/:slug/ask', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/docs/ask', 'portal.ask', 'portal'),
+  entry('http', 'POST', '/api/t/:slug/ask-agent', 'portal.ask', 'portal'),
   entry('http', 'GET', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal'),
   entry('http', 'POST', '/api/t/:slug/mcp/keys', 'keys.manage', 'portal'),
   entry('http', 'DELETE', '/api/t/:slug/mcp/keys/:id', 'keys.manage', 'portal'),

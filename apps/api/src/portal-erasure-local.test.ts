@@ -90,6 +90,9 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   },
   rateLimitEstatePerMin: { noPortalRecords: 'in-memory, per client address' },
   rateLimitMcpAuthPerMin: { noPortalRecords: 'in-memory, per client address' },
+  agentSourceTimeoutMs: { noPortalRecords: 'a time limit' },
+  agentComposeTimeoutMs: { noPortalRecords: 'a time limit' },
+  peerFetch: { noPortalRecords: 'a transport' },
   estateSourceTimeoutMs: { noPortalRecords: 'deployment configuration' },
 }
 
