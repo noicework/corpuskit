@@ -2171,6 +2171,10 @@ Nothing else about the portal is kept. Audit events of other portals, and platfo
 not target this one, are untouched. All audit records, erasure lines included, still age out under
 `AUDIT_RETENTION_DAYS` (see [RBAC](RBAC.md)).
 
+The [portal export bundle](PORTAL-EXPORT.md) creates no stored export copy. Its audit
+events and query snapshots use the existing audit inventory above; downloaded bundles are
+outside deployment erasure and must follow the recipient's retention policy.
+
 ### What erasure cannot reach
 
 - **The knowledge box.** It lives with the retrieval provider. Deletion and erasure remove the
