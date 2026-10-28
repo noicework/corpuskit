@@ -8,12 +8,22 @@ import { AgentSteps } from '../components/AgentSteps.tsx'
 import { Check, Send, X } from '../components/icons.tsx'
 import { Button, LiveStatus } from '../components/ui.tsx'
 import { useAgentAnnouncements, useAgentAsk } from '../components/useAgentAsk.ts'
-import { getSuggestedQuestions, getTenants } from '../api/client.ts'
+import { getTenants } from '../api/client.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { citationNumbers, stepTotal } from '../lib/agent-ask-state.ts'
 import { runtimeHostPortal } from '../lib/portal-url.ts'
-import { portalStarterQuestions } from '../lib/tenant-copy.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
+
+/**
+ * Seed questions for the empty page. The portal's own suggested questions are written for one
+ * collection, so a question only one collection can answer would send a reader across all of
+ * them for nothing; these span the kinds of research the collections hold between them.
+ */
+const EXAMPLE_QUESTIONS = [
+  'How is a warmer climate changing pest and disease pressure?',
+  'What triggers movement controls between growing areas?',
+  'Which management changes does the research recommend for hot seasons?',
+]
 
 /**
  * Agent ask (docs/AGENT-ASK.md): one question, answered by the portal's retrieval agent or
@@ -87,12 +97,6 @@ export function AgentAskPage() {
   })
 
   const [draft, setDraft] = useState(() => searchParams.get('q') ?? '')
-  const { data: storedSuggestions } = useQuery({
-    queryKey: ['suggested-questions', config.slug],
-    queryFn: () => getSuggestedQuestions(config.slug),
-  })
-  const suggestions = (storedSuggestions ? portalStarterQuestions(config, storedSuggestions) : [])
-    .slice(0, 3)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
   const lastRunRef = useRef<{ query: string; slugs: string[] } | null>(null)
 
@@ -262,32 +266,30 @@ export function AgentAskPage() {
                 />
               </div>
             )
-            : suggestions.length > 0
-            ? (
+            : (
               <section aria-labelledby='agent-examples-heading' className='mt-6'>
                 <h2 id='agent-examples-heading' className='rp-eyebrow text-ink-3'>
                   {ui('Try a question')}
                 </h2>
                 <ul className='mt-3 flex flex-wrap gap-2'>
-                  {suggestions.map((question) => (
-                    <li key={question.id} className='min-w-0 max-w-full'>
+                  {EXAMPLE_QUESTIONS.map((question) => (
+                    <li key={question} className='min-w-0 max-w-full'>
                       <button
                         type='button'
                         onClick={() => {
-                          setDraft(question.text)
+                          setDraft(question)
                           textareaRef.current?.focus()
                         }}
                         disabled={!canAsk}
                         className='rp-chip rp-agent-target h-auto whitespace-normal py-1.5 text-left'
                       >
-                        {question.text}
+                        {ui(question)}
                       </button>
                     </li>
                   ))}
                 </ul>
               </section>
-            )
-            : null}
+            )}
         </div>
 
         <aside

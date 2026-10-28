@@ -11,6 +11,12 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
   'Each organisation decides whether its portal takes part, so a portal selected here may be left out. The collections searched show which took part.':
     '参加するかどうかは各組織が決めるため、ここで選んだポータルが含まれないことがあります。検索した研究コレクションに、参加したポータルが示されます。',
   'Try a question': '質問を試す',
+  'How is a warmer climate changing pest and disease pressure?':
+    '温暖化は病害虫の圧力をどう変えていますか？',
+  'What triggers movement controls between growing areas?':
+    '生産地域間の移動規制は何をきっかけに発動されますか？',
+  'Which management changes does the research recommend for hot seasons?':
+    '暑い季節に向けて、研究はどのような管理の変更を推奨していますか？',
   'Steps and collections searched': 'ステップと検索したコレクション',
   'No answer arrived within five minutes, so the page stopped waiting. The steps and passages found so far are kept. Try again, or ask a narrower question.':
     '5分以内に回答が届かなかったため、待機を終了しました。これまでのステップと本文はそのまま残ります。もう一度試すか、質問を絞ってください。',
