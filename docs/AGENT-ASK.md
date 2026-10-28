@@ -35,6 +35,79 @@ While it is off, or when the retrieval provider can neither run an agent nor com
 answer `404 {"error":"not_found"}`. `AragProvider` has no agent yet (`AragProvider.agentAsk` is
 a TODO that reports `not_configured`), so today every opted-in portal composes.
 
+## Federation peers
+
+A portal's composed answers can also search **federation peers**: partners' Progress Agentic RAG
+knowledge boxes, reached with the partner's read-only service-account key. Peers are what lets a
+single portal host, which serves only its own routes, compose one answer across its own
+collection and its partners'. The host's model writes the answer, once.
+
+| Kind | How it is searched | Shown as |
+| --- | --- | --- |
+| `arag-kb` | The box's retrieval, `POST https://<zone>.dp.progress.cloud/api/v1/kb/<kbId>/find`. Retrieval only, never a generative call | `kind: "peer"`, `transport: "kb"` |
+| `arag-mcp` | The box's MCP server, `https://<zone>.dp.progress.cloud/api/v1/kb/<kbId>/mcp` over Streamable HTTP: `initialize`, `notifications/initialized`, then `tools/call search_documents {query}`. JSON or SSE answers, the session id echoed | `kind: "peer"`, `transport: "mcp"` |
+
+A `corpuskit-mcp` kind (another CorpusKit portal's MCP `search_corpus`) is not built yet.
+
+Set the peers on the host (behaviour settings, merged over what is there):
+
+```
+PATCH /api/admin/tenants/:slug
+{"federation": {"peers": [
+  {"id": "partner-a", "label": "Partner A research", "kind": "arag-kb",  "zone": "<zone>", "kbId": "<box id>"},
+  {"id": "partner-b", "label": "Partner B research", "kind": "arag-mcp", "zone": "<zone>", "kbId": "<box id>", "linkOrigins": false}
+]}}
+```
+
+Then store each peer's key (operator or `bindings.write`; the peer must already be configured):
+
+```
+PUT /api/admin/t/:slug/federation/peers/:peerId/key
+{"token": "<the box's read-only service-account key>"}
+-> {"ok": true}
+```
+
+- The key is sealed with `BINDING_KEY` in the binding store, beside the portal's own binding, and
+  is never returned: not by this route, not in the portal's configuration, not to the browser.
+  Readers' configuration shows each peer's `id`, `label` and `kind` only. Storing a key calls
+  nothing. Putting a key again replaces it; erasing the portal removes its peers' keys.
+- **Allowlist.** A peer key may only call `/find` (`arag-kb`) and `/mcp` (`arag-mcp`). The MCP
+  session may only use `initialize`, `notifications/initialized` and `tools/call` for
+  `search_documents`, `get_document` and `batch_get_documents`. Anything else is refused before it
+  is sent. Never a configuration or settings route, never a write.
+- **Address guard.** The address is built from `zone` (one DNS label) and `kbId` alone, as
+  `https://<zone>.dp.progress.cloud/...`, so no setting can point a call at another host, a
+  private address or plain http. Redirects are refused, not followed.
+- Each peer gets the same 20 s limit as any source, and counts as one more ask against the host's
+  rate limits. A peer that fails, times out or refuses its key (`reason: "unauthorised"`, also
+  when no key is stored) is named in `sources-failed`; the answer comes from the rest.
+- Every peer call is audited on the host as `federation.peer.call`, with the peer's id, kind,
+  duration and, when it failed, why. Never the key.
+- **Citations.** `linkOrigins` (default false): off, a partner citation shows its title, label and
+  passage with no link, so a public portal does not name the partner's site. On, it links the
+  passage's origin URL when the box has one (`arag-kb` only; the MCP results carry none).
+
+## Participation
+
+Every portal takes part in federated answers unless it opts out:
+
+```
+PATCH /api/admin/tenants/:slug   {"federation": {"participates": false}}
+```
+
+A portal that does not take part is left out of other portals' composed answers
+(`POST /api/ask-agent`) and of federated asks (`POST /api/ask-estate`) before anything is asked
+or counted, is checked again as each answer is assembled (a portal that leaves mid-answer
+contributes nothing), and does not federate to its own peers. Its own one-portal agent ask is
+unaffected. The change is audited as `tenant.behaviour.update` with `participates` and
+`previousParticipates`; the event records who and when.
+
+**One policy rule.** A resource labelled `federation/exclude` (labelset `federation`, label
+`exclude`) never leaves its portal in a federated answer: it is dropped from another portal's
+composed answer and from any peer's results. It still answers in its own portal. The rule
+applies to composed answers; the federated ask's per-portal answers honour portal participation
+only.
+
 ## The requests
 
 One portal:
@@ -57,7 +130,8 @@ POST /api/ask-agent
   federated ask does; an anonymous caller has none and is refused. Selected portals that do not
   offer agent ask are left out; if none is left, the answer is 404.
 - The first portal is the host: its agent answers if it has one, and otherwise its generation
-  path composes the answer from every selected portal's passages.
+  path composes the answer from every selected portal's passages and its own federation peers'.
+  The one-portal route composes over the portal and its peers.
 - Like the federated ask, the cross-portal route is not served on a portal's own hostname, which
   only reaches that portal's routes. On a portal host, use the one-portal route.
 - The answer is a server-sent event stream, one JSON event per `data:` frame. The one-portal
@@ -95,10 +169,10 @@ gives up, and `estate-done` never arrives.
 
 | Event | Fields | When |
 | --- | --- | --- |
-| `agent-start` | `mode, sources: [{id, label, portal?}]` | First, at once: who answers (`agent` or `orchestrated`) and the sources it can search (may be empty) |
+| `agent-start` | `mode, sources: [{id, label, portal?, kind?, transport?}]` | First, at once: who answers (`agent` or `orchestrated`) and the sources it can search (may be empty) |
 | `agent-step` | `id, module, title, status, elapsedMs?, reason?` | A step opening (`started`) or closing (`completed` or `failed`, with `elapsedMs`) |
 | `agent-sources` | `stepId, source, question?, chunks: [{id, title, text, url?, resourceId?}]` | What one source returned for a step |
-| `sources-failed` | `sources: [{id, label, portal?, reason: timeout \| error}]` | Composing only: the sources that could not be searched, once, before the answer |
+| `sources-failed` | `sources: [{id, label, portal?, kind?, transport?, reason: timeout \| unauthorised \| error}]` | Composing only: the sources that could not be searched, once, before the answer |
 | `reasoning` | `text, last` | The agent thinking aloud; `last` closes a run of reasoning |
 | `delta` | `text` | The next piece of the answer |
 | `citation` | `marker, sourceId, chunkId, title, url?` | What `[marker]` in the answer cites |
@@ -108,9 +182,11 @@ gives up, and `estate-done` never arrives.
 Guarantees a view can rely on:
 
 - `agent-start` comes first and arrives before anything is searched, so there is always
-  something to show. When the portal composes, each source is a portal: `id` and `portal` are its
-  slug and `label` its name, and a chunk's `resourceId` is the portal resource it comes from
-  (`/t/<portal>/library/<resourceId>`).
+  something to show. When the portal composes, every source has a `kind`: `hosted` is a portal
+  of this deployment (`id` and `portal` its slug, `label` its name, a chunk's `resourceId` the
+  resource it comes from, `/t/<portal>/library/<resourceId>`); `peer` is a federated partner
+  (`id` is `peer:<peer id>`, `transport` is `kb` or `mcp`, no `portal`, no `resourceId`, and a
+  `url` only when the peer allows links). Say "federated partner" for a peer.
 - Every step id is `started` once, then closed at most once. A step still open at the end is
   closed by the `done` (as `completed`) or the `error` (as `failed`). Steps can run in parallel.
 - `agent-sources.stepId` names the lookup step that found the passages, already started. A step
@@ -174,7 +250,9 @@ deno task dev:stub --port=8795     # first port to try (8791 by default)
 It builds `apps/web/dist`, boots the real app with the E2E `DoubleProvider`, and opts three
 portals in: `marine` (the host, fisheries passages), `grains` (grains passages) and
 `rural-industries-research` (rural passages), each searching its own slice of the fixture
-corpus. It prints its address and two ready-made requests. Ask with tags in the question:
+corpus. The host, `marine`, also has two synthetic federation peers, one `arag-kb` and one
+`arag-mcp`, answered in process by `e2e/support/arag-peer-double.ts` (no network). It prints its
+address and two ready-made requests. Ask with tags in the question:
 
 | Tag | Effect |
 | --- | --- |
@@ -184,6 +262,8 @@ corpus. It prints its address and two ready-made requests. Ask with tags in the 
 | `#compose` | No agent: the portal composes across the portals (about 10 s at the recorded pace) |
 | `#source-timeout` | With `#compose`: the second portal runs past its time limit (12 s at speed 1) |
 | `#source-error` | With `#compose`: the second portal fails |
+| `#peer-timeout` | With `#compose`: the host's search peer runs past its time limit |
+| `#peer-unauthorised` | With `#compose`: the host's MCP peer refuses its key |
 | `#fast` | Replays without waiting |
 
 ```

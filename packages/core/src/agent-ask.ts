@@ -21,6 +21,13 @@ export const AgentSourceSchema = z.object({
   label: z.string().min(1),
   /** The portal's slug, when the source is a portal of this deployment (links go there). */
   portal: z.string().min(1).optional(),
+  /**
+   * When the portal composes: `hosted`, a portal of this deployment; `peer`, a federated
+   * partner's collection the host searches on the reader's behalf.
+   */
+  kind: z.enum(['hosted', 'peer']).optional(),
+  /** How a peer is reached: its knowledge box's search (`kb`) or its MCP server (`mcp`). */
+  transport: z.enum(['kb', 'mcp']).optional(),
 })
 
 /** A passage a source returned for one of the agent's lookups. */
@@ -90,7 +97,8 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
    */
   z.object({
     type: z.literal('sources-failed'),
-    sources: AgentSourceSchema.extend({ reason: z.enum(['timeout', 'error']) }).array().min(1),
+    sources: AgentSourceSchema.extend({ reason: z.enum(['timeout', 'unauthorised', 'error']) })
+      .array().min(1),
   }),
   /** The agent thinking aloud. `last` closes the current run of reasoning. */
   z.object({ type: z.literal('reasoning'), text: z.string(), last: z.boolean() }),
@@ -127,6 +135,57 @@ export const AgentAskRequestSchema = z.object({
     .optional(),
 }).strict()
 
+// ---------------------------------------------------------------------------
+// Federation: the partner collections a portal's composed answers also search,
+// and whether the portal itself takes part in federated answers.
+// ---------------------------------------------------------------------------
+
+/** A Progress Agentic RAG zone: a host label under `.dp.progress.cloud`, nothing else. */
+export const FEDERATION_ZONE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+export const FEDERATION_PEER_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
+/** A resource carrying this label (labelset `federation`) never leaves its portal in a federated answer. */
+export const FEDERATION_EXCLUDE_LABEL = { labelset: 'federation', label: 'exclude' } as const
+
+/**
+ * A partner collection: a knowledge box searched with its read-only service-account key, which
+ * is stored sealed on the server and never part of this record. `arag-kb` searches the box's
+ * own retrieval (`/find`); `arag-mcp` calls its MCP server's `search_documents` tool.
+ */
+export const FederationPeerSchema = z.object({
+  id: z.string().regex(FEDERATION_PEER_ID),
+  label: z.string().trim().min(1).max(80),
+  kind: z.enum(['arag-kb', 'arag-mcp']),
+  zone: z.string().regex(FEDERATION_ZONE),
+  kbId: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
+  /** Whether citations link to the passage's origin URL. Off: title, label and passage only. */
+  linkOrigins: z.boolean().optional(),
+}).strict()
+
+/** The federation settings as `PATCH /api/admin/tenants/:slug` takes them. */
+export const FederationSettingsSchema = z.object({
+  /** Whether the portal takes part in federated answers. Absent means it does. */
+  participates: z.boolean().optional(),
+  peers: FederationPeerSchema.array().max(6).refine(
+    (peers) => new Set(peers.map((peer) => peer.id)).size === peers.length,
+    { message: 'Peer ids must be unique' },
+  ).optional(),
+}).strict()
+
+/**
+ * The federation settings as a portal's configuration carries them. Readers get each peer's
+ * id, label and kind only, so a peer's zone and box are optional here.
+ */
+export const FederationConfigSchema = z.object({
+  participates: z.boolean().optional(),
+  peers: FederationPeerSchema.partial({ zone: true, kbId: true, linkOrigins: true }).array()
+    .optional(),
+})
+
+/** Whether the portal takes part in federated answers: unless it opts out. */
+export function participatesInFederation(config: { federation?: { participates?: boolean } }) {
+  return config.federation?.participates !== false
+}
+
 /** Whether a portal offers agent ask: only when it opts in. */
 export function offersAgentAsk(config: { agentAsk?: boolean }): boolean {
   return config.agentAsk === true
@@ -139,3 +198,5 @@ export type AgentStepStatus = z.infer<typeof AgentStepStatusSchema>
 export type AgentAskErrorCode = z.infer<typeof AgentAskErrorCodeSchema>
 export type AgentAskEvent = z.infer<typeof AgentAskEventSchema>
 export type AgentAskRequest = z.infer<typeof AgentAskRequestSchema>
+export type FederationPeer = z.infer<typeof FederationPeerSchema>
+export type FederationSettings = z.infer<typeof FederationSettingsSchema>

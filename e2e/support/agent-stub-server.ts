@@ -11,7 +11,9 @@
 //   deno task dev:stub --port=8795     first port to try (8791 by default)
 // ---------------------------------------------------------------------------
 import type { ResourceSummary, SearchResults, TenantConfig } from '@research-portal/core'
+import { peerKeyName } from '../../apps/api/src/bindings.ts'
 import { agentFixturePassages, agentScenarioFor, pause } from './agent-replay.ts'
+import { aragPeerFetch, type PeerBox } from './arag-peer-double.ts'
 import { DoubleProvider } from './double-provider.ts'
 import { startTestServer, type TestServer } from './test-server.ts'
 
@@ -77,6 +79,82 @@ export class AgentStubProvider extends DoubleProvider {
   }
 }
 
+/**
+ * The host's two federation peers: synthetic partner boxes, one searched through its retrieval
+ * and one over MCP, served in process (`aragPeerFetch`), never over the network.
+ */
+export const AGENT_STUB_PEERS = [
+  {
+    id: 'soil-partner',
+    label: 'Soil partner collection',
+    kind: 'arag-kb',
+    zone: 'stub',
+    kbId: 'stub-box-soil',
+  },
+  {
+    id: 'water-partner',
+    label: 'Water partner collection',
+    kind: 'arag-mcp',
+    zone: 'stub',
+    kbId: 'stub-box-water',
+  },
+] as const
+const STUB_PEER_BOXES: PeerBox[] = [
+  {
+    zone: 'stub',
+    kbId: 'stub-box-soil',
+    key: 'stub-peer-key-soil-not-a-real-key',
+    documents: [
+      {
+        resourceId: 'soil-01',
+        title: 'Soil moisture after warm winters',
+        text: 'Warm, dry winters left less soil moisture at sowing, so crops relied more on ' +
+          'spring rain.',
+        originUrl: 'https://partner.example.org/soil/soil-01.pdf',
+      },
+      {
+        resourceId: 'soil-02',
+        title: 'Cover crops and soil temperature',
+        text:
+          'Cover crops kept the soil surface cooler through heatwaves and reduced moisture loss.',
+      },
+    ],
+  },
+  {
+    zone: 'stub',
+    kbId: 'stub-box-water',
+    key: 'stub-peer-key-water-not-a-real-key',
+    documents: [
+      {
+        resourceId: 'water-01',
+        title: 'Irrigation scheduling in hot seasons',
+        text: 'Scheduling irrigation by soil moisture rather than calendar saved water in hot ' +
+          'seasons.',
+      },
+    ],
+  },
+]
+
+/**
+ * The stand-in partners, with two tags that fail one on request: `#peer-timeout` holds the
+ * search peer's answer until its time limit, and `#peer-unauthorised` refuses the MCP peer's key.
+ */
+function stubPeerFetch(): typeof fetch {
+  const boxes = aragPeerFetch(STUB_PEER_BOXES)
+  return (async (input: string | URL | Request, init: RequestInit = {}) => {
+    const body = typeof init.body === 'string' ? init.body : ''
+    if (body.includes('#peer-timeout') && String(input).endsWith('/find')) {
+      await new Promise((_, reject) =>
+        init.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true })
+      )
+    }
+    if (body.includes('#peer-unauthorised') && String(input).endsWith('/mcp')) {
+      return Response.json({ detail: 'Invalid service account' }, { status: 401 })
+    }
+    return boxes(input, init)
+  }) as typeof fetch
+}
+
 export interface AgentStubServer extends TestServer {
   provider: AgentStubProvider
   /** The opted-in portals, the host first. */
@@ -84,15 +162,16 @@ export interface AgentStubServer extends TestServer {
 }
 
 /** Start the stub: `speed` paces the replay (1 as recorded, 0 without waiting). */
-export function startAgentStub(
+export async function startAgentStub(
   options: { speed?: number; apiOnly?: boolean } = {},
-): AgentStubServer {
+): Promise<AgentStubServer> {
   const speed = options.speed ?? 1
   const provider = new AgentStubProvider()
   provider.agentReplaySpeed = speed
   const server = startTestServer({
     provider,
     apiOnly: options.apiOnly,
+    peerFetch: stubPeerFetch(),
     // Long enough for every stub search at the chosen pace, short enough to watch one time out.
     agentSourceTimeoutMs: speed > 0 ? Math.round(12_000 / speed) : 500,
   })
@@ -104,6 +183,18 @@ export function startAgentStub(
       { slug: rural.slug, driver: 'drv-rural', searchMs: 3200 },
     ]
     for (const portal of provider.portals) server.tenants.patch(portal.slug, { agentAsk: true })
+    server.tenants.patch(AGENT_STUB_PORTAL, {
+      federation: { peers: AGENT_STUB_PEERS.map((peer) => ({ ...peer })) },
+    })
+    await Promise.all(
+      STUB_PEER_BOXES.map((box, index) =>
+        server.bindings.set(peerKeyName(AGENT_STUB_PORTAL, AGENT_STUB_PEERS[index]!.id), {
+          baseUrl: `https://${box.zone}.dp.progress.cloud/api/v1/kb/${box.kbId}`,
+          token: box.key,
+          kbId: box.kbId,
+        })
+      ),
+    )
   } catch (error) {
     void server.close()
     throw error
@@ -121,7 +212,7 @@ if (import.meta.main) {
   if (port) Deno.env.set('DS_PORT_BASE', port)
   const speed = Number(flag('speed') ?? Deno.env.get('AGENT_STUB_SPEED') ?? 1)
   if (!Number.isFinite(speed) || speed < 0) throw new Error('--speed must be 0 or more')
-  const server = startAgentStub({ speed })
+  const server = await startAgentStub({ speed })
   const slugs = server.portals.map((portal) => portal.slug)
   const post = (path: string, body: unknown) =>
     `curl -N -X POST ${server.url}${path} -H 'content-type: application/json' -d '${
@@ -140,6 +231,10 @@ if (import.meta.main) {
   console.log(
     '            #source-timeout, #source-error (one collection fails); #fast (no waiting)',
   )
+  console.log(
+    `  peers     ${AGENT_STUB_PEERS.map((p) => `${p.label} (${p.kind})`).join(', ')} on the host;`,
+  )
+  console.log('            #peer-timeout, #peer-unauthorised fail one (with #compose)')
   const shutdown = () => {
     server.close().finally(() => Deno.exit(0))
   }

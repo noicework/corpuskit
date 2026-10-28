@@ -86,6 +86,7 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   rateLimitMcpAuthPerMin: { noPortalRecords: 'in-memory, per client address' },
   agentSourceTimeoutMs: { noPortalRecords: 'a time limit' },
   agentComposeTimeoutMs: { noPortalRecords: 'a time limit' },
+  peerFetch: { noPortalRecords: 'a transport' },
 }
 
 const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {

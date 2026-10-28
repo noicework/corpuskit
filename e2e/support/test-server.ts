@@ -90,6 +90,8 @@ export function startTestServer(options: {
   provider?: DoubleProvider
   /** How long one collection's search may take in a composed agent ask. */
   agentSourceTimeoutMs?: number
+  /** The fetch federation peers are called with (a stand-in for partners' boxes). */
+  peerFetch?: typeof fetch
   /** Where readers' feedback goes; without it no portal takes feedback. */
   siteFeedbackNotifier?: BuildAppOptions['siteFeedbackNotifier']
 } = {}): TestServer {
@@ -279,6 +281,7 @@ export function startTestServer(options: {
       rateLimitAnonPortalAskPerMin: 0,
       rateLimitAnonAddressAskPerMin: 0,
       rateLimitEstatePerMin: 0,
+      ...(options.peerFetch ? { peerFetch: options.peerFetch } : {}),
       ...(options.agentSourceTimeoutMs
         ? { agentSourceTimeoutMs: options.agentSourceTimeoutMs }
         : {}),

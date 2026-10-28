@@ -274,6 +274,14 @@ const fields = {
   erasedMcpKeys: count,
   erasedAssignments: count,
   erasedAuditEvents: count,
+  peerId: (value: unknown): value is string =>
+    typeof value === 'string' && /^[a-z0-9][a-z0-9-]{0,39}$/.test(value),
+  peerKind: member(['arag-kb', 'arag-mcp']),
+  durationMs: count,
+  peerFailure: member(['timeout', 'unauthorised', 'error']),
+  // Whether the portal takes part in federated answers, after and before the change.
+  participates: flag,
+  previousParticipates: flag,
 } satisfies Record<string, Validator>
 type Field = keyof typeof fields
 const actionFields = {
@@ -381,6 +389,8 @@ const actionFields = {
     'changedFields',
     'sessionOid',
     'sessionTenantId',
+    'participates',
+    'previousParticipates',
   ],
   'tenant.access.update': [
     'previousAccessMode',
@@ -426,6 +436,8 @@ const actionFields = {
   'maintenance.watch.run': ['code', 'permission'],
   'maintenance.enrichment.run': ['code', 'permission'],
   'maintenance.questions.run': ['code', 'permission'],
+  // A composed answer's call to a federated peer: which peer, how long, and why it failed.
+  'federation.peer.call': ['peerId', 'peerKind', 'durationMs', 'peerFailure'],
 } as const satisfies Record<string, readonly Field[]>
 export type AuditAction = keyof typeof actionFields
 /**

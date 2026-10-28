@@ -408,7 +408,13 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
         action: 'tenant.behaviour.update',
         permission: 'behaviour.write',
         scope: 'portal',
-        fields: ['searchPlaceholder', 'regionalDiscovery', 'agentAsk', 'siteFeedback'],
+        fields: [
+          'searchPlaceholder',
+          'regionalDiscovery',
+          'agentAsk',
+          'siteFeedback',
+          'federation',
+        ],
       },
     ],
   }),
@@ -515,6 +521,16 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'POST', '/api/admin/t/:slug/knowledge-box', 'bindings.write', 'portal', {
     operator: true,
   }),
+  entry(
+    'http',
+    'PUT',
+    '/api/admin/t/:slug/federation/peers/:peerId/key',
+    'bindings.write',
+    'portal',
+    {
+      operator: true,
+    },
+  ),
   entry('http', 'POST', '/api/t/:slug/ask', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/docs/ask', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/ask-agent', 'portal.ask', 'portal'),
