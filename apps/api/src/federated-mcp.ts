@@ -108,6 +108,11 @@ export function federatedMcpTools(
     audit: AuditStore
     auditContext: PortalRequestContext
     admit: (searches: number) => void
+    /**
+     * Composes the answer. The server passes the portal's answer policy wrapped round its answer
+     * record, as the HTTP agent ask does; without it the answer is composed directly.
+     */
+    answer?: (options: AgentAnswerOptions) => AsyncIterable<AgentAskEvent>
   },
 ): FederatedMcpTools {
   const { host, provider } = options
@@ -145,7 +150,7 @@ export function federatedMcpTools(
     admit: () => options.admit(1 + peers.length),
     ask: (question, signal) =>
       run('ask_federated', () =>
-        collectFederatedAnswer(agentAnswer({
+        collectFederatedAnswer((options.answer ?? agentAnswer)({
           ...options,
           peers,
           portals: [host],

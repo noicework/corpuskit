@@ -1,5 +1,9 @@
 import { expect } from '@std/expect'
-import type { AgentAskEvent, SearchResults } from '@research-portal/core'
+import {
+  type AgentAskEvent,
+  AnswerGuardrailsSchema,
+  type SearchResults,
+} from '@research-portal/core'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 import { assertToolInventory, DECLARATIONS } from './permissions.ts'
 import { collectFederatedAnswer } from './federated-mcp.ts'
@@ -331,6 +335,72 @@ Deno.test('federated MCP retrieval bounds host search and reports every failed s
     expect(options.passagesOnly).toBe(true)
     expect(options.signal.aborted).toBe(true)
     expect(f.stores.lifecycle.usage('a', 'UTC', f.now()).asksToday).toBe(0)
+  } finally {
+    f.close()
+  }
+})
+
+/** One portal with a peer whose passage the composed answer quotes, and a key to call its tools. */
+async function federatedFixture() {
+  const peerFetch = aragPeerFetch([{
+    zone: 'fixture-zone',
+    kbId: 'fixture-box',
+    key: 'synthetic-peer-key',
+    documents: [{
+      resourceId: 'peer-document',
+      title: 'Soil water',
+      text: 'Soil cover holds water in dry seasons.',
+    }],
+  }])
+  const f = createEnforcementFixture({ peerFetch })
+  await f.stores.bindings.initialize()
+  await f.stores.bindings.set(peerKeyName('a', 'fixture-peer'), {
+    baseUrl: 'https://fixture-zone.dp.progress.cloud/api/v1/kb/fixture-box',
+    kbId: 'fixture-box',
+    token: 'synthetic-peer-key',
+  })
+  const minted = await f.requestAs(f.sessionFor('portal-admin'), '/api/t/a/mcp/keys', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ label: 'Research agent', role: 'viewer' }),
+  })
+  const { key } = await minted.json()
+  const ask = async (question: string) => {
+    const response = await f.requestAs(
+      null,
+      '/api/t/a/mcp',
+      tool('ask_federated', { question }, key),
+    )
+    expect(response.status).toBe(200)
+    return (await response.json()).result
+  }
+  return { f, ask }
+}
+
+Deno.test('ask_federated withholds an answer that uses a blocked term of the portal policy', async () => {
+  const { f, ask } = await federatedFixture()
+  try {
+    f.stores.tenants.patch('a', {
+      prompts: { guardrails: AnswerGuardrailsSchema.parse({ blockedTerms: ['soil cover'] }) },
+    })
+    const answer = await ask('Soil water #compose')
+    expect(JSON.stringify(answer)).not.toContain('Soil cover holds water')
+    expect(answer.structuredContent.answer).toContain('withheld')
+    expect(answer.structuredContent.citations).toEqual([])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('ask_federated saves an answer record on the host portal', async () => {
+  const { f, ask } = await federatedFixture()
+  try {
+    expect(f.stores.answerRecords.list('a')).toHaveLength(0)
+    const answer = await ask('Soil water #compose')
+    expect(answer.structuredContent.answer).toContain('Soil cover holds water')
+    const records = f.stores.answerRecords.list('a')
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ surface: 'composed', question: 'Soil water #compose' })
   } finally {
     f.close()
   }

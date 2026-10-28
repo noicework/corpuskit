@@ -2515,6 +2515,19 @@ export function buildApp(opts: BuildAppOptions): Hono {
         provider,
         host,
         peers: peerSources(c, host),
+        // The same answer policy and answer record as the HTTP agent ask.
+        answer: (options) =>
+          guardAgentAnswer(
+            answerPolicy(host, options.question, undefined, true),
+            options.question,
+            () =>
+              recordAgentAnswer({
+                ...options,
+                store: answerRecords,
+                buildId: opts.buildSha,
+                now: opts.now,
+              }),
+          ),
         sourceTimeoutMs: opts.agentSourceTimeoutMs,
         composeTimeoutMs: opts.agentComposeTimeoutMs,
         audit: requiredAudit(),
