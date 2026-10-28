@@ -36,8 +36,8 @@ export function phaseGroups(
 
 /**
  * The step timeline: every step the agent has opened, in arrival order, with the time it took
- * (or has taken so far), and the agent's reason where it gave one. A step still running
- * counts up each second; a failed one is marked as such. Steps are never invented: a step the
+ * (or has taken so far). A step still running counts up each second; a failed one is marked as
+ * such and carries the reason it failed. The agent's notes on steps that succeeded stay out. Steps are never invented: a step the
  * agent never reports never appears.
  */
 export function AgentSteps(
@@ -159,7 +159,7 @@ export function AgentSteps(
                             : durationLabel(elapsed, units)}
                         </span>
                       </div>
-                      {step.reason
+                      {step.reason && step.status === 'failed'
                         ? (
                           <p className='mt-0.5 text-xs leading-relaxed text-ink-2'>
                             {step.reason}
