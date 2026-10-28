@@ -147,6 +147,12 @@ const CATALOG_MAX_PAGES = 40
 /** A catalogue page that has not answered in this long is given up on, ending the walk there. */
 const CATALOG_PAGE_TIMEOUT_MS = 10_000
 /**
+ * Reading back when documents were added, for a usage report: at most 50 pages (10,000 documents
+ * added since the period began), and no new page once this long has passed.
+ */
+const ADDED_MAX_PAGES = 50
+const ADDED_READ_BUDGET_MS = 20_000
+/**
  * The longest a reader's request (search, Ask, typeahead, the Library) waits on a catalogue walk.
  * After it the request goes on with the cached listing, or what the walk has read so far, and the
  * walk carries on for the requests after it.
@@ -174,6 +180,15 @@ class CatalogueTimeoutError extends Error {
     super('The knowledge box took too long to list its catalogue')
     this.name = 'CatalogueTimeoutError'
   }
+}
+
+/**
+ * A platform timestamp in epoch milliseconds. The platform keeps time in UTC, so a date and time
+ * without a zone is read as UTC, not in the server's own timezone.
+ */
+export function platformTime(value: string | undefined): number {
+  if (!value) return NaN
+  return Date.parse(/T[^Z+-]*$/i.test(value) ? `${value}Z` : value)
 }
 
 /** Run a read that is given up on, and aborted, after `ms`, whether or not it honours the abort. */
@@ -1712,6 +1727,62 @@ export class AragProvider implements RetrievalProvider {
         hidden: (r as { hidden?: boolean }).hidden ?? false,
       }
     })
+  }
+
+  /**
+   * When each library document the box still holds was added, for those added from `from` up to
+   * `to` (ISO times). Drafts, in-app documentation and failed imports are left out, as the library
+   * leaves them out. The catalogue is read newest first until it passes `from`. A read that stops
+   * short of `from`, at a failed page or the page or time budget, gives `readBackTo`, the earliest
+   * addition it reached: documents added before then are not listed. A failed first page throws.
+   */
+  async addedBetween(
+    tenant: TenantConfig,
+    from: string,
+    to: string,
+  ): Promise<{ created: string[]; readBackTo: string | null }> {
+    const start = Date.parse(from)
+    const end = Date.parse(to)
+    const client = this.client(tenant)
+    const began = Date.now()
+    const created: string[] = []
+    let oldest: number | undefined
+    const stopped = () => ({
+      created,
+      readBackTo: new Date(oldest === undefined ? end : Math.max(oldest, start)).toISOString(),
+    })
+    for (let page = 0; page < ADDED_MAX_PAGES; page++) {
+      if (page > 0 && Date.now() - began > ADDED_READ_BUDGET_MS) return stopped()
+      let batch: (RawResource & { hidden?: boolean })[]
+      try {
+        const catalog = await within(
+          CATALOG_PAGE_TIMEOUT_MS,
+          (signal) =>
+            client.getJson<{ resources?: Record<string, RawResource & { hidden?: boolean }> }>(
+              `/catalog?page_number=${page}&page_size=${CATALOG_PAGE_SIZE}&show=basic&show=origin&sort_field=created&sort_order=desc&hidden=false`,
+              { signal },
+            ),
+        )
+        batch = Object.values(catalog.resources ?? {})
+      } catch (error) {
+        if (page === 0) throw error
+        return stopped()
+      }
+      let passed = false
+      for (const raw of batch) {
+        const at = platformTime(raw.created)
+        if (!Number.isFinite(at)) continue
+        oldest = Math.min(oldest ?? at, at)
+        if (at < start) passed = true
+        else if (
+          at < end && raw.hidden !== true && isDisplayableResource(raw) &&
+          !isDocumentationResource(raw)
+        ) created.push(new Date(at).toISOString())
+      }
+      // Newest first: once one page reaches past `from`, every later page is older still.
+      if (passed || batch.length < CATALOG_PAGE_SIZE) return { created, readBackTo: null }
+    }
+    return stopped()
   }
 
   async uploadFile(

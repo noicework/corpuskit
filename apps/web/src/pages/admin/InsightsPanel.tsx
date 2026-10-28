@@ -6,7 +6,7 @@ import { useAccess } from '../../components/AccessProvider.tsx'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import type { AnswerFeedbackSummary, AskInsightRow } from '../../api/client.ts'
+import type { AnswerFeedbackSummary, AskInsightRow, InsightsSummary } from '../../api/client.ts'
 import { getInsights } from '../../api/client.ts'
 import { usePermissionAdminAccess } from '../../components/EmergencyAccess.tsx'
 import { AdminAccessError } from '../../api/break-glass.ts'
@@ -100,6 +100,64 @@ export function UnhelpfulAnswers(
   )
 }
 
+/**
+ * This month's knowledge gaps, most asked first. Question text can hold personal data: the server
+ * shortens it, and it is shown here, to curators and administrators, and never exported.
+ */
+export function MonthKnowledgeGaps(
+  { gaps }: { gaps: NonNullable<InsightsSummary['knowledgeGaps']> },
+) {
+  const { ui, date } = usePortalLocale()
+  const month = date(`${gaps.month}-01T00:00:00Z`, {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  })
+  return (
+    <div className='rp-card p-5 lg:p-6' data-month-gaps>
+      <SectionHeader
+        className='rp-manage-section-head'
+        headingLevel={3}
+        title={ui('Top knowledge gaps in {month}', { month })}
+        description={ui(
+          'The questions asked most this month that the collection could not answer, or answered on weak grounding. Questions can hold personal data, so they are shortened, shown only to curators and administrators, and never exported.',
+        )}
+      />
+      {gaps.questions.length === 0
+        ? <p className='mt-3 text-sm text-ink-3'>{ui('No knowledge gaps this month.')}</p>
+        : (
+          <ol className='mt-3 divide-y divide-line overflow-hidden rounded-[var(--rp-radius)] border border-line'>
+            {gaps.questions.map((gap, index) => (
+              <li key={index} className='bg-surface px-4 py-2.5'>
+                <div className='flex flex-col items-start gap-2 sm:flex-row sm:justify-between'>
+                  <p className='min-w-0 break-words text-sm text-ink'>{gap.question}</p>
+                  <span className='rp-tag shrink-0'>
+                    {gap.asks} {gap.asks === 1 ? ui('ask') : ui('asks')}
+                  </span>
+                </div>
+                <p className='mt-1 text-xs text-ink-3'>
+                  {[
+                    gap.unanswered > 0 ? ui('{count} unanswered', { count: gap.unanswered }) : '',
+                    gap.weaklyGrounded > 0
+                      ? ui('{count} weakly grounded', { count: gap.weaklyGrounded })
+                      : '',
+                    relativeTime(gap.lastAsked, ui),
+                  ].filter(Boolean).join(' · ')}
+                </p>
+              </li>
+            ))}
+          </ol>
+        )}
+      <h4 className='mt-5 text-sm font-semibold text-ink'>{ui('Evidence coverage by topic')}</h4>
+      <p className='mt-1 max-w-prose text-sm leading-relaxed text-ink-2'>
+        {ui(
+          "Not available: the ask log keeps each question's text but not its topic, and an unanswered question has no cited source to take a topic from.",
+        )}
+      </p>
+    </div>
+  )
+}
+
 /** A server's feedback summary, when it sent a well-formed one. */
 function validFeedback(value: unknown): boolean {
   if (value === undefined) return true
@@ -146,7 +204,9 @@ function InsightsPanelContent({ slug }: { slug: string }) {
           !insights ||
           ![insights.totalAsks, insights.answered, insights.unanswered].every(Number.isFinite) ||
           ![insights.topQuestions, insights.gaps, insights.recent].every(Array.isArray) ||
-          !validFeedback(insights.feedback)
+          !validFeedback(insights.feedback) ||
+          (insights.knowledgeGaps !== undefined &&
+            !Array.isArray(insights.knowledgeGaps?.questions))
         ) throw new AdminAccessError()
         return insights
       })
@@ -284,6 +344,10 @@ function InsightsPanelContent({ slug }: { slug: string }) {
                 </ul>
               )}
           </div>
+
+          {Array.isArray(data.knowledgeGaps?.questions) && (
+            <MonthKnowledgeGaps gaps={data.knowledgeGaps!} />
+          )}
 
           {data.feedback && validFeedback(data.feedback)
             ? <UnhelpfulAnswers slug={slug} feedback={data.feedback} />
