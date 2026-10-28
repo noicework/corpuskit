@@ -1217,7 +1217,9 @@ On the Durable Object they are rows of the `site_feedback` table; on the local s
 
 A portal's home page can offer a guided tour, "See what this platform does": a dialog of
 scenes, each illustrated with the portal's own components over made-up data, each with one
-click into the real feature. It is off unless the portal opts in. The setting `demoTour` takes
+click into the real feature. The scenes' words follow the portal vocabulary (research
+collection, cited answer, matched passage, MCP connector) and name the portal as the system
+doing the work. It is off unless the portal opts in. The setting `demoTour` takes
 one of three values:
 
 | Value | What the home page does |
@@ -1240,7 +1242,7 @@ hero's suggestions take.
 | `federated` | A question answered across every collection, every sentence cited | Ask, with the portal's first suggested question (the agent page, once it exists) |
 | `provenance` | The stages an answer passes through, then Sources and evidence and Journey through the context | Ask, with the portal's second suggested question |
 | `cited-page` | A citation opening its PDF at the page, with the matched passage marked | The collection's first PDF in the library; `/library` until there is one |
-| `mcp` | The MCP connector an external agent uses | `/tools` |
+| `mcp` | The MCP connector an external research tool uses | `/tools` |
 | `participation` | Which collections took part in a federated answer | `/agent` |
 | `gaps` | A question the collection cannot answer, declined honestly with the closest matches | Ask, with a question about last week's publications |
 

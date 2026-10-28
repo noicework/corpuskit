@@ -309,7 +309,7 @@ function McpScene({ slug }: { slug: string }) {
     .split('\n')
   return (
     <div className='rp-card p-4'>
-      <h3 className='rp-display text-base text-ink'>{ui('Knowledge box MCP connector')}</h3>
+      <h3 className='rp-display text-base text-ink'>{ui('MCP connector')}</h3>
       <pre className='mt-3 max-w-full whitespace-pre-wrap break-words rounded-[var(--rp-radius-input)] border border-line bg-[var(--rp-surface-2)] p-3 text-xs leading-relaxed [overflow-wrap:anywhere]'>
         <code>
           {lines.map((line, index) => (

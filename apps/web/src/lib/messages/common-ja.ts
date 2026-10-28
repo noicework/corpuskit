@@ -2,8 +2,8 @@
 export const COMMON_JA: Readonly<Record<string, string>> = {
   // The guided tour on the home page.
   'See what this platform does': 'このプラットフォームでできること',
-  'A short guided tour: cited answers, how they are made, the page a citation came from, an agent connected over MCP, and what happens when the collection cannot answer.':
-    '短いガイドツアーです。出典付きの回答、その作られ方、引用元のページ、MCPで接続したエージェント、そしてコレクションが答えられないときの動きを紹介します。',
+  'A short guided tour: cited answers, how they are made, the page a citation came from, external research tools connected over MCP, and what happens when the collection cannot answer.':
+    '短いガイドツアーです。出典付きの回答、その作られ方、引用元のページ、MCPで接続した外部の研究ツール、そしてコレクションが答えられないときの動きを紹介します。',
   'Take the tour': 'ツアーを見る',
   '{count} short scenes, each with one click into {product}.':
     '{count}つの短いシーンがあり、それぞれワンクリックで{product}の機能に進めます。',
@@ -19,23 +19,23 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Ask it': '質問してみる',
   'What are the main findings in this collection?': 'このコレクションの主な知見は何ですか？',
   'Ask across every collection': 'すべてのコレクションに横断して質問する',
-  'One question, answered from several knowledge boxes at once. Every sentence carries a citation, and the answer says which collections it drew on.':
-    '一つの質問に複数のナレッジボックスから同時に回答します。すべての文に出典が付き、どのコレクションを参照したかも示されます。',
+  'One question, answered across several research collections at once. Each claim carries a numbered citation, and the answer names the collections it drew on.':
+    '一つの質問に複数の研究コレクションから同時に回答します。各主張に番号付きの出典が付き、参照したコレクションも示されます。',
   'See how an answer was made': '回答がどのように作られたかを見る',
-  'Each answer shows its stages as it works, then keeps its evidence under it. Open Sources and evidence, then Journey through the context, to walk the passages it was built from.':
-    '回答は処理の段階を表示しながら作られ、根拠は回答の下に残ります。「出典と根拠」を開き、「根拠資料をたどる」で回答の元になった箇所を順に確認できます。',
+  'The portal shows each stage of an answer as it works, then keeps the sources under it. Open the retrieved sources, then Journey through the context, to read the passages the answer was built from.':
+    'ポータルは回答の各段階を表示しながら作成し、出典を回答の下に残します。取得した出典を開き、「根拠資料をたどる」で回答の元になった箇所を読めます。',
   'Open the PDF at the cited page': '引用されたページでPDFを開く',
   'A citation takes you to the page it came from, with the matched passage marked, not to the top of a file.':
     '引用をクリックすると、ファイルの先頭ではなく、該当箇所が示された元のページに移動します。',
-  'Connect an external agent over MCP': 'MCPで外部エージェントを接続する',
-  'Any MCP client can search, browse and ask this portal and get the same cited answers, read-only and within its access rules. The connection details are on Tools.':
-    'どのMCPクライアントからでも、このポータルを検索・閲覧・質問でき、同じ出典付きの回答を得られます。読み取り専用で、アクセス権限の範囲内に限られます。接続情報は「ツール」にあります。',
+  'Connect an external research tool over MCP': 'MCPで外部の研究ツールを接続する',
+  'The MCP connector gives approved external research tools read-only access to this portal: they can search the collection, request a cited answer, retrieve a document and browse the catalogue. The connection details are on Tools.':
+    'MCPコネクタは、承認された外部の研究ツールにこのポータルへの読み取り専用アクセスを提供します。コレクションの検索、出典付き回答の取得、資料の取得、カタログの閲覧ができます。接続情報は「ツール」にあります。',
   'See who took part': '参加したコレクションを見る',
-  "Each collection's owner decides whether it takes part in a federated answer. The answer shows who did.":
-    '横断回答に参加するかどうかは各コレクションの所有者が決めます。回答には参加したコレクションが示されます。',
+  'Each organisation decides whether its collection takes part in a federated answer. The answer shows which collections did.':
+    '横断回答に自分のコレクションを参加させるかどうかは各組織が決めます。回答には参加したコレクションが示されます。',
   'Find the gaps': '知識の空白を見つける',
-  'Ask something the collection does not cover and it says so instead of guessing, and shows what came closest. Curators see every gap in Manage under Insights.':
-    'コレクションが扱っていないことを質問すると、推測せずにその旨を答え、最も近い資料を示します。管理者は「管理」の「利用状況」で空白を確認できます。',
+  'Ask something the collection does not cover and the portal says so, with the closest matches, instead of guessing. Administrators see every gap in Manage, under Insights.':
+    'コレクションが扱っていないことを質問すると、ポータルは推測せずにその旨を答え、最も近い資料を示します。管理者は「管理」の「利用状況」で空白を確認できます。',
   'What was published on this topic in the last week?':
     'このテーマについて先週発表されたものは何ですか？',
   '{count} sources · {cited} cited': '出典 {count} 件 · 引用 {cited} 件',
@@ -43,6 +43,7 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Page {page}': '{page} ページ',
   'Read-only': '読み取り専用',
   'Streamable HTTP': 'Streamable HTTP',
+  'MCP connector': 'MCPコネクタ',
   'Collections in this answer': 'この回答に参加したコレクション',
   'Took part': '参加',
   'Not taking part': '不参加',
@@ -53,8 +54,8 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Archive, 1998 to 2004': 'アーカイブ（1998年から2004年）',
   // Manage > Behaviour: how the tour is offered.
   'Guided tour': 'ガイドツアー',
-  'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, MCP and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.':
-    'ポータルでできることをホームページから案内する短いツアーです。出典付きの回答、その作られ方、引用元のページ、MCP、コレクションが答えられないときの動きを紹介します。「初回に自動で開く」は、各ブラウザがホームページを初めて開いたときにだけ表示し、他のページの上には開きません。',
+  'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, the MCP connector and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.':
+    'ポータルでできることをホームページから案内する短いツアーです。出典付きの回答、その作られ方、引用元のページ、MCPコネクタ、コレクションが答えられないときの動きを紹介します。「初回に自動で開く」は、各ブラウザがホームページを初めて開いたときにだけ表示し、他のページの上には開きません。',
   'Offer the tour': 'ツアーの提供',
   'Offered on the home page': 'ホームページで提供する',
   'Offered, and opens once by itself': 'ホームページで提供し、初回に自動で開く',

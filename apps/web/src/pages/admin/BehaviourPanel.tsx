@@ -458,7 +458,7 @@ function DemoTourSetting({ slug }: { slug: string }) {
         className='rp-admin-section-head'
         title={ui('Guided tour')}
         description={ui(
-          'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, MCP and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.',
+          'A short tour of what the portal does, from the home page: cited answers, how they are made, the cited page, the MCP connector and what happens when the collection cannot answer. "Opens once by itself" shows it to each browser on its first visit to the home page, and never over another page.',
         )}
       />
       <label className='mt-4 block text-sm text-ink-2'>

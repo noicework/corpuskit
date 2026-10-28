@@ -44,7 +44,7 @@ function builtIn(
       return {
         title: ui('Ask across every collection'),
         body: ui(
-          'One question, answered from several knowledge boxes at once. Every sentence carries a citation, and the answer says which collections it drew on.',
+          'One question, answered across several research collections at once. Each claim carries a numbered citation, and the answer names the collections it drew on.',
         ),
         target: { kind: 'ask', question: first },
       }
@@ -52,7 +52,7 @@ function builtIn(
       return {
         title: ui('See how an answer was made'),
         body: ui(
-          'Each answer shows its stages as it works, then keeps its evidence under it. Open Sources and evidence, then Journey through the context, to walk the passages it was built from.',
+          'The portal shows each stage of an answer as it works, then keeps the sources under it. Open the retrieved sources, then Journey through the context, to read the passages the answer was built from.',
         ),
         target: { kind: 'ask', question: second },
       }
@@ -69,9 +69,9 @@ function builtIn(
       }
     case 'mcp':
       return {
-        title: ui('Connect an external agent over MCP'),
+        title: ui('Connect an external research tool over MCP'),
         body: ui(
-          'Any MCP client can search, browse and ask this portal and get the same cited answers, read-only and within its access rules. The connection details are on Tools.',
+          'The MCP connector gives approved external research tools read-only access to this portal: they can search the collection, request a cited answer, retrieve a document and browse the catalogue. The connection details are on Tools.',
         ),
         target: { kind: 'link', href: '/tools' },
       }
@@ -79,7 +79,7 @@ function builtIn(
       return {
         title: ui('See who took part'),
         body: ui(
-          "Each collection's owner decides whether it takes part in a federated answer. The answer shows who did.",
+          'Each organisation decides whether its collection takes part in a federated answer. The answer shows which collections did.',
         ),
         target: { kind: 'link', href: '/agent' },
       }
@@ -87,7 +87,7 @@ function builtIn(
       return {
         title: ui('Find the gaps'),
         body: ui(
-          'Ask something the collection does not cover and it says so instead of guessing, and shows what came closest. Curators see every gap in Manage under Insights.',
+          'Ask something the collection does not cover and the portal says so, with the closest matches, instead of guessing. Administrators see every gap in Manage, under Insights.',
         ),
         target: {
           kind: 'ask',

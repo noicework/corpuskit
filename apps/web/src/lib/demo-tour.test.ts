@@ -57,7 +57,7 @@ Deno.test("a portal's scene list, words and targets replace the built-in ones", 
     ['gaps', 'Ask the unanswerable', '/ask?ask=What%20is%20on%20next%20year%3F', true],
     ['participation', 'See who took part', '/agent', false],
     ['cited-page', 'Open the PDF at the cited page', '/library/report-7?page=4', false],
-    ['mcp', 'Connect an external agent over MCP', 'https://example.org/agents', false],
+    ['mcp', 'Connect an external research tool over MCP', 'https://example.org/agents', false],
     ['federated', 'Federate', '/ask?ask=Which%20talks%20cover%20upgrades%3F', true],
   ])
   expect(scenes[3]!.body).toBe('Our own agent guide.')

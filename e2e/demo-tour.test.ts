@@ -143,7 +143,7 @@ describe('the guided tour', () => {
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Connect an external agent over MCP',
+            'Connect an external research tool over MCP',
         'the MCP scene',
       )
       expect((await state()).tryIt).toBe('/t/grains/tools')
