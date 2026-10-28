@@ -843,6 +843,8 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
         }
         if (stores.branding) call('branding.put', slug, 'image-hero', asset)
         const args: Record<string, unknown[]> = {
+          'duplicates.decide': [slug, 'res-1~res-2', 'keep-both'],
+          'duplicates.erase': [slug],
           'lifecycle.set': [slug, { status: 'read_only', limits: null }],
           'lifecycle.remove': [slug],
           'lifecycle.erase': [slug],

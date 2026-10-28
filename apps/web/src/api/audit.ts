@@ -35,6 +35,7 @@ export const AUDIT_ACTIONS = [
   'migration.admin_emails',
   'request.denied',
   'request.privileged',
+  'duplicate.review',
   'resource.delete',
   'resource.questions.generate',
   'resource.questions.cache',

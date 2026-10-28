@@ -11,6 +11,7 @@ export const ERASED_RECORD_KINDS = [
   'bindings',
   /** Hosting status and limits, ask counts, the capacity ledger and the suspension record. */
   'lifecycle',
+  'duplicates',
   'sessions',
   'investigations',
   'watches',

@@ -87,6 +87,14 @@ const HIDDEN_RESOURCES_ENABLE = {
 } as const
 
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('http', 'GET', '/api/admin/t/:slug/duplicates', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/duplicates/refresh', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/duplicates/review', 'content.write', 'portal', {
+    subActions: [{ action: 'duplicate.review', permission: 'content.write', scope: 'portal' }],
+  }),
+  entry('http', 'GET', '/api/admin/overlap', 'portal.create', 'platform'),
+  entry('http', 'POST', '/api/admin/overlap/refresh', 'portal.create', 'platform'),
+  entry('http', 'GET', '/api/admin/overlap/export', 'portal.create', 'platform'),
   entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
     operator: true,
   }),
@@ -147,6 +155,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ),
   ]),
   ...([
+    ['duplicates', ['decide'], 'content.write', 'portal'],
+    ['duplicates', ['erase'], 'portal.create', 'platform'],
     ['lifecycle', ['set'], 'portal.create', 'platform'],
     ['lifecycle', ['remove'], 'portal.delete', 'platform'],
     ['lifecycle', ['consumeAsk', 'refundAsk'], 'portal.ask', 'portal'],

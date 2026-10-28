@@ -1,3 +1,4 @@
+import { DuplicateReviewStore } from '../../api/src/duplicate-store.ts'
 import {
   DEFAULT_PORTAL_COLOURS,
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -241,6 +242,7 @@ export class DurableState {
             ['tenant.access.update', 'tenant.configuration.update'].includes(
               context.input.action,
             )) ||
+          (operation === 'duplicates.decide' && context.input.action === 'duplicate.review') ||
           (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update') ||
           (operation === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
           (operation === 'tenants.removeAlias' && context.input.action === 'portal.alias.remove')
@@ -2146,6 +2148,7 @@ export class DurableRoutingLog implements RoutingLogApi {
 }
 
 export interface DurableStores extends RbacStores {
+  duplicates: DuplicateReviewStore
   lifecycle: PortalLifecycleStore
   localMutations: LocalMutationScope
   /** One SQLite transaction around a whole portal erasure, audited as `erasure.erase`. */
@@ -2172,6 +2175,7 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
+    duplicates: state.auditedStore('duplicates', new DuplicateReviewStore(state.rbacDatabase)),
     lifecycle: state.auditedStore('lifecycle', new PortalLifecycleStore(state)),
     localMutations: state.localMutations,
     erasureTransaction: (slug, work) => state.atomically('erasure.erase', [slug], work),

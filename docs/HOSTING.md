@@ -2004,6 +2004,7 @@ a portal that has already been deleted, by the owner or by the operator route.
 | `feedback` | Readers' ratings of answers and their comments (one per answer, at most 500, ratings of answers the ask log does not hold dropped first, kept 90 days) | `answer_feedback` rows | `DATA_DIR/feedback/<slug>.json` |
 | `suggestions` | Setup suggestions | `suggestions:<slug>` row | `DATA_DIR/suggestions/<slug>.json` |
 | `enrichments` | Generated enrichments and cached suggested questions | `enrichment_records` rows, `enrichments:<slug>` row | `DATA_DIR/enrichments/<slug>.json` |
+| `duplicates` | Remembered duplicate review decisions | `duplicate_reviews` rows | `DATA_DIR/rbac.sqlite`, `duplicate_reviews` rows |
 | `kgProposals` | The last knowledge graph proposal | Entry in the `kg-proposals` row | Entry in `KG_PROPOSALS_PATH` |
 | `branding` | Uploaded logo, hero image and fonts | `branding_assets` rows | `BRANDING_PATH/<slug>-<kind>.<ext>` |
 | `routing` | Question routing decisions | `routing_records` rows | `DATA_DIR/routing/<slug>.jsonl` |

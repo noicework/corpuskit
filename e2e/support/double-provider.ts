@@ -61,6 +61,33 @@ export class DoubleProvider implements RetrievalProvider {
     return provider
   }
 
+  /** Planted duplicates and a dated version, only for duplicate review journeys. */
+  static withDuplicates(): DoubleProvider {
+    const provider = new DoubleProvider()
+    provider.resources = [
+      {
+        ...RESOURCE_ONE,
+        originUrl: 'https://research.example.test/stock',
+        sourceName: 'stock-report.pdf',
+        published: '2023-06-01',
+      },
+      {
+        ...RESOURCE_ONE,
+        id: 'res-copy',
+        originUrl: 'https://research.example.test/stock?utm_source=catalogue',
+        sourceName: 'stock-report.pdf',
+      },
+      { ...RESOURCE_TWO, published: '2023-01-01' },
+      {
+        ...RESOURCE_TWO,
+        id: 'res-version',
+        title: RESOURCE_TWO.title + ' version 2',
+        published: '2024-01-01',
+      },
+    ]
+    return provider
+  }
+
   listResources(_tenant: TenantConfig): Promise<ResourceSummary[]> {
     return Promise.resolve(this.resources)
   }

@@ -248,6 +248,7 @@ const fields = {
   method: member(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']),
   // What kind of document a delete removed, and whether it was a draft; never its title.
   resourceKind: member(ResourceTypeSchema.options),
+  decision: member(['not-duplicate', 'keep-both']),
   draft: flag,
   // The knowledge box no longer held the document: only what the portal kept for it was cleared.
   cleanupOnly: flag,
@@ -258,6 +259,7 @@ const fields = {
   erasedConfiguration: count,
   erasedAliases: count,
   erasedBindings: count,
+  erasedDuplicates: count,
   erasedLifecycle: count,
   erasedSessions: count,
   erasedInvestigations: count,
@@ -296,6 +298,7 @@ const actionFields = {
     'erasedConfiguration',
     'erasedAliases',
     'erasedBindings',
+    'erasedDuplicates',
     'erasedLifecycle',
     'erasedSessions',
     'erasedInvestigations',
@@ -354,6 +357,7 @@ const actionFields = {
     'suggestionId',
     'suggestionKind',
   ],
+  'duplicate.review': ['permission', 'decision', 'sessionOid', 'sessionTenantId'],
   'resource.delete': [
     'code',
     'permission',
