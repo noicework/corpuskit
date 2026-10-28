@@ -791,6 +791,7 @@ export function KnowledgeMap({
   focusId,
   insets,
   hint,
+  controlsTarget,
 }: {
   nodes: MapNode[]
   edges: MapEdge[]
@@ -808,6 +809,7 @@ export function KnowledgeMap({
   /** Measured, not assumed - see the type. */
   insets: Insets
   hint: string
+  controlsTarget?: HTMLElement | null
 }) {
   const { ui } = usePortalLocale()
   const visibleNodes = useMemo(
@@ -1753,7 +1755,7 @@ export function KnowledgeMap({
         {hint}
       </p>
 
-      <MapCameraControls zoom={zoomBy} fit={fitView} pan={panBy} />
+      <MapCameraControls zoom={zoomBy} fit={fitView} pan={panBy} target={controlsTarget} />
     </div>
   )
 }

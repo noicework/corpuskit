@@ -64,6 +64,7 @@ export function KnowledgeMap3D({
   onReady,
   initiallyPlaying = true,
   onMotionChange,
+  controlsTarget,
 }: {
   nodes: MapNode[]
   edges: MapEdge[]
@@ -85,6 +86,7 @@ export function KnowledgeMap3D({
   /** Retain the reader's pause choice when changing between the map and list. */
   initiallyPlaying?: boolean
   onMotionChange?: (playing: boolean) => void
+  controlsTarget?: HTMLElement | null
 }) {
   const { ui } = usePortalLocale()
   const [supported] = useState(webglAvailable)
@@ -170,8 +172,8 @@ export function KnowledgeMap3D({
   }, [supported, contextLost])
   const mapInsets = useMemo(() => ({
     ...insets,
-    top: Math.max(insets.top, controlInset),
-  }), [insets, controlInset])
+    top: controlsTarget ? insets.top : Math.max(insets.top, controlInset),
+  }), [insets, controlInset, controlsTarget])
 
   // Mirrors the 2D map's fit signature: the view is re-framed when the
   // visible set or the layout changes shape, never merely because the
@@ -335,6 +337,7 @@ export function KnowledgeMap3D({
           focusId={focusId}
           insets={mapInsets}
           hint={ui('Drag to pan · scroll to zoom · click a node to explore it')}
+          controlsTarget={controlsTarget}
         />
       </div>
     )
@@ -364,6 +367,7 @@ export function KnowledgeMap3D({
 
       <div>
         <MapCameraControls
+          target={controlsTarget}
           zoom={(factor) => engineRef.current?.zoomBy(factor)}
           fit={() => engineRef.current?.fit(true)}
           pan={(x, y) => engineRef.current?.pan(x, y)}

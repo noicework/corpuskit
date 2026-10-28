@@ -96,6 +96,23 @@ svg.rp-map.rp-focus:focus-visible {
   background: var(--rp-surface);
 }
 
+/* The page toolbar keeps camera controls clear of both floating detail panels. */
+.rp-graph-view-switch {
+  position: relative;
+  z-index: 35;
+}
+
+.rp-map-camera[data-inline] {
+  position: relative;
+  inset: auto;
+  max-width: none;
+}
+
+/* Keep the validated text/surface pair over every colour in the graph. */
+[data-graph-page] .rp-map-panel {
+  background: var(--rp-surface);
+}
+
 /* Give the ring a known adjacent surface even where a map mark passes below. */
 .rp-map-camera .rp-btn:focus-visible {
   outline: 2px solid var(--rp-ink);

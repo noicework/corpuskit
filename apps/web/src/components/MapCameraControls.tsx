@@ -1,15 +1,17 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { ArrowLeft, ArrowRight, ArrowUp, Maximize, Minus, Plus } from './icons.tsx'
 import { IconButton } from './ui.tsx'
 
 /** Shared pointer and keyboard alternatives to dragging either map. */
-export function MapCameraControls({ zoom, fit, pan, rotate, motion }: {
+export function MapCameraControls({ zoom, fit, pan, rotate, motion, target }: {
   zoom: (factor: number) => void
   fit: () => void
   pan: (x: number, y: number) => void
   rotate?: (x: number, y: number) => void
   motion?: { playing: boolean; reduced: boolean; toggle: () => void }
+  target?: HTMLElement | null
 }) {
   const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
@@ -17,7 +19,25 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion }: {
   const toggleRef = useRef<HTMLButtonElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const [panelHeight, setPanelHeight] = useState<number>()
+  const [panelLeft, setPanelLeft] = useState(0)
+  useLayoutEffect(() => {
+    const root = rootRef.current
+    const panel = document.getElementById(panelId)
+    if (!target || !open || !root || !panel) return
+    const measure = () => {
+      const left = root.getBoundingClientRect().left
+      const width = panel.getBoundingClientRect().width
+      setPanelLeft(Math.max(12 - left, Math.min(0, innerWidth - left - width - 12)))
+    }
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(root)
+    observer.observe(panel)
+    if (target.parentElement) observer.observe(target.parentElement)
+    return () => observer.disconnect()
+  }, [target, open, panelId, ui])
   useEffect(() => {
+    if (target) return
     const root = rootRef.current
     const stage = root?.offsetParent
     if (!root || !stage) return
@@ -33,15 +53,23 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion }: {
     observer.observe(root)
     observer.observe(stage)
     return () => observer.disconnect()
-  }, [])
+  }, [target])
   const directions = [
     { label: 'left', icon: ArrowLeft, x: 1, y: 0 },
     { label: 'right', icon: ArrowRight, x: -1, y: 0 },
     { label: 'up', icon: ArrowUp, x: 0, y: -1 },
     { label: 'down', icon: ArrowUp, x: 0, y: 1 },
   ]
-  return (
-    <div ref={rootRef} className='rp-map-camera' data-graph-overlay>
+  const controls = (
+    <div
+      ref={rootRef}
+      className='rp-map-camera'
+      data-inline={target ? '' : undefined}
+      data-graph-overlay
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
+      }}
+    >
       <div className='flex flex-wrap items-center gap-1'>
         {motion
           ? (
@@ -78,7 +106,11 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion }: {
           <div
             id={panelId}
             className='rp-map-camera-panel rp-card p-3'
-            style={{ maxHeight: panelHeight }}
+            style={{
+              maxHeight: target ? undefined : panelHeight,
+              insetInlineStart: target ? panelLeft : undefined,
+              insetInlineEnd: target ? 'auto' : undefined,
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 event.stopPropagation()
@@ -156,4 +188,5 @@ export function MapCameraControls({ zoom, fit, pan, rotate, motion }: {
       </span>
     </div>
   )
+  return target ? createPortal(controls, target) : controls
 }
