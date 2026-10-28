@@ -185,8 +185,12 @@ Composing (`mode: "orchestrated"`):
    passages, numbered in the portals' order, citing them as `[n]`. One plain streaming `/ask`
    emits its `answer` items directly as provisional `delta` events, without a schema attempt,
    JSON-text retry or catalogue walk. Hosted lookups request passages without fetching display summaries.
-4. Step `verify` runs the Ask answer's deterministic binding over it: each sentence keeps only
-   the markers whose passage carries its words, figures and names, a sentence stating a figure
+4. Step `verify` runs the Ask answer's deterministic binding over it: each inline marker closes
+   the clause since the preceding marker or sentence start. Each clause keeps only the markers
+   whose passages support its words, figures and names. Adjacent markers on one clause can name
+   complementary passages: together their contributing passages must cover every named entity
+   and figure, and every retained marker must contribute support. Figures are checked against
+   each actual passage, never against concatenated source texts. A clause stating a figure
    no passage supports is removed, and the markers are renumbered by first appearance. The step's
    `reason` says what was removed. Collection labels and their words are allowed attribution
    terms, so they are not required to appear in the cited passage as claim entities. Figures

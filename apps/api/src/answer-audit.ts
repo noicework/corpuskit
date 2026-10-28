@@ -707,7 +707,7 @@ export function outcomeConflict(sentence: readonly string[], window: string): bo
 }
 
 /** Whether a figure token is a follow-up timepoint rather than a result. */
-function isTimepointFigure(figure: string): boolean {
+export function isTimepointFigure(figure: string): boolean {
   return /(?:month|week|year|day)s$/.test(figure)
 }
 

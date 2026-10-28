@@ -1254,6 +1254,9 @@ export async function bindAndAudit(raw: BindAndAuditInput): Promise<BindAndAudit
   // unverifiable is not unsupported.
   for (const sentence of bound.sentences) {
     if (sentence.bound.length < 2) continue
+    // A shared authored clause was already checked for complete union coverage by the binder.
+    // A contributor may carry a separate named claim rather than every figure in the clause.
+    if (sentence.collective) continue
     const own = checks.filter((c) => c.sentence === sentence.text)
     if (own.length === 0 || own.some((c) => !c.supported)) continue
     // `supportedBy` indexes the texts the check was given, which is
