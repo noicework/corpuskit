@@ -60,7 +60,7 @@ function PartnerAnswer({ answer }: { answer: AgentAnswer }) {
       <AnswerMarkdown
         text={answer.text}
         renderInline={(run, key) =>
-          run.replace(/[ \t]+(?=\[[^\]\n]+\])/g, '\u2060').split(/(\[[^\]\n]+\])/g).map(
+          run.replace(/[ \t]*(\[[^\]\n]+\])/g, '\u2060$1').split(/(\[[^\]\n]+\])/g).map(
             (part, index) => {
               const citation = answer.citations.find((item) => `[${item.marker}]` === part)
               return citation
@@ -272,7 +272,7 @@ function EmbedAsk({ config, view }: { config: TenantConfig; view: string | null 
                   ? (
                     <AnswerText
                       {...answer}
-                      text={answer.text.replace(/[ \t]+(?=\[\d+\])/g, '\u2060')}
+                      text={answer.text.replace(/[ \t]*(\[\d+\])/g, '\u2060$1')}
                       slug={config.slug}
                       streaming={busy}
                       citationSourceId={(citation) => `embed-source-${citation.index}`}

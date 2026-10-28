@@ -6,6 +6,7 @@ import { DoubleProvider } from './support/double-provider.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 import { peerKeyName } from '../apps/api/src/bindings.ts'
 import { startTestServer } from './support/test-server.ts'
+import { assertCurrentBuild } from './support/rbac-fixture.ts'
 
 const review = '.review/embed-widget'
 
@@ -101,6 +102,16 @@ async function assertCitationFlow(page: Page, framed: boolean) {
         ![...document.querySelectorAll('section p')].some(p => /^\\[\\d+\\]$/.test(p.textContent.trim())) &&
         document.documentElement.scrollWidth <= innerWidth;
     })()`),
+  ).toBe(true)
+  expect(
+    await evaluate<boolean>(`[...document.querySelectorAll('section sup a')].every(link => {
+      const preceding = link.parentElement.previousSibling;
+      if (!preceding?.textContent?.trim()) return true;
+      const range = document.createRange();
+      range.selectNodeContents(preceding);
+      const lines = [...range.getClientRects()];
+      return link.getBoundingClientRect().top < lines.at(-1).bottom;
+    })`),
   ).toBe(true)
   await evaluate("document.querySelector('section sup a').focus()")
   await page.keyboard.press('Enter')
@@ -522,6 +533,7 @@ Deno.test('embed widget: real HTTPS ancestors, both modes, cited asks, keyboard,
         }
         await page.goto(`${portalUrl}/t/marine/embed?view=own`)
         await page.waitForSelector('#embed-question')
+        if (width === 1440 && scheme === 'light') await assertCurrentBuild(page)
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
           true,
         )
