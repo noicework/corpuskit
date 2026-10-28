@@ -3241,8 +3241,8 @@ export function AskPage() {
             className='hidden min-h-0 w-80 min-w-0 max-w-[28%] shrink-0 flex-col xl:flex 2xl:w-96'
           >
             <div className='rp-scroll min-h-0 flex-1 overflow-y-auto rounded-[calc(var(--rp-radius)+4px)] border border-line bg-surface p-3'>
-              <p className='rp-eyebrow text-ink-3'>{ui('Sources for the latest answer')}</p>
-              <div className='mt-3'>
+              {/* The table's own "Sources found" heading names the rail; the aside's label names the landmark. */}
+              <div>
                 <EvidenceTable
                   slug={config.slug}
                   question={railQuestion}
