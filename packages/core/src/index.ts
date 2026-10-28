@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { PortalLayoutSchema } from './layout.ts'
+import { LayoutHrefSchema, PortalLayoutSchema } from './layout.ts'
 import { PaletteChoiceSchema } from './palettes.ts'
 import { AccessModeSchema } from './rbac.ts'
 import { FederationConfigSchema } from './agent-ask.ts'
@@ -402,6 +402,67 @@ export const TenantSummarySchema = z.object({
   hostname: TenantHostnameSchema.optional(),
 })
 
+// ---------------------------------------------------------------------------
+// The guided tour: six scenes a portal can show from its home page, each illustrated and each
+// ending in one click into the real feature. A portal turns it on with `demoTour` and may say
+// which scenes it shows, in what order and in what words, through `copy.demoTour`.
+// ---------------------------------------------------------------------------
+
+/** Off, offered from the home page, or opened once by itself on the home page. */
+export const DemoTourModeSchema = z.enum(['off', 'request', 'auto'])
+export type DemoTourMode = z.infer<typeof DemoTourModeSchema>
+
+/** The scenes the tour knows, in their default order. */
+export const DEMO_TOUR_SCENE_IDS = [
+  'federated',
+  'provenance',
+  'cited-page',
+  'graph',
+  'mcp',
+  'participation',
+  'gaps',
+] as const
+export const DemoTourSceneIdSchema = z.enum(DEMO_TOUR_SCENE_IDS)
+export type DemoTourSceneId = z.infer<typeof DemoTourSceneIdSchema>
+
+/** One line of a portal's own words, trimmed, never empty. */
+const demoTourLine = (max: number) => z.string().trim().min(1).max(max)
+
+/**
+ * A scene as a portal lists it: which one, and any of its words or its target replaced. A scene
+ * with neither `question` nor `href` keeps its built-in target; `href` wins when both are set.
+ */
+export const DemoTourSceneSchema = z.object({
+  id: DemoTourSceneIdSchema,
+  title: demoTourLine(80).optional(),
+  body: demoTourLine(240).optional(),
+  /** The question the scene's "Try it" asks, in one click. */
+  question: demoTourLine(300).optional(),
+  /** Where "Try it" goes instead: a portal path ("/tools") or an `https://` address. */
+  href: LayoutHrefSchema.optional(),
+}).strict()
+export type DemoTourScene = z.infer<typeof DemoTourSceneSchema>
+
+export const DemoTourCopySchema = z.object({
+  heading: demoTourLine(80).optional(),
+  intro: demoTourLine(300).optional(),
+  /**
+   * The scenes the tour shows, in order; absent, the built-in list (every scene but
+   * `participation`). Each scene appears at most once.
+   */
+  scenes: DemoTourSceneSchema.array().min(1).max(DEMO_TOUR_SCENE_IDS.length)
+    .refine(
+      (scenes) => new Set(scenes.map((scene) => scene.id)).size === scenes.length,
+      'Each scene may appear once',
+    )
+    .optional(),
+}).strict()
+export type DemoTourCopy = z.infer<typeof DemoTourCopySchema>
+
+/** How the home page offers the guided tour: off unless the portal opts in. */
+export function demoTourMode(config: Pick<TenantConfig, 'demoTour'>): DemoTourMode {
+  return config.demoTour ?? 'off'
+}
 /** An `https://` address a portal may point readers at; nothing else is a link. */
 const httpsUrl = z.string().url().refine((url) => url.startsWith('https://'), {
   message: 'Must be an https:// address',
@@ -492,6 +553,15 @@ export const TenantConfigSchema = z.object({
    */
   siteFeedback: z.boolean().optional(),
   /**
+   * The guided tour on the home page ("See what this platform does": a dialog of scenes, each
+   * illustrated with the portal's own components and ending in one click into the real
+   * feature). `off` (the default when absent) shows nothing; `request` offers it from the home
+   * page and honours `?tour=1`; `auto` also opens it once per browser on the home page, never
+   * over a page the reader is working on. Set through `PATCH /api/admin/tenants/:slug`, Manage >
+   * Behaviour or the configuration import. The scenes and their words are `copy.demoTour`.
+   */
+  demoTour: DemoTourModeSchema.optional(),
+  /**
    * Labels excluded from the research search and ask configurations (on top
    * of the always-excluded in-app documentation). A journal corpus keeps its
    * supplements and videos browsable in the library but grounds answers in
@@ -530,6 +600,8 @@ export const TenantConfigSchema = z.object({
     investigationExample: z.string().optional(),
     /** Placeholder per Generate kind (comparison, briefing, timeline, proscons, faq, assessment). */
     generateExamples: z.record(z.string(), z.string()).optional(),
+    /** The guided tour's heading, intro and scenes, when `demoTour` is on. */
+    demoTour: DemoTourCopySchema.optional(),
   }).optional(),
   /**
    * The portal's accessibility statement, at `/t/:slug/accessibility` and linked from the footer.
@@ -558,6 +630,7 @@ const portalConfigurationShape = TenantConfigSchema.pick({
   entityTypes: true,
   relationTypes: true,
   regionalDiscovery: true,
+  demoTour: true,
   timezone: true,
   copy: true,
   accessibility: true,

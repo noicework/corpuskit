@@ -1,6 +1,10 @@
 import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
-import { normaliseAnswerBullets, stripRefusalTemplate } from './answer-text.ts'
+import {
+  normaliseAnswerBullets,
+  placeMarkersAfterPunctuation,
+  stripRefusalTemplate,
+} from './answer-text.ts'
 
 describe('normaliseAnswerBullets', () => {
   it('moves an inline bullet after a bold heading onto its own line', () => {
@@ -49,5 +53,27 @@ describe('stripRefusalTemplate', () => {
   it('leaves an answer without the template untouched', () => {
     const text = 'Lacosamide reduced the risk of a second seizure.\n\n- HR 0.54'
     expect(stripRefusalTemplate(text)).toBe(text)
+  })
+})
+
+describe('placeMarkersAfterPunctuation', () => {
+  it('moves a marker past the punctuation it precedes and drops the space before it', () => {
+    expect(
+      placeMarkersAfterPunctuation('water temperature [block-AA]. Movement controls [block-AB].'),
+    )
+      .toBe('water temperature.[block-AA] Movement controls.[block-AB]')
+    expect(placeMarkersAfterPunctuation('She said [1], then [2]; and [3]?'))
+      .toBe('She said,[1] then;[2] and?[3]')
+  })
+
+  it('moves a run of markers together and leaves placed markers alone', () => {
+    expect(placeMarkersAfterPunctuation('both [1][2]. Next')).toBe('both.[1][2] Next')
+    expect(placeMarkersAfterPunctuation('ten days.[1] Routine sampling.[2]'))
+      .toBe('ten days.[1] Routine sampling.[2]')
+  })
+
+  it('only tightens a marker with nothing to hop over', () => {
+    expect(placeMarkersAfterPunctuation('fixed dates [1] and more')).toBe('fixed dates[1] and more')
+    expect(placeMarkersAfterPunctuation('no markers here.')).toBe('no markers here.')
   })
 })
