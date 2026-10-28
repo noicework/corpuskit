@@ -330,6 +330,15 @@ Deno.test('agent markers are numbered by first appearance and rewritten in the t
   expect(text).not.toContain('block-')
 })
 
+Deno.test('checked final text replaces provisional deltas for display and export', () => {
+  const record = collectAgentAnswer('What changed?', [
+    { type: 'delta', text: 'Unsupported figure 37%. [9]' },
+    { type: 'done', elapsedMs: 1, text: 'A checked answer.' },
+  ])
+  expect(record.text).toBe('A checked answer.')
+  expect(agentAnswerHtml(record)).not.toContain('37%')
+})
+
 Deno.test('a citation whose marker never appears closes the numbering', () => {
   const record = collectAgentAnswer(QUESTION, [
     ...COMPOSED_EVENTS.slice(0, -1),

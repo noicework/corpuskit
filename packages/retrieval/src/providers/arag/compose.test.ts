@@ -2,6 +2,7 @@ import { describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import type { TenantConfig } from '@research-portal/core'
 import { AragProvider } from './index.ts'
+import { COMPOSE_MAX_PASSAGES, COMPOSE_PROMPT_CHARS } from '../../compose.ts'
 
 const TENANT: TenantConfig = {
   accessMode: 'public',
@@ -30,12 +31,19 @@ function providerAnswering(object: unknown) {
     }),
     fetchImpl: (input: string | URL | Request, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString()
-      if (url.includes('/catalog')) return Promise.resolve(Response.json({ resources: {} }))
+      expect(url).toMatch(/\/ask$/)
       bodies.push(JSON.parse(String(init?.body ?? '{}')))
       return Promise.resolve(
-        new Response(`${JSON.stringify({ item: { type: 'answer_json', object } })}\n`, {
-          headers: { 'content-type': 'application/x-ndjson' },
-        }),
+        new Response(
+          `${
+            JSON.stringify({
+              item: { type: 'answer', text: (object as { answer?: unknown })?.answer },
+            })
+          }\n`,
+          {
+            headers: { 'content-type': 'application/x-ndjson' },
+          },
+        ),
       )
     },
   })
@@ -48,7 +56,110 @@ const PASSAGES = [
 ]
 
 describe('AragProvider.compose', () => {
-  it("writes on the host's structured generation path from the numbered passages", async () => {
+  it('retrieves composition passages without catalogue or display-summary reads', async () => {
+    const controller = new AbortController()
+    const calls: string[] = []
+    const provider = new AragProvider({
+      resolveBinding: () => ({
+        baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test',
+        token: 't',
+      }),
+      fetchImpl: (input, init) => {
+        calls.push(String(input))
+        expect(String(input)).toMatch(/\/find$/)
+        expect(init?.signal).toBe(controller.signal)
+        return Promise.resolve(Response.json({
+          resources: {
+            soil: {
+              title: 'Soil moisture',
+              metadata: { status: 'PROCESSED' },
+              fields: {
+                'f/body': {
+                  paragraphs: { p: { text: 'Cover crops retained soil moisture.', score: 0.95 } },
+                },
+              },
+            },
+          },
+        }))
+      },
+    })
+    const result = await provider.search(TENANT, 'soil moisture', {
+      passagesOnly: true,
+      signal: controller.signal,
+    })
+    expect(result.resources[0]?.matchedPassage).toBe('Cover crops retained soil moisture.')
+    expect(calls).toHaveLength(1)
+    controller.abort()
+    await expect(
+      provider.search(TENANT, 'soil moisture', { passagesOnly: true, signal: controller.signal }),
+    ).rejects.toThrow()
+    expect(calls).toHaveLength(1)
+  })
+
+  it('yields NDJSON answer fragments before the upstream body finishes and cancels on return', async () => {
+    let controller: ReadableStreamDefaultController<Uint8Array>
+    let cancelled = false
+    const signal = new AbortController().signal
+    const provider = new AragProvider({
+      resolveBinding: () => ({
+        baseUrl: 'https://test.rag.progress.cloud/api/v1/kb/test',
+        token: 't',
+      }),
+      fetchImpl: (_input, init) => {
+        expect(init?.signal).toBe(signal)
+        expect(JSON.parse(String(init?.body)).answer_json_schema).toBeUndefined()
+        return Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start(stream) {
+                controller = stream
+              },
+              cancel() {
+                cancelled = true
+              },
+            }),
+          ),
+        )
+      },
+    })
+    const stream = provider.composeStream(TENANT, 'What changed?', PASSAGES, { signal })
+      [Symbol.asyncIterator]()
+    const first = stream.next()
+    await Promise.resolve()
+    const line = JSON.stringify({ item: { type: 'answer', text: 'Oysters died ' } }) + '\n'
+    controller!.enqueue(new TextEncoder().encode(line.slice(0, 20)))
+    controller!.enqueue(new TextEncoder().encode(line.slice(20)))
+    expect(await first).toEqual({ done: false, value: 'Oysters died ' })
+    const next = stream.next()
+    controller!.enqueue(new TextEncoder().encode(
+      JSON.stringify({ item: { type: 'answer', text: 'after heat. [1]' } }) + '\n',
+    ))
+    expect(await next).toEqual({ done: false, value: 'after heat. [1]' })
+    await stream.return?.()
+    expect(cancelled).toBe(true)
+  })
+
+  it('bounds all prompt material, including titles, collection labels and earlier turns', async () => {
+    const { provider, bodies } = providerAnswering({ answer: 'A cited answer. [1]' })
+    const long = 'x'.repeat(100_000)
+    const passages = Array.from({ length: COMPOSE_MAX_PASSAGES }, () => ({
+      source: long,
+      title: long,
+      text: long,
+    }))
+    await provider.compose(TENANT, long, passages, {
+      context: Array.from({ length: 24 }, () => ({ author: 'USER', text: long })),
+    })
+    const body = bodies[0]!
+    expect(String(body.query).length + (body.prompt as { system: string }).system.length)
+      .toBeLessThanOrEqual(COMPOSE_PROMPT_CHARS)
+    await expect(provider.compose(TENANT, 'q', [...passages, passages[0]!])).rejects.toThrow(
+      'Too many composition passages',
+    )
+    expect(bodies).toHaveLength(1)
+  })
+
+  it("writes once on the host's plain streaming path from the numbered passages", async () => {
     const { provider, bodies } = providerAnswering({ answer: ' Oysters died after heat. [1] ' })
     const answer = await provider.compose(TENANT, 'What changed?', PASSAGES, {
       context: [{ author: 'USER', text: 'An earlier question' }],
@@ -56,7 +167,7 @@ describe('AragProvider.compose', () => {
     expect(answer).toBe('Oysters died after heat. [1]')
     expect(bodies.length).toBe(1)
     const body = bodies[0]!
-    expect((body.answer_json_schema as { name: string }).name).toBe('composed_answer')
+    expect(body.answer_json_schema).toBeUndefined()
     expect(body.query).toBe([
       'Question: What changed?',
       '',
@@ -74,7 +185,7 @@ describe('AragProvider.compose', () => {
     expect(body.generative_model).toBe('host-model')
   })
 
-  it('composes as a plain answer when the model refuses structured output', async () => {
+  it('never attempts structured generation or a catalogue walk', async () => {
     const bodies: Record<string, unknown>[] = []
     const provider = new AragProvider({
       resolveBinding: () => ({
@@ -84,7 +195,7 @@ describe('AragProvider.compose', () => {
       }),
       fetchImpl: (input: string | URL | Request, init?: RequestInit) => {
         const url = typeof input === 'string' ? input : input.toString()
-        if (url.includes('/catalog')) return Promise.resolve(Response.json({ resources: {} }))
+        expect(url).toMatch(/\/ask$/)
         const body = JSON.parse(String(init?.body ?? '{}'))
         bodies.push(body)
         if (body.answer_json_schema) {
@@ -104,6 +215,7 @@ describe('AragProvider.compose', () => {
     const answer = await provider.compose(TENANT, 'What changed?', PASSAGES)
     expect(answer).toBe('Oysters died after heat. [1] Rust arrived earlier. [2]')
     const plain = bodies.at(-1)!
+    expect(bodies).toHaveLength(1)
     expect(plain.answer_json_schema).toBeUndefined()
     expect(plain.query).toBe(bodies[0]!.query)
     expect(plain.top_k).toBe(1)
