@@ -2,7 +2,7 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom'
-import type { Permission, TenantConfig } from '@research-portal/core'
+import { acceptsSiteFeedback, type Permission, type TenantConfig } from '@research-portal/core'
 import { ApiError, getKnowledgeBoxStatus, getTenantConfig } from '../api/client.ts'
 import { retryTenantConfig } from '../api/portal-metadata.ts'
 import {
@@ -12,7 +12,15 @@ import {
   useTextScale,
   useViewerScheme,
 } from '../lib/theme.ts'
-import { ArrowLeft, ArrowRight, type IconProps, Moon, Search, Sun } from '../components/icons.tsx'
+import {
+  ArrowLeft,
+  ArrowRight,
+  type IconProps,
+  MessageSquare,
+  Moon,
+  Search,
+  Sun,
+} from '../components/icons.tsx'
 import { Button, IconButton } from '../components/ui.tsx'
 import { CommandPalette } from '../components/CommandPalette.tsx'
 import { AccountMenu } from '../components/AccountMenu.tsx'
@@ -31,6 +39,7 @@ import { PortalFooter } from '../components/PortalFooter.tsx'
 import { LayoutAnchor } from '../components/LayoutLink.tsx'
 import { AcmdSiteFooter, AcmdSiteHeader } from '../components/AcmdChrome.tsx'
 import { SignInDialog } from '../components/SignInDialog.tsx'
+import { SiteFeedbackDialog } from '../components/SiteFeedbackDialog.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { AccessUnavailable } from '../components/PortalAccessGate.tsx'
 import {
@@ -166,6 +175,7 @@ export function TenantLayout() {
   const [logoFailed, setLogoFailed] = useState(false)
   const [headerQuery, setHeaderQuery] = useState('')
   const [signInOpen, setSignInOpen] = useState(false)
+  const [feedbackOpen, setFeedbackOpen] = useState(false)
   const access = useAccess()
   const auth = access.state.session
   const accountName = auth?.user?.name
@@ -419,6 +429,21 @@ export function TenantLayout() {
   const hasImageLogo = Boolean(config.branding.logoUrl && !logoFailed && !isCorpusKit)
   const SchemeIcon = scheme === 'dark' ? Moon : Sun
 
+  // Offered only where the server says this portal takes feedback and the reader may send it.
+  const takesFeedback = acceptsSiteFeedback(config) && access.can('portal.ask', scope)
+  const feedbackControl = takesFeedback && (
+    <span className='hidden sm:inline-flex'>
+      <IconButton
+        onClick={() => setFeedbackOpen(true)}
+        label={ui('Send feedback')}
+        icon={MessageSquare}
+        size='lg'
+        aria-haspopup='dialog'
+        className='rp-chrome-header-control'
+      />
+    </span>
+  )
+
   const accountControl = (
     <AccountMenu
       entries={menuEntries}
@@ -492,6 +517,7 @@ export function TenantLayout() {
                         />
                       </span>
                     )}
+                    {feedbackControl}
                     <span className='hidden sm:inline-flex'>
                       <HelpMenu slug={config.slug} />
                     </span>
@@ -666,6 +692,7 @@ export function TenantLayout() {
                           />
                         </span>
                       )}
+                      {feedbackControl}
                       <span className='hidden sm:inline-flex'>
                         <HelpMenu slug={config.slug} />
                       </span>
@@ -895,6 +922,26 @@ export function TenantLayout() {
                     {ui(item.label)}
                   </NavLink>
                 ))}
+                {takesFeedback && (
+                  <Button
+                    variant='ghost'
+                    aria-haspopup='dialog'
+                    onClick={() => {
+                      // The sheet goes at once, not after its exit: its focus trap and scroll
+                      // lock must not outlive it under another modal. The dialog gives the focus
+                      // back to the menu button, which stays.
+                      navRestoreFocus.current = false
+                      navTriggerRef.current?.focus()
+                      setNavOpen(false)
+                      setNavMounted(false)
+                      setFeedbackOpen(true)
+                    }}
+                    className='rp-navsheet-action rp-chrome-sheet-action rp-focus-inverse'
+                  >
+                    <MessageSquare className='shrink-0' />
+                    {ui('Send feedback')}
+                  </Button>
+                )}
                 <AccountMenu
                   entries={menuEntries}
                   portalRole={portalRole}
@@ -962,6 +1009,14 @@ export function TenantLayout() {
         {signInOpen
           ? <SignInDialog user={auth?.user} onClose={() => setSignInOpen(false)} />
           : null}
+
+        {takesFeedback && (
+          <SiteFeedbackDialog
+            slug={config.slug}
+            open={feedbackOpen}
+            onClose={() => setFeedbackOpen(false)}
+          />
+        )}
 
         {paletteOpen
           ? (
