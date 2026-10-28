@@ -247,10 +247,10 @@ export class AgentAnswerRecorder extends AnswerRecorder {
         source: lookup.sourceId,
         storeId: this.storeIds.get(lookup.sourceId) ?? null,
         operation: 'search',
-        status: failed || step?.status === 'failed'
-          ? 'error'
-          : this.value.status === 'cancelled'
+        status: this.value.status === 'cancelled'
           ? 'cancelled'
+          : failed || step?.status === 'failed'
+          ? 'error'
           : 'ok',
         durationMs: step?.durationMs ?? 0,
       })

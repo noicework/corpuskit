@@ -326,14 +326,32 @@ Deno.test('agent failures and early iterator closure retain error and cancelled 
         mode: 'agent',
         sources: [{ id: 'driver', label: 'Soil Research Hub' }],
       }
+      yield {
+        type: 'agent-step',
+        id: 'lookup',
+        module: 'search',
+        title: 'Soil lookup',
+        status: 'started',
+      }
+      yield {
+        type: 'agent-sources',
+        stepId: 'lookup',
+        source: { id: 'driver', label: 'Soil Research Hub' },
+        question: 'Rephrased soil question',
+        chunks: [{ id: 'soil-chunk', title: 'Soil review', text: passage }],
+      }
       throw new Error('private-agent-failure')
     },
   })
   const options = { store, provider, host, portals: [host], question }
   const cancelled = recordAgentAnswer(options)
   expect((await cancelled.next()).value?.type).toBe('agent-start')
+  await cancelled.next()
+  await cancelled.next()
   await cancelled.return(undefined)
   expect(store.list(host.slug)[0]?.status).toBe('cancelled')
+  expect(store.list(host.slug)[0]?.calls[0]?.status).toBe('cancelled')
+  expect(store.list(host.slug)[0]?.agent?.lookups[0]?.question).toBe('Rephrased soil question')
   await expect((async () => {
     for await (const _event of recordAgentAnswer(options)) { /* Drain. */ }
   })()).rejects.toThrow('private-agent-failure')
