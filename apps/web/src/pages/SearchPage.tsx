@@ -944,9 +944,16 @@ export function SearchPage() {
             <p className='text-sm font-medium tabular-nums text-ink-3'>
               {results.lookup?.kind === 'author' && results.lookup.matched
                 ? authorCount(filteredResults, ui)
-                : ui(filteredResults.length === 1 ? '{count} resource' : '{count} resources', {
-                  count: filteredResults.length,
-                })}
+                : ui(
+                  federated
+                    ? filteredResults.length === 1 ? '{count} result' : '{count} results'
+                    : filteredResults.length === 1
+                    ? '{count} resource'
+                    : '{count} resources',
+                  {
+                    count: filteredResults.length,
+                  },
+                )}
               {answerMode && citedResults.length > 0
                 ? ui(' · {value1} cited', { value1: citedResults.length })
                 : ''}
@@ -1515,15 +1522,13 @@ export function SearchPage() {
                               })}
                             </div>
                           )
-                          : (
+                          : !federated
+                          ? (
                             <p className='text-xs font-medium text-ink-3'>
-                              {ui(
-                                federated
-                                  ? 'Matches from each collection in turn'
-                                  : 'Every match, most relevant first',
-                              )}
+                              {ui('Every match, most relevant first')}
                             </p>
-                          )}
+                          )
+                          : null}
                         {canGenerate && !federated
                           ? (
                             <Button

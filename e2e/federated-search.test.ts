@@ -9,7 +9,9 @@ const sharedPath = `${searchPath}&federated=1`
 
 async function ready(page: Page) {
   await page.waitForFunction(() =>
-    document.querySelector('main [role="status"]')?.textContent?.includes('results shown') === true
+    /\d+ results?/.test(
+      document.querySelector('main [role="status"] > .sr-only')?.textContent ?? '',
+    )
   )
 }
 
@@ -90,13 +92,16 @@ Deno.test('an all-failed shared search names every unavailable collection and av
         await ready(page)
         const state = await page.evaluate(() => ({
           status: document.querySelector('main [role="status"]')?.textContent,
+          statuses: document.querySelectorAll('main [role="status"]').length,
           text: document.querySelector('main')?.textContent,
           cards: document.querySelectorAll('article').length,
           scroll: document.documentElement.scrollWidth,
         }))
-        expect(state.status).toContain('Southern Waters Research Portal could not be searched')
-        expect(state.status).toContain('Soil partner collection could not be searched')
-        expect(state.status).toContain('Water partner collection could not be searched')
+        expect(state.statuses).toBe(1)
+        expect(state.status?.match(/Not searched:/g)).toHaveLength(1)
+        expect(state.status).toContain('Southern Waters Research Portal (search unavailable)')
+        expect(state.status).toContain('Soil partner collection (time limit reached)')
+        expect(state.status).toContain('Water partner collection (access unavailable)')
         expect(state.text).toContain('No resources returned from these collections')
         expect(state.text).not.toContain('No resources matched that search')
         expect(state.cards).toBe(0)
@@ -133,16 +138,35 @@ Deno.test('shared search switch, attribution, source filter and failure status w
     const state = await page.evaluate(() => ({
       checked: document.querySelector('[role="switch"]')?.getAttribute('aria-checked'),
       url: location.search,
-      badges: [...document.querySelectorAll('article .rp-badge')].map((el) => el.textContent),
+      badges: [...document.querySelectorAll('article .rp-badge[title]')].map((el) => ({
+        visible: el.lastElementChild?.textContent,
+        prefix: el.querySelector('.sr-only')?.textContent,
+        title: el.getAttribute('title'),
+      })),
       status: document.querySelector('main [role="status"]')?.textContent,
+      statuses: document.querySelectorAll('main [role="status"]').length,
       live: document.querySelector('main [role="status"]')?.getAttribute('aria-live'),
+      count: document.querySelector('main p.tabular-nums')?.textContent?.trim(),
+      text: document.querySelector('main')?.textContent,
     }))
     expect(state.checked).toBe('true')
     expect(state.url).toContain('federated=1')
     expect(state.url).toContain('answer=0')
-    expect(state.badges.some((badge) => badge?.includes('Soil partner collection'))).toBe(true)
-    expect(state.badges.some((badge) => badge?.includes('Southern Waters'))).toBe(true)
-    expect(state.status).toContain('Water partner collection could not be searched')
+    expect(state.badges.some((badge) => badge.visible === 'Soil partner collection')).toBe(true)
+    expect(state.badges.some((badge) => badge.visible === 'Southern Waters Research Portal')).toBe(
+      true,
+    )
+    expect(
+      state.badges.every((badge) => badge.prefix === 'Source: ' && badge.title === badge.visible),
+    )
+      .toBe(true)
+    expect(state.count).toMatch(/^\d+ results$/)
+    expect(state.text).not.toContain('results shown from the shared search')
+    expect(state.text).not.toContain('Matches from each collection in turn')
+    expect(state.text).not.toContain('Partner collection')
+    expect(state.statuses).toBe(1)
+    expect(state.status?.match(/Not searched:/g)).toHaveLength(1)
+    expect(state.status).toContain('Water partner collection (access unavailable)')
     expect(state.live).toBe('polite')
     const peerCard = await page.evaluate(() => {
       const card = [...document.querySelectorAll('article')].find((el) =>
@@ -162,6 +186,8 @@ Deno.test('shared search switch, attribution, source filter and failure status w
       ),
     ).toBe(true)
     expect(ax.nodes.some((node) => node.role?.value === 'status')).toBe(true)
+    expect(ax.nodes.map((node) => node.name?.value).filter((name) => name?.includes('Source')))
+      .toContain('Source:')
     const searchesBefore = server.requests.filter((r) => r.path.includes('/search')).length
     await page.evaluate(() => document.querySelector<HTMLSelectElement>('#search-source')!.focus())
     await page.keyboard.type('Soil')
@@ -177,7 +203,7 @@ Deno.test('shared search switch, attribution, source filter and failure status w
       ),
     ).toBe(true)
     expect(await page.evaluate(() => document.querySelector('main [role="status"]')?.textContent))
-      .toContain('2 results shown')
+      .toContain('2 results')
     expect(server.requests.filter((r) => r.path.includes('/search')).length).toBe(searchesBefore)
     await page.goto(`${server.url}${sharedPath}&source=peer%3Asoil-partner`)
     await ready(page)
@@ -310,6 +336,29 @@ Deno.test('shared search reflows at 320px, uses appearance tokens and saves the 
     })
     await page.waitForFunction(() => document.documentElement.dataset.textSpacing === 'custom')
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
+    const badges = await page.evaluate(() =>
+      [...document.querySelectorAll('article .rp-badge[title]')].map((badge) => {
+        const label = badge.lastElementChild!
+        const style = getComputedStyle(label)
+        return {
+          height: label.getBoundingClientRect().height,
+          lineHeight: parseFloat(style.lineHeight),
+          overflow: style.textOverflow,
+          whiteSpace: style.whiteSpace,
+          title: badge.getAttribute('title'),
+          label: label.textContent,
+          clipped: label.scrollWidth > label.clientWidth,
+        }
+      })
+    )
+    expect(badges.length).toBeGreaterThan(0)
+    expect(badges.some((badge) => badge.clipped)).toBe(true)
+    for (const badge of badges) {
+      expect(badge.height).toBeLessThanOrEqual(badge.lineHeight + 1)
+      expect(badge.overflow).toBe('ellipsis')
+      expect(badge.whiteSpace).toBe('nowrap')
+      expect(badge.title).toBe(badge.label)
+    }
     if (shots) {
       await Deno.writeFile(
         `${shots}/search-text200-390-dark.png`,

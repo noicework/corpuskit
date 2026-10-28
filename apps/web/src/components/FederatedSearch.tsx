@@ -66,25 +66,45 @@ export function FederatedSearchStatus({ results, loading, count }: {
 }) {
   const { ui } = usePortalLocale()
   return (
-    <div role='status' aria-live='polite' aria-atomic='true' className='mt-4 text-sm text-ink-2'>
-      {loading ? <p>{ui('Searching this collection and partner collections…')}</p> : results
+    <div role='status' aria-live='polite' aria-atomic='true' className='text-sm text-ink-2'>
+      {loading
+        ? <p className='mt-4'>{ui('Searching this collection and partner collections…')}</p>
+        : results
         ? (
           <>
-            <p>
-              {ui('{count} results shown from the shared search.', { count })}
-            </p>
-            {(results.failedSources ?? []).map((source) => (
-              <p key={source.id} className='mt-1'>
-                {ui(
-                  source.reason === 'timeout'
-                    ? '{source} could not be searched within the time limit.'
-                    : '{source} could not be searched.',
-                  {
-                    source: source.label,
-                  },
-                )}
-              </p>
-            ))}
+            <span className='sr-only'>
+              {ui(count === 1 ? '{count} result' : '{count} results', { count })}
+            </span>
+            {results.failedSources?.length
+              ? (
+                <div
+                  className='mt-4 rounded-[var(--rp-radius)] border p-3'
+                  style={{
+                    borderColor: 'var(--rp-warn-line)',
+                    background: 'var(--rp-warn-bg)',
+                    color: 'var(--rp-warn-ink)',
+                  }}
+                >
+                  <p className='font-medium'>{ui('Not searched:')}</p>
+                  <ul className='mt-1 space-y-1'>
+                    {results.failedSources.map((source) => (
+                      <li key={source.id}>
+                        {ui('{source} ({reason})', {
+                          source: source.label,
+                          reason: ui(
+                            source.reason === 'timeout'
+                              ? 'time limit reached'
+                              : source.reason === 'unauthorised'
+                              ? 'access unavailable'
+                              : 'search unavailable',
+                          ),
+                        })}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )
+              : null}
           </>
         )
         : null}
@@ -97,14 +117,11 @@ export function SearchSourceBadge({ resource }: { resource: ScoredResource }) {
   return resource.source
     ? (
       <span
-        className='rp-badge max-w-full [overflow-wrap:anywhere]'
-        style={{
-          whiteSpace: 'normal',
-          // Wrapped labels need corners small enough to keep every line visible.
-          borderRadius: 'min(var(--rp-radius-chip), var(--rp-radius))',
-        }}
+        className='rp-badge min-w-0 max-w-full'
+        title={resource.source.label}
       >
-        {ui('Source: {source}', { source: resource.source.label })}
+        <span className='sr-only'>{ui('Source') + ': '}</span>
+        <span className='min-w-0 truncate'>{resource.source.label}</span>
       </span>
     )
     : null
@@ -112,12 +129,10 @@ export function SearchSourceBadge({ resource }: { resource: ScoredResource }) {
 
 /** Partner passages are read here, or at their allowed origin; never in the host's reader. */
 export function PeerSearchResult({ resource }: { resource: ScoredResource }) {
-  const { ui } = usePortalLocale()
   const title = presentTitle(resource.title)
   return (
     <article className='rp-card min-w-0 p-4 sm:p-5 [overflow-wrap:anywhere]'>
       <SearchSourceBadge resource={resource} />
-      <p className='mt-2 text-xs text-ink-3'>{ui('Partner collection')}</p>
       <h3 className='mt-2.5 text-base font-semibold text-ink'>
         {resource.peerUrl
           ? (
