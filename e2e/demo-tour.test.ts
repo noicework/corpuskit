@@ -100,12 +100,14 @@ describe('the guided tour', () => {
             ),
           }
         })
+      // The band already said what this is, so the tour opens on its first step.
       let now = await state()
       expect(now.modal).toBe(true)
-      expect(now.heading).toBe('See what this platform does')
+      expect(now.heading).toBe('Ask a question')
       expect(now.focusedHeading).toBe(true)
-      expect(now.status).toBe('See what this platform does')
+      expect(now.status).toBe('Step 1 of 5: Ask a question')
       expect(now.stageHidden).toBe(true)
+      expect(now.tryIt?.startsWith('/t/grains/ask?ask=')).toBe(true)
 
       // Tab stays inside the dialog, whichever way it goes.
       for (let index = 0; index < 8; index += 1) await page.keyboard.press('Tab')
@@ -129,14 +131,12 @@ describe('the guided tour', () => {
         page,
         () =>
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
-            'Ask a question',
-        'the first scene',
+            'Read the passages it used',
+        'the second scene',
       )
       now = await state()
-      expect(now.status).toBe('Step 1 of 5: Ask a question')
+      expect(now.status).toBe('Step 2 of 5: Read the passages it used')
       expect(now.focusedHeading).toBe(true)
-      expect(now.tryIt?.startsWith('/t/grains/ask?ask=')).toBe(true)
-      await page.keyboard.press('ArrowRight')
       await page.keyboard.press('ArrowRight')
       await page.keyboard.press('ArrowRight')
       await settle(
@@ -177,7 +177,6 @@ describe('the guided tour', () => {
     const page = await browser.newPage(`${server.url}/t/grains`)
     try {
       await openFromBand(page)
-      await page.keyboard.press('ArrowRight')
       await settle(
         page,
         () => document.querySelector('dialog[data-demo-tour] a.rp-btn-primary') !== null,
@@ -212,8 +211,6 @@ describe('the guided tour', () => {
           await page.reload()
           await page.evaluate(() => document.documentElement.style.fontSize = '22px')
           await openFromBand(page)
-          // Into a scene, where the illustration and its typed question live.
-          await page.keyboard.press('ArrowRight')
           await settle(
             page,
             () => document.querySelector('dialog[data-demo-tour] a.rp-btn-primary') !== null,

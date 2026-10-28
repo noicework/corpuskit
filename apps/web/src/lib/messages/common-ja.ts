@@ -2,11 +2,9 @@
 export const COMMON_JA: Readonly<Record<string, string>> = {
   // The guided tour on the home page.
   'See what this platform does': 'このプラットフォームでできること',
-  'Short steps on asking questions here and checking where each answer came from. Each step has a button to try it.':
-    'ここで質問する方法と、各回答の出典を確かめる方法を短いステップで案内します。各ステップには試すためのボタンがあります。',
+  'Ask a question, check where the answer came from, and open the page it cites.':
+    '質問し、回答の出典を確かめ、引用されたページを開けます。',
   'Take the tour': 'ツアーを見る',
-  'Start': '開始',
-  'Explore on my own': '自分で見て回る',
   'That is the tour': 'ツアーは以上です',
   'Pick a place to start, or close this to stay on the home page.':
     '始める場所を選ぶか、閉じてホームページに留まってください。',

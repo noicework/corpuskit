@@ -10,7 +10,7 @@ import { Button, IconButton } from './ui.tsx'
 import { ArrowLeft, ArrowRight, X } from './icons.tsx'
 
 /**
- * The guided tour: one dialog, a welcome, a scene per step and a finish. Each scene puts its
+ * The guided tour: one dialog, a scene per step and a finish. Each scene puts its
  * words and its one button beside an illustration drawn with the portal's own components, so
  * the reader sees the feature before they are sent to it. Every control in the dialog is the
  * same size: one button family, one footer rhythm.
@@ -24,21 +24,15 @@ import { ArrowLeft, ArrowRight, X } from './icons.tsx'
 
 const FOCUSABLE = 'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
 
-type Step = { kind: 'welcome' } | { kind: 'scene'; scene: ResolvedScene; index: number } | {
-  kind: 'finish'
-}
+type Step = { kind: 'scene'; scene: ResolvedScene; index: number } | { kind: 'finish' }
 
 export function DemoTourDialog({
   onClose,
   slug,
-  heading,
-  intro,
   scenes,
 }: {
   onClose: () => void
   slug: string
-  heading: string
-  intro: string
   scenes: ResolvedScene[]
 }) {
   const { ui } = usePortalLocale()
@@ -48,8 +42,9 @@ export function DemoTourDialog({
   const close = useRef(onClose)
   close.current = onClose
   const [at, setAt] = useState(0)
+  // The band on the home page has already said what this is, so the tour opens on its first
+  // step rather than on a welcome that says it again.
   const steps: Step[] = [
-    { kind: 'welcome' },
     ...scenes.map((scene, index): Step => ({ kind: 'scene', scene, index })),
     { kind: 'finish' },
   ]
@@ -93,8 +88,10 @@ export function DemoTourDialog({
       return
     }
     if (event.key !== 'Tab') return
+    // The illustration's own links and buttons are inert, so they are not stops: letting Tab
+    // run on to them would carry focus out of the dialog into the browser's chrome.
     const stops = Array.from(event.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE))
-      .filter((element) => element.getClientRects().length > 0)
+      .filter((element) => element.getClientRects().length > 0 && !element.closest('[inert]'))
     const first = stops[0], end = stops.at(-1)
     if (!first || !end) return
     const active = document.activeElement as HTMLElement | null
@@ -110,11 +107,7 @@ export function DemoTourDialog({
     }
   }
 
-  const title = step.kind === 'welcome'
-    ? heading
-    : step.kind === 'finish'
-    ? ui('That is the tour')
-    : step.scene.title
+  const title = step.kind === 'finish' ? ui('That is the tour') : step.scene.title
   // Only the scenes are counted, so the count agrees with the welcome's own words.
   const position = step.kind === 'scene'
     ? ui('Step {n} of {total}', { n: step.index + 1, total: scenes.length })
@@ -155,9 +148,7 @@ export function DemoTourDialog({
             {title}
           </h2>
           <div id={`${id}-body`} className='mt-3 space-y-3 text-base leading-relaxed text-ink-2'>
-            {step.kind === 'welcome'
-              ? <p>{intro}</p>
-              : step.kind === 'finish'
+            {step.kind === 'finish'
               ? <p>{ui('Pick a place to start, or close this to stay on the home page.')}</p>
               : <p>{step.scene.body}</p>}
           </div>
@@ -195,30 +186,19 @@ export function DemoTourDialog({
               ))}
             </div>
             <div className='ml-auto flex shrink-0 items-center gap-2'>
-              {step.kind === 'welcome'
+              {at > 0
                 ? (
-                  <>
-                    <Button variant='ghost' onClick={() => close.current()}>
-                      {ui('Explore on my own')}
-                    </Button>
-                    <Button trailingIcon={ArrowRight} onClick={next}>
-                      {ui('Start')}
-                    </Button>
-                  </>
+                  <Button variant='ghost' leadingIcon={ArrowLeft} onClick={back}>
+                    {ui('Back')}
+                  </Button>
                 )
+                : null}
+              {step.kind === 'finish'
+                ? <Button onClick={() => close.current()}>{ui('Done')}</Button>
                 : (
-                  <>
-                    <Button variant='ghost' leadingIcon={ArrowLeft} onClick={back}>
-                      {ui('Back')}
-                    </Button>
-                    {step.kind === 'finish'
-                      ? <Button onClick={() => close.current()}>{ui('Done')}</Button>
-                      : (
-                        <Button trailingIcon={ArrowRight} onClick={next}>
-                          {ui('Next')}
-                        </Button>
-                      )}
-                  </>
+                  <Button trailingIcon={ArrowRight} onClick={next}>
+                    {ui('Next')}
+                  </Button>
                 )}
             </div>
           </div>
@@ -238,7 +218,7 @@ export function DemoTourDialog({
           <div key={`${at}-${step.kind}`} className='rp-tour-reveal'>
             {step.kind === 'scene'
               ? <SceneIllustration id={step.scene.id} slug={slug} />
-              : <SceneList scenes={scenes} done={step.kind === 'finish'} />}
+              : <SceneList scenes={scenes} done />}
           </div>
         </div>
       </div>

@@ -62,9 +62,7 @@ export function DemoTour({ config }: { config: TenantConfig }) {
   const scenes = resolveScenes(config, firstPdfId, ui)
   const heading = copy?.heading ?? ui('See what this platform does')
   const intro = copy?.intro ??
-    ui(
-      'Short steps on asking questions here and checking where each answer came from. Each step has a button to try it.',
-    )
+    ui('Ask a question, check where the answer came from, and open the page it cites.')
 
   function closeTour() {
     markTourDone()
@@ -94,8 +92,6 @@ export function DemoTour({ config }: { config: TenantConfig }) {
           <DemoTourDialog
             onClose={closeTour}
             slug={slug}
-            heading={heading}
-            intro={intro}
             scenes={scenes}
           />
         )
