@@ -56,11 +56,18 @@ tokens are ALWAYS present. Portals created in the app start on the `corpuskit` p
 - `--rp-accent` - the decorative accent ONLY: nav underline, dots, bars, solid selection fills.
   **Never as text and never as a thin selected border on white** - several palettes' accents fail
   text contrast by design.
+- `--rp-accent-line` - the accent as a mark someone has to SEE (WCAG 1.4.11): an on switch's edge, a
+  relevance bar, the matched-passage rule, a "new results" dot. The accent itself when it reaches
+  3:1 on the surface, the app ground and the grey panels, else stepped toward the ink.
+  `--rp-accent-on-primary` is the same for the current-page underline on the brand ground.
 - `--rp-on-accent` - text/ticks on solid accent (citation pills, checkmarks). Not white.
 - `--rp-accent-fg` - accent as TEXT: links, citation superscripts, chip labels, "show more".
 - `--rp-focus` - focus indicator; use `.rp-focus` / `--rp-ring` rather than outlining in accent. A
   ring is a box-shadow, which forced-colours modes drop, so a focus rule keeps
-  `outline: 2px solid transparent` under it (never `outline: none`); those modes paint it.
+  `outline: 2px solid transparent` under it (never `outline: none`); those modes paint it. The focus
+  colour reads at 3:1 on the surface, the grey panels and the wash; on the hero (a brand gradient or
+  photo) use `.rp-focus-inverse` / `--rp-ring-inverse`, as the hero chips and the hero ask field
+  (`.rp-hero-field`) do, because a ring in the brand's own tone vanishes there.
 - `--rp-wash` / `--rp-wash-strong` - tinted selection grounds (selected chips, bubbles, tiles,
   sidebar actives). Use these instead of `color-mix` with the accent - washes are authored per
   palette and are not always accent-tinted.

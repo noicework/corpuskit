@@ -843,6 +843,8 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
         }
         if (stores.branding) call('branding.put', slug, 'image-hero', asset)
         const args: Record<string, unknown[]> = {
+          'duplicates.decide': [slug, 'res-1~res-2', 'keep-both'],
+          'duplicates.erase': [slug],
           'lifecycle.set': [slug, { status: 'read_only', limits: null }],
           'lifecycle.remove': [slug],
           'lifecycle.erase': [slug],
@@ -888,6 +890,16 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
             good: true,
             text: 'Private comment',
             ts: new Date(now).toISOString(),
+          }],
+          'siteFeedback.save': [slug, {
+            id: '00000000-0000-4000-8000-000000000001',
+            slug,
+            createdAt: new Date(now).toISOString(),
+            category: 'general',
+            message: 'Private message',
+            email: 'reader@example.org',
+            pageUrl: 'https://portal.example.org/t/marine',
+            delivery: 'pending',
           }],
           'routing.record': [slug, {
             ts: new Date(now).toISOString(),

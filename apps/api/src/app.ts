@@ -1,3 +1,5 @@
+import { DuplicateReviewStore } from './duplicate-store.ts'
+import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import type { PublicHttpClient } from './public-http.ts'
 import { LinkHealthStore } from './link-health-store.ts'
 import type { LinkHealthStoreApi } from './link-health.ts'
@@ -45,6 +47,7 @@ import {
   type Declaration,
   declaredRoute,
   declaredSubAction,
+  ESTATE_MCP_ROUTE,
   infrastructureHandler,
   isInfrastructurePreflight,
   isPrivileged,
@@ -82,6 +85,7 @@ import {
   authoriseSubActions as checkSubActions,
   type AuthorityDependencies,
   evaluateOperation,
+  keyPortalRoles,
   type RequestAuthority,
   researchOwner as resolveResearchOwner,
   selectRequestAuthority,
@@ -327,11 +331,19 @@ import {
   type RoutingLogApi,
   SessionsStore,
   type SessionsStoreApi,
+  SiteFeedbackStore,
   SourceStore,
   type SourceStoreApi,
   WatchStore,
   type WatchStoreApi,
 } from './stores.ts'
+import {
+  siteFeedbackAvailable,
+  siteFeedbackHandler,
+  siteFeedbackHistoryHandler,
+  type SiteFeedbackNotifier,
+  type SiteFeedbackStoreApi,
+} from './site-feedback.ts'
 import { MAX_SYNC_CAP, READ_ONLY_BOX_MESSAGE, recordSyncFailure, syncSource } from './scheduler.ts'
 import {
   implementSuggestion,
@@ -377,8 +389,10 @@ import {
   planLabelsetRebuild,
 } from './labelsets.ts'
 import { registerMcpAuthRateLimit, registerMcpRoutes } from './mcp.ts'
+import { DEFAULT_ESTATE_SOURCE_TIMEOUT_MS, registerEstateMcpRoutes } from './estate-mcp.ts'
 import { registerAccessRoutes } from './access-routes.ts'
 import { registerAuditRoutes } from './audit-routes.ts'
+import { PORTAL_EXPORT_PATH, registerPortalExport } from './portal-export.ts'
 import {
   erasePortal,
   type ErasureTransaction,
@@ -711,6 +725,7 @@ const SYNTHESIS_READS_AT_ONCE = 4
 const verdictEnum = z.enum(['supports', 'partial', 'not-relevant', 'contradicts'])
 const evidenceCreateSchema = z.object({
   passage: z.string().min(1).max(8000),
+  page: z.number().int().positive().max(100_000).optional(),
   resourceId: z.string().min(1).max(64),
   resourceTitle: z.string().min(1).max(300),
   score: z.number().min(0).max(1).nullable().optional(),
@@ -857,6 +872,8 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
+  siteFeedback: z.boolean().optional(),
   /**
    * The portal's header links, footer and home page, or null to clear them. Checked against
    * `PortalLayoutSchema` only after authorisation, so a caller who may not change the portal's
@@ -868,6 +885,7 @@ const renameTenantSchema = z.object({
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
+  'siteFeedback',
 ])
 const kgImplementSchema = z.object({
   applyExisting: z.boolean(),
@@ -1017,6 +1035,7 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  duplicates?: DuplicateReviewStore
   lifecycle?: PortalLifecycleStore
   /** Internally supplied authoritative state, never sourced from a request. */
   rbac?: RbacState
@@ -1037,6 +1056,13 @@ export interface BuildAppOptions {
   insights?: InsightsStoreApi
   /** Readers' ratings of answers, kept for the portal's curators; the on-disk store when omitted. */
   feedback?: FeedbackStoreApi
+  /** Readers' messages to the portal team, kept as they are sent; the on-disk store when omitted. */
+  siteFeedback?: SiteFeedbackStoreApi
+  /**
+   * Where readers' messages go (the Worker's email binding). Without it no portal takes feedback,
+   * whatever its `siteFeedback` setting says.
+   */
+  siteFeedbackNotifier?: SiteFeedbackNotifier
   sessions?: SessionsStoreApi
   /** Source registry; shared with startScheduler in server.ts so a scheduled sync and a
    *  concurrent HTTP write don't clobber each other. A fresh store when omitted (tests). */
@@ -1108,6 +1134,9 @@ export interface BuildAppOptions {
   /** Requests/min per address for POST /api/ask-estate, which fans one request across every
    *  tenant. Defaults to env RATE_LIMIT_ESTATE_PER_MIN, or 6. 0 disables. */
   rateLimitEstatePerMin?: number
+  /** How long one portal may take in an estate MCP call before it is named as a failed source.
+   *  Defaults to env ESTATE_SOURCE_TIMEOUT_MS, or 25 seconds. */
+  estateSourceTimeoutMs?: number
   /** Authentication attempts/min/IP at the MCP endpoint. Defaults to 60. 0 disables. */
   rateLimitMcpAuthPerMin?: number
 }
@@ -1119,13 +1148,19 @@ interface RequestAuthorisation {
   aggregateAuthority(): Promise<RequestAuthority>
   /** The selected portals the caller may use, or without a selection their directory's. */
   aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
+  /**
+   * The portals one estate MCP tool call may reach on that tool's own permission, chosen as
+   * `aggregate` chooses them. Admission against the daily ask limit is left to each portal.
+   */
+  estatePortals(tool: Declaration, slugs?: readonly string[]): Promise<TenantConfig[]>
 }
 /**
  * Which portals belong in the caller's directory: the portal list, and the portals a cross-portal
  * ask reaches when it names none. Being able to read a portal is not enough, or every public
  * portal on a deployment would be listed to anyone. Platform authority lists every portal; anyone
  * else gets the portals they hold a role on, directly or through a group, and the portal whose
- * canonical hostname is the request's host. A listed portal must still be readable.
+ * canonical hostname is the request's host. A key's roles are the portals its scope reaches. A
+ * listed portal must still be readable.
  */
 function portalDirectory(
   authority: RequestAuthority,
@@ -1133,7 +1168,11 @@ function portalDirectory(
 ): (config: TenantConfig) => boolean {
   if (isPlatformAuthority(authority)) return () => true
   const host = normaliseHostname(requestHostname)
-  const roles = authority.kind === 'session' ? authority.effectiveRoles.portalRoles : []
+  const roles = authority.kind === 'session'
+    ? authority.effectiveRoles.portalRoles
+    : authority.kind === 'key'
+    ? keyPortalRoles(authority)
+    : []
   return (config) =>
     roles.some((grant) => grant.slug === config.slug) ||
     (config.hostname !== undefined && normaliseHostname(config.hostname) === host)
@@ -1162,6 +1201,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Hosting lifecycle (docs/HOSTING.md). Every management write passes the lifecycle guard,
   // which lets a write reach a suspended portal only while it runs for a request the route
   // guard admitted for a platform principal. Without a configured store the state is transient.
+  const duplicates = opts.duplicates ?? new DuplicateReviewStore()
   const lifecycle = opts.lifecycle ?? new PortalLifecycleStore(undefined, opts.now)
   const provisionalBytes = opts.linkProvisionalBytes ??
     linkProvisionalBytes(process.env.LINK_PROVISIONAL_BYTES)
@@ -1186,6 +1226,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
   const insights = opts.insights ?? new InsightsStore()
   const feedback = opts.feedback ?? new FeedbackStore()
+  const siteFeedback = opts.siteFeedback ?? new SiteFeedbackStore()
   const routing = opts.routing ?? new RoutingLog()
   const sessions = opts.sessions ?? new SessionsStore()
   const watches = opts.watches ?? new WatchStore()
@@ -1481,84 +1522,99 @@ export function buildApp(opts: BuildAppOptions): Hono {
         return deny(scope)
       }
       // Selection rejects every aggregate bearer before any portal enumeration, including
-      // a key accompanied by an otherwise privileged ambient session.
+      // a key accompanied by an otherwise privileged ambient session. The estate MCP endpoint
+      // alone takes a key, which then reaches only the portals its own scope names.
       return await authority(scope)
+    }
+    /** The portals `declaration` may reach for this caller, as the cross-portal ask chooses them. */
+    const authorisedPortals = async (declaration: Declaration, slugs?: readonly string[]) => {
+      const selected = await aggregateAuthority()
+      const requested = slugs ? new Set(slugs) : undefined
+      // Without a selection the caller gets their directory. A selection, such as the alias
+      // host's portal, is authorised as it stands.
+      const listed = requested ? undefined : portalDirectory(selected, new URL(c.req.url).hostname)
+      const targets: TenantConfig[] = []
+      tenants.list(false, (config) => {
+        const slug = config.slug
+        if (requested && !requested.has(slug)) return false
+        if (listed && !listed(config)) return false
+        // The portal list still shows a suspended portal, with its status, so the picker
+        // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
+        // be read is left out on its own.
+        const hosting = readLifecycle(lifecycle, slug)
+        if (!hosting) return false
+        if (
+          declaration.path !== '/api/tenants' &&
+          hosting.status === 'suspended' && !isPlatformAuthority(selected)
+        ) return false
+        if (!AccessModeSchema.safeParse(config.accessMode).success) return false
+        const policy = {
+          slug,
+          accessMode: config.accessMode,
+          configuredTenantId: configuredTenantId,
+        }
+        // Candidate filtering is pure: a hidden portal must not latch a request denial.
+        const principal = selected.kind === 'break-glass'
+          ? normalisePrincipal({
+            kind: 'user',
+            tenantId: configuredTenantId,
+            oid: 'break-glass',
+          }, { platformRole: 'owner', portalRoles: [] })
+          : selected.kind === 'key'
+          ? normalisePrincipal({ kind: 'user', tenantId: configuredTenantId, oid: selected.id }, {
+            portalRoles: [...keyPortalRoles(selected)],
+          })
+          : normalisePrincipal(
+            selected.kind === 'session'
+              ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
+              : { kind: 'anonymous' },
+            selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
+            policy,
+          )
+        const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
+        if (allowed) targets.push(config)
+        return allowed
+      })
+      if (targets.length === 0) {
+        // The portal list shows what the caller may see, and seeing none is not a refusal: an
+        // empty list says nothing a refusal would not. A cross-portal ask with nowhere to ask
+        // is still refused.
+        if (declaration.path === '/api/tenants') return targets
+        return deny({ kind: 'platform' })
+      }
+      // Terminal guards run only after the complete candidate set is filtered.
+      if (selected) {
+        try {
+          for (const config of targets) {
+            authoriseOperation(selected, declaration.permission, {
+              kind: 'portal',
+              slug: config.slug,
+            }, {
+              slug: config.slug,
+              accessMode: config.accessMode,
+              configuredTenantId: configuredTenantId,
+            })
+          }
+        } finally {
+          if (context.denialAudited) markDenialAudited(c.req.raw)
+        }
+      }
+      return targets
     }
     return {
       aggregateAuthority,
       aggregate: async (slugs) => {
-        const selected = await aggregateAuthority()
         const declaration = operation()
-        const requested = slugs ? new Set(slugs) : undefined
-        // Without a selection the caller gets their directory. A selection, such as the alias
-        // host's portal, is authorised as it stands.
-        const listed = requested
-          ? undefined
-          : portalDirectory(selected, new URL(c.req.url).hostname)
-        const targets: TenantConfig[] = []
-        tenants.list(false, (config) => {
-          const slug = config.slug
-          if (requested && !requested.has(slug)) return false
-          if (listed && !listed(config)) return false
-          // The portal list still shows a suspended portal, with its status, so the picker
-          // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
-          // be read is left out on its own.
-          const hosting = readLifecycle(lifecycle, slug)
-          if (!hosting) return false
-          if (
-            declaration.path !== '/api/tenants' &&
-            hosting.status === 'suspended' && !isPlatformAuthority(selected)
-          ) return false
-          if (!AccessModeSchema.safeParse(config.accessMode).success) return false
-          const policy = {
-            slug,
-            accessMode: config.accessMode,
-            configuredTenantId: configuredTenantId,
-          }
-          // Candidate filtering is pure: a hidden portal must not latch a request denial.
-          const principal = selected.kind === 'break-glass'
-            ? normalisePrincipal({
-              kind: 'user',
-              tenantId: configuredTenantId,
-              oid: 'break-glass',
-            }, { platformRole: 'owner', portalRoles: [] })
-            : normalisePrincipal(
-              selected.kind === 'session'
-                ? { kind: 'user', tenantId: selected.session.tenantId, oid: selected.session.oid }
-                : { kind: 'anonymous' },
-              selected.kind === 'session' ? selected.effectiveRoles : { portalRoles: [] },
-              policy,
-            )
-          const allowed = authorize(principal, declaration.permission, { kind: 'portal', slug })
-          if (allowed) targets.push(config)
-          return allowed
-        })
-        if (targets.length === 0) {
-          // The portal list shows what the caller may see, and seeing none is not a refusal: an
-          // empty list says nothing a refusal would not. A cross-portal ask with nowhere to ask
-          // is still refused.
-          if (declaration.path === '/api/tenants') return targets
-          return deny({ kind: 'platform' })
-        }
-        // Terminal guards run only after the complete candidate set is filtered.
-        if (selected) {
-          try {
-            for (const config of targets) {
-              authoriseOperation(selected, declaration.permission, {
-                kind: 'portal',
-                slug: config.slug,
-              }, {
-                slug: config.slug,
-                accessMode: config.accessMode,
-                configuredTenantId: configuredTenantId,
-              })
-            }
-          } finally {
-            if (context.denialAudited) markDenialAudited(c.req.raw)
-          }
-        }
+        const targets = await authorisedPortals(declaration, slugs)
         admitRequestAsks(c.req.raw, declaration, targets)
         return targets
+      },
+      estatePortals: async (tool, slugs) => {
+        if (
+          tool.kind !== 'mcp' || tool.aggregate !== 'authorised-portals' ||
+          operation().path !== ESTATE_MCP_ROUTE
+        ) return deny({ kind: 'platform' })
+        return await authorisedPortals(tool, slugs)
       },
       declared: async () => {
         if (operation().aggregate) return aggregateAuthority()
@@ -1820,7 +1876,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     // Portal modes and assignments are mutable, even for currently public bytes.
     if (
       c.req.path.startsWith('/api/t/') || c.req.path === '/api/tenants' ||
-      c.req.path === '/api/ask-estate'
+      c.req.path === '/api/ask-estate' || c.req.path === ESTATE_MCP_ROUTE
     ) c.header('Cache-Control', 'private, no-store')
   })
   registerInfrastructure(app, '*', async (c, next) => {
@@ -1961,7 +2017,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // frame-ancestors only, not a full CSP - the app legitimately loads
   // modules from esm.sh and fonts from Google, so default-src/script-src is
   // a later work item once those origins are catalogued. A stored file keeps
-  // its own stricter policy, which forbids framing as well.
+  // its own stricter policy, which forbids framing as well; a stored PDF keeps
+  // the one exception, framing by the portal itself (STORED_PDF_FRAMING).
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
     // `includeSubDomains` only inside the platform domain: any other host may be a customer's apex.
@@ -1971,7 +2028,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
-    if (c.res.headers.get('Content-Security-Policy') !== STORED_FILE_POLICY) {
+    const policy = c.res.headers.get('Content-Security-Policy')
+    if (policy !== STORED_FILE_POLICY && policy !== STORED_PDF_FRAMING) {
       c.header('Content-Security-Policy', "frame-ancestors 'none'")
     }
   })
@@ -2067,7 +2125,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (err instanceof BindingCryptoError) return c.json({ error: err.code }, err.status)
     if (err instanceof AuthorisationError) {
       if (err.retryAfter !== undefined) c.header('Retry-After', String(err.retryAfter))
-      if (err.status === 401 && classification(c).declaration?.path === '/api/t/:slug/mcp') {
+      const mcpRoutes = ['/api/t/:slug/mcp', ESTATE_MCP_ROUTE]
+      if (err.status === 401 && mcpRoutes.includes(classification(c).declaration?.path ?? '')) {
         c.header('www-authenticate', 'Bearer realm="CorpusKit MCP"')
       }
       return c.json({ error: err.code }, err.status)
@@ -2162,7 +2221,29 @@ export function buildApp(opts: BuildAppOptions): Hono {
       },
     })
     // Hono records caught errors in c.error; c.res holds the onError response and real status.
+    // Its response setter merges earlier headers: a failed audit must discard download headers.
+    if (response.status >= 400) {
+      c.res.headers.delete('Content-Disposition')
+      c.res.headers.delete('Content-Length')
+    }
     c.res = response
+  })
+
+  registerDuplicateRoutes(app, {
+    provider: opts.provider,
+    tenants,
+    duplicates,
+    now: opts.now,
+    review: (c, slug, pair, decision) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/duplicates/review',
+        'duplicate.review',
+        () => rememberDuplicateDecision({ tenants, duplicates, lifecycle }, slug, pair, decision),
+        { decision },
+        { kind: 'portal', slug },
+        { kind: 'duplicate-pair', id: pair },
+      ),
   })
 
   registerLinkHealthRoutes(app, {
@@ -2260,6 +2341,33 @@ export function buildApp(opts: BuildAppOptions): Hono {
     },
   })
 
+  registerPortalExport(app, {
+    provider,
+    tenants,
+    insights,
+    feedback,
+    keys: mcpKeys,
+    routing,
+    lifecycle,
+    state: () => {
+      if (!opts.rbac) throw new AuthorisationError(403)
+      return opts.rbac
+    },
+    configuration: (slug) => withBrandingUrls(tenants.get(slug)!),
+    resource: (slug, resource) => merchandiseSummary(enrichments, slug, resource),
+    audited: (c, includeFeedback, run) =>
+      subAction(
+        c,
+        PORTAL_EXPORT_PATH,
+        'portal.export.bundle',
+        run,
+        { includeFeedback },
+        { kind: 'portal', slug: c.req.param('slug')! },
+        { kind: 'portal', id: c.req.param('slug')! },
+        (response) => response.status < 400 ? 'success' : 'failure',
+      ),
+  })
+
   registerAccessRoutes(app, {
     tenants,
     updateMode: async (c, previousAccessMode, accessMode) => {
@@ -2335,6 +2443,32 @@ export function buildApp(opts: BuildAppOptions): Hono {
       toolGuard(declaration, config, authority)
       admitAll(portal)
     },
+  })
+  const estateTimeoutMs = opts.estateSourceTimeoutMs ??
+    Number(process.env.ESTATE_SOURCE_TIMEOUT_MS ?? DEFAULT_ESTATE_SOURCE_TIMEOUT_MS)
+  registerEstateMcpRoutes(app, {
+    provider,
+    audit: opts.audit,
+    requestContext,
+    authorise: authoriseDeclared,
+    readable: (c) => requestAuthorisation(c).aggregate(),
+    portals: (c, tool, slugs) => requestAuthorisation(c).estatePortals(tool, slugs),
+    // An estate answer is one ask on every portal it reaches, as a cross-portal ask is.
+    admitAnswers: (c, targets) => {
+      const fanOut = admitEstateFanOut(c, targets)
+      return fanOut.allowed ? null : fanOut.retryAfterSec
+    },
+    beforePortal: (declaration, config, authority) => {
+      toolGuard(declaration, config, authority)
+      try {
+        lifecycle.touch(config.slug, opts.now?.())
+      } catch {
+        console.error('Portal activity could not be recorded')
+      }
+    },
+    sourceTimeoutMs: Number.isFinite(estateTimeoutMs) && estateTimeoutMs > 0
+      ? estateTimeoutMs
+      : DEFAULT_ESTATE_SOURCE_TIMEOUT_MS,
   })
 
   // Keep bookmarks for renamed routes working: a renamed route segment permanently redirects to
@@ -2578,7 +2712,13 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (safeMetadataRequests.has(c.req.raw)) return c.json(safeProjection(config))
     // Readers learn the hosting status (the SPA's read-only banner). A suspended portal
     // never gets here: its 423 carries the safe projection and status instead.
-    return c.json({ ...withBrandingUrls(config), status: lifecycle.get(config.slug).status })
+    const { siteFeedback: _optIn, ...served } = withBrandingUrls(config)
+    return c.json({
+      ...served,
+      // Readers see the opt-in only where this deployment can deliver what they send.
+      ...(siteFeedbackAvailable(config, opts.siteFeedbackNotifier) ? { siteFeedback: true } : {}),
+      status: lifecycle.get(config.slug).status,
+    })
   })
 
   app.get(declaredRoute('GET', '/api/t/:slug/branding/:kind'), (c) => {
@@ -3012,6 +3152,24 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
   })
 
+  // Every document's display title in one small list, for the header search's suggestions. The
+  // browser fetches it once a session and matches as the reader types, so a keystroke never
+  // reaches this server or the knowledge box. A reader's view of the cached catalogue: bounded.
+  app.get(declaredRoute('GET', '/api/t/:slug/titles'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    const resources = await provider.listResources(config, { bounded: true })
+    return c.json({
+      items: merchandiseSummaries(enrichments, config.slug, resources).map((resource) => ({
+        id: resource.id,
+        title: resource.title,
+        type: resource.type,
+        topicIds: resource.topicIds,
+        ...(resource.kind ? { kind: resource.kind } : {}),
+      })),
+    })
+  })
+
   app.get(declaredRoute('GET', '/api/t/:slug/resources/:id'), async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
@@ -3244,7 +3402,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const pdf = type === 'application/pdf'
     const inline = type !== null && (pdf || passiveMedia(type))
     if (inline) headers.set('content-type', type)
-    if (!pdf) headers.set('content-security-policy', STORED_FILE_POLICY)
+    if (pdf) {
+      headers.set('content-security-policy', STORED_PDF_FRAMING)
+      headers.set('x-frame-options', 'SAMEORIGIN')
+    } else headers.set('content-security-policy', STORED_FILE_POLICY)
     headers.set('content-disposition', inline ? 'inline' : 'attachment')
     return new Response(upstream.body, { status: upstream.status, headers })
   })
@@ -3779,6 +3940,18 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   })
 
+  const siteFeedbackRoutes = {
+    portal: tenant,
+    store: siteFeedback,
+    notifier: opts.siteFeedbackNotifier,
+    clientAddress: callerAddress,
+    now: opts.now,
+  }
+  app.post(
+    declaredRoute('POST', '/api/t/:slug/site-feedback'),
+    siteFeedbackHandler(siteFeedbackRoutes),
+  )
+
   app.post(declaredRoute('POST', '/api/t/:slug/summarize'), expensiveRateLimit, async (c) => {
     const config = tenant(c.req.param('slug'))
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
@@ -4102,6 +4275,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!await adminResource(c, config, parsed.data.resourceId)) return adminNotFound(c)
     const item = investigations.addEvidence(config.slug, owner, c.req.param('id'), {
       passage: parsed.data.passage,
+      ...(parsed.data.page ? { page: parsed.data.page } : {}),
       resourceId: parsed.data.resourceId,
       resourceTitle: parsed.data.resourceTitle,
       score: parsed.data.score ?? null,
@@ -4727,6 +4901,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   }
   const erasureStores = {
+    duplicates,
     linkHealth,
     tenants,
     bindings,
@@ -4737,6 +4912,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     sources,
     insights,
     feedback,
+    siteFeedback,
     suggestions,
     enrichments,
     kgProposals,
@@ -5298,12 +5474,14 @@ export function buildApp(opts: BuildAppOptions): Hono {
       name,
       searchPlaceholder,
       regionalDiscovery,
+      siteFeedback: siteFeedbackSetting,
       layout: _layout,
       ...branding
     } = parsed.data
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+      ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
     const appearanceFields = fields.filter((field) => !TENANT_BEHAVIOUR_FIELDS.has(field))
@@ -6068,6 +6246,11 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
     })
   })
+
+  app.get(
+    declaredRoute('GET', '/api/admin/t/:slug/site-feedback'),
+    siteFeedbackHistoryHandler(siteFeedbackRoutes),
+  )
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/insights'), (c) => {
     const config = tenant(c.req.param('slug'))
@@ -8169,6 +8352,13 @@ function nearestTitles(resources: readonly ScoredResource[]): string[] {
  * share one session cookie, so opening such a file directly must never run script there.
  */
 export const STORED_FILE_POLICY = "sandbox; default-src 'none'; frame-ancestors 'none'"
+
+/**
+ * A stored PDF opens in the browser's own viewer, which a sandboxed document cannot use, so it
+ * takes no sandbox. The portal itself may frame it - the PDF reader's fallback view and its print
+ * view are frames - and nothing else may; every other response stays unframeable.
+ */
+export const STORED_PDF_FRAMING = "frame-ancestors 'self'"
 
 /** Headers for a stored branding asset: sandboxed, never sniffed and saved rather than shown. */
 function storedFileHeaders(contentType: string): Record<string, string> {

@@ -1,6 +1,7 @@
 import { expect } from '@std/expect'
 import type { AragProvider } from '@research-portal/retrieval'
-import { STORED_FILE_POLICY } from './app.ts'
+import { STORED_FILE_POLICY, STORED_PDF_FRAMING } from './app.ts'
+import { withSecurityHeaders } from './edge.ts'
 import { createEnforcementFixture } from './enforcement-fixture.ts'
 
 // A logo that runs script when a browser opens it as a document.
@@ -93,7 +94,7 @@ Deno.test('knowledge box files are sandboxed, and only PDFs and passive media op
       ['image/png', 'inline', STORED_FILE_POLICY],
       ['video/mp4', 'inline', STORED_FILE_POLICY],
       // The browser's PDF viewer does not run in a sandboxed document.
-      ['application/pdf', 'inline', "frame-ancestors 'none'"],
+      ['application/pdf', 'inline', STORED_PDF_FRAMING],
     ]
     for (const [type, disposition, policy] of cases) {
       contentType = type
@@ -102,6 +103,10 @@ Deno.test('knowledge box files are sandboxed, and only PDFs and passive media op
       expect(response.headers.get('content-disposition')).toBe(disposition)
       expect(response.headers.get('content-security-policy')).toBe(policy)
       expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+      // Only a PDF may be framed, and only by the portal itself.
+      expect(response.headers.get('x-frame-options')).toBe(
+        policy === STORED_PDF_FRAMING ? 'SAMEORIGIN' : null,
+      )
       await response.body?.cancel()
     }
     const thumbnail = await f.requestAs(null, '/api/t/public-a/resources/res-1/thumbnail')
@@ -161,8 +166,8 @@ Deno.test('a knowledge box file opens in place only as exactly the one type that
 
     // One valid type is served as exactly that type, without the upstream parameters.
     const inline: [string, string, string][] = [
-      ['application/pdf;x=1', 'application/pdf', "frame-ancestors 'none'"],
-      ['Application/PDF; name="report.pdf"', 'application/pdf', "frame-ancestors 'none'"],
+      ['application/pdf;x=1', 'application/pdf', STORED_PDF_FRAMING],
+      ['Application/PDF; name="report.pdf"', 'application/pdf', STORED_PDF_FRAMING],
       ['image/PNG; x=1', 'image/png', STORED_FILE_POLICY],
       ['image/webp', 'image/webp', STORED_FILE_POLICY],
       ['audio/mpeg; codecs=mp3', 'audio/mpeg', STORED_FILE_POLICY],
@@ -173,6 +178,49 @@ Deno.test('a knowledge box file opens in place only as exactly the one type that
       expect(headers.get('content-type')).toBe(type)
       expect(headers.get('content-disposition')).toBe('inline')
       expect(headers.get('content-security-policy')).toBe(policy)
+    }
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('a stored PDF may be framed by its own portal, and every other response by nothing', async () => {
+  let contentType = 'application/pdf'
+  const management = {
+    resourceContent: () =>
+      Promise.resolve({ id: 'res-1', files: [{ group: 'files', fieldId: 'original' }] }),
+    fileStream: () =>
+      Promise.resolve(new Response('stored bytes', { headers: { 'content-type': contentType } })),
+    thumbnailResponse: () =>
+      Promise.resolve(new Response(PNG, { headers: { 'content-type': 'image/png' } })),
+  } as unknown as AragProvider
+  const f = createEnforcementFixture({ management })
+  // As the edge sends them: the Worker and the local server both finish with these headers.
+  const served = async (path: string) => {
+    const response = withSecurityHeaders(await f.requestAs(null, path))
+    await response.body?.cancel()
+    return [
+      response.headers.get('content-security-policy'),
+      response.headers.get('x-frame-options'),
+    ]
+  }
+  try {
+    // The PDF reader's fallback view and its print view frame the file from the portal.
+    expect(await served('/api/t/public-a/resources/res-1/file/original')).toEqual([
+      "frame-ancestors 'self'",
+      'SAMEORIGIN',
+    ])
+    contentType = 'text/html'
+    expect(await served('/api/t/public-a/resources/res-1/file/original')).toEqual([
+      STORED_FILE_POLICY,
+      'DENY',
+    ])
+    expect(await served('/api/t/public-a/resources/res-1/thumbnail')).toEqual([
+      STORED_FILE_POLICY,
+      'DENY',
+    ])
+    for (const path of ['/api/t/public-a/config', '/api/t/public-a/resources/res-1']) {
+      expect(await served(path)).toEqual(["frame-ancestors 'none'", 'DENY'])
     }
   } finally {
     f.close()

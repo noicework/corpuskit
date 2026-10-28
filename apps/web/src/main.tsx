@@ -1,6 +1,6 @@
 import { Component, type ContextType, type ReactNode, StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { AccessProvider } from './components/AccessProvider.tsx'
 import { PortalAccessGate, ResolvedAccess } from './components/PortalAccessGate.tsx'
 import { RootRedirect } from './components/RootRedirect.tsx'
@@ -22,11 +22,23 @@ import { AssessmentPage } from './pages/AssessmentPage.tsx'
 import { GraphPage } from './pages/GraphPage.tsx'
 import { DocsPage } from './pages/DocsPage.tsx'
 import { HowItWorksPage } from './pages/HowItWorksPage.tsx'
+import { AccessibilityPage } from './pages/AccessibilityPage.tsx'
 import { ToolsPage } from './pages/ToolsPage.tsx'
 import { TaxonomyPage } from './pages/TaxonomyPage.tsx'
 import { EntityPage } from './pages/EntityPage.tsx'
 import { NotFoundPage, RootNotFound } from './pages/NotFoundPage.tsx'
 import { AppLocaleProvider, PortalLocaleContext } from './lib/portal-locale.tsx'
+import { watchTextSpacing } from './lib/text-spacing.ts'
+
+/**
+ * The library reads its filters from the address once, as it opens. Keyed by the query string,
+ * a link to a filtered library (a topic chosen in the header search) opens it afresh even from
+ * the library itself.
+ */
+function LibraryRoute() {
+  const { search } = useLocation()
+  return <LibraryPage key={search} />
+}
 
 /** Last line of defence: a render error shows a recoverable message, never a blank page. */
 class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -63,6 +75,9 @@ const container = document.getElementById('root')
 if (!container) {
   throw new Error('Root element #root not found')
 }
+
+// Clamped card text lets go while the reader's own text spacing applies (WCAG 1.4.12).
+watchTextSpacing()
 
 createRoot(container).render(
   <StrictMode>
@@ -113,7 +128,7 @@ createRoot(container).render(
               >
                 <Route index element={<HomePage />} />
                 <Route path='search' element={<SearchPage />} />
-                <Route path='library' element={<LibraryPage />} />
+                <Route path='library' element={<LibraryRoute />} />
                 <Route path='library/:id' element={<ResourceDetailPage />} />
                 <Route path='ask/*' element={<AskPage />} />
                 <Route path='investigations' element={<InvestigationsPage />} />
@@ -126,6 +141,7 @@ createRoot(container).render(
                 <Route path='help' element={<DocsPage />} />
                 <Route path='help/:pageId' element={<DocsPage />} />
                 <Route path='how-it-works' element={<HowItWorksPage />} />
+                <Route path='accessibility' element={<AccessibilityPage />} />
                 <Route path='entity/:name' element={<EntityPage />} />
                 <Route path='taxonomy' element={<TaxonomyPage />} />
                 <Route path='manage' element={<ManagePage />} />

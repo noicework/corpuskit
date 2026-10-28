@@ -34,6 +34,7 @@ import type { DocPage } from '@research-portal/core'
 import type {
   AskOptions,
   CatalogOptions,
+  ExportResource,
   ListResourcesOptions,
   RetrievalProvider,
   SearchOptions,
@@ -53,11 +54,13 @@ import {
   FOOTNOTE_PROMPT,
 } from './citation-mode.ts'
 import { bindFootnotes, FootnoteError, FootnoteStream, parseFootnoteAnswer } from './footnotes.ts'
+import { type CitedParagraph, citeParagraphs, isFileParagraph } from './cited-pages.ts'
 import { prepareExtraContext } from './extra-context.ts'
 import { dedupeResourceFamilies } from './resource-groups.ts'
 import { dedupeEntityCase } from './graph-relations.ts'
 import { dedupeNames, isNoiseEntity, keepEntity, preferredSpelling } from './entity-filter.ts'
 import { rankSuggestedQuestions } from './suggest-ranking.ts'
+import { exportResource } from './portal-export.ts'
 import {
   catalogFilterExpression,
   matchesCatalogFilters,
@@ -1450,6 +1453,39 @@ export class AragProvider implements RetrievalProvider {
       return resources
     }
     return (await this.loadCatalogue(tenant, options.bounded === true)).resources
+  }
+
+  /** Administrative export uses fresh provider pages, with no reader visibility filters. */
+  async *exportResources(tenant: TenantConfig, signal: AbortSignal): AsyncIterable<ExportResource> {
+    const client = this.client(tenant)
+    const seen = new Set<string>()
+    for (let page = 0;; page++) {
+      signal.throwIfAborted()
+      const catalog = await client.getJson<{
+        resources: Record<string, RawResource>
+        fulltext?: { next_page?: boolean }
+      }>(
+        `/catalog?page_number=${page}&page_size=100&show=basic&show=extra&show=origin&show=values`,
+        { signal },
+      )
+      if (!catalog.resources || typeof catalog.resources !== 'object') {
+        throw new Error('Incomplete export inventory')
+      }
+      const batch = Object.entries(catalog.resources)
+      for (const [id, raw] of batch) {
+        signal.throwIfAborted()
+        // A changing page must fail visibly instead of producing a duplicate or looping forever.
+        if (seen.has(id)) throw new Error('Export inventory changed during pagination')
+        seen.add(id)
+        yield exportResource(this.toSummary(id, raw), raw)
+      }
+      const more = catalog.fulltext?.next_page
+      if (more !== undefined && typeof more !== 'boolean') {
+        throw new Error('Invalid export pagination')
+      }
+      if (more === true && batch.length === 0) throw new Error('Incomplete export inventory')
+      if (more === false || (more === undefined && batch.length < 100)) return
+    }
   }
 
   /**
@@ -4198,6 +4234,9 @@ export class AragProvider implements RetrievalProvider {
 
     let sources: ScoredResource[] = []
     const contextTexts: string[] = []
+    // Every retrieved document paragraph by its platform id, so a citation can
+    // carry the text and page of the paragraph it actually cited.
+    const citedParagraphs = new Map<string, CitedParagraph>()
     let fullAnswer = ''
     let refusalPossible = true
     let generating = false
@@ -4245,11 +4284,17 @@ export class AragProvider implements RetrievalProvider {
         // card chooses among them for the paragraph that carries the claim.
         const paged: { score: number; text: string; page?: number }[] = []
         for (const [fieldKey, field] of Object.entries(raw.fields ?? {})) {
-          for (const paragraph of Object.values(field.paragraphs ?? {})) {
+          for (const [paragraphId, paragraph] of Object.entries(field.paragraphs ?? {})) {
             if (paragraph.text) contextTexts.push(paragraph.text)
             const paragraphPage = displayPage(
               (paragraph as { position?: { page_number?: number } }).position?.page_number,
             )
+            if (paragraph.text && !isGeneratedField(fieldKey)) {
+              citedParagraphs.set(paragraphId, {
+                text: paragraph.text,
+                ...(paragraphPage && isFileParagraph(paragraphId) ? { page: paragraphPage } : {}),
+              })
+            }
             if (
               paragraph.text && !isGeneratedField(fieldKey) &&
               !looksLikeDeclarationsChunk(paragraph.text)
@@ -4313,6 +4358,7 @@ export class AragProvider implements RetrievalProvider {
       if (attempt > 1) {
         sources = []
         contextTexts.length = 0
+        citedParagraphs.clear()
         fullAnswer = ''
         refusalPossible = true
         generating = false
@@ -4570,7 +4616,10 @@ export class AragProvider implements RetrievalProvider {
           const standardInstead = !!parsedFootnotes && parsedFootnotes.references === 0 &&
             Object.keys(citationsMapAccum).length > 0
           let bound: ReturnType<typeof bindFootnotes>
+          // The paragraphs the answer cited, in citing order.
+          let citedIds: string[]
           if (parsedFootnotes && !standardInstead) {
+            citedIds = parsedFootnotes.anchors.map((anchor) => anchor.id)
             bound = bindFootnotes(
               parsedFootnotes,
               citable,
@@ -4588,6 +4637,7 @@ export class AragProvider implements RetrievalProvider {
             }
           } else {
             const scoped = scopeCitationsMap(citationsMapAccum, citable, extraContext.resources)
+            citedIds = Object.keys(scoped.citations)
             bound = {
               ...spliceCitationMarkers(
                 parsedFootnotes ? parsedFootnotes.text : fullAnswer,
@@ -4614,7 +4664,9 @@ export class AragProvider implements RetrievalProvider {
             }))
           }
           // No emit-time filtering: binding already validated the source set.
-          for (const citation of bound.citations) yield { type: 'citation', citation }
+          for (const citation of citeParagraphs(bound.citations, citedIds, citedParagraphs)) {
+            yield { type: 'citation', citation }
+          }
           boundText = bound.text
           // Quality scoring sees the prose, never internal block definitions.
           if (parsedFootnotes) fullAnswer = parsedFootnotes.text

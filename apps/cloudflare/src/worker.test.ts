@@ -20,6 +20,7 @@ import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { LocalIngress } from '../../api/src/local-ingress.ts'
 import { ROLES } from '@research-portal/core'
 import type { DurableStores } from './state.ts'
+import type { SiteFeedbackNotifier } from '../../api/src/site-feedback.ts'
 
 Deno.test('Worker and local ingress return identical capabilities, edge rules and Entra sign-in', async (t) => {
   await t.step('shared edge behaviour', assertEdgeParity)
@@ -143,6 +144,10 @@ type WorkerModule = {
     user: AuthUser | null,
     env: Env,
   ): Promise<Request>
+  siteFeedbackNotifier(
+    env: Env,
+    bindings: Record<string, string | undefined>,
+  ): SiteFeedbackNotifier | undefined
 }
 
 type WorkerHarness = {
@@ -2640,3 +2645,46 @@ async function assertEntraParity() {
     h.database.close()
   }
 }
+
+Deno.test('Worker sends reader feedback only through a configured send_email binding', async () => {
+  const sent: { to: string; from: { email: string } }[] = []
+  const binding = {
+    send(message: { to: string; from: { email: string } }) {
+      sent.push(message)
+      return Promise.resolve({ messageId: 'email-1' })
+    },
+  }
+  const addresses = {
+    SITE_FEEDBACK_FROM: 'feedback@portal.example.org',
+    SITE_FEEDBACK_TO: 'team@portal.example.org',
+  }
+  const env = (extra: Record<string, unknown>) => ({ ...addresses, ...extra }) as unknown as Env
+  const notifier = (values: Env) => workerModule.siteFeedbackNotifier(values, stringEnv(values))
+  // Off without the binding, without an address, or when the named binding is not one.
+  expect(notifier(env({}))).toBeUndefined()
+  expect(notifier({ SITE_FEEDBACK_EMAIL: binding } as unknown as Env)).toBeUndefined()
+  expect(notifier(env({ SITE_FEEDBACK_EMAIL: 'not a binding' }))).toBeUndefined()
+  expect(notifier(env({ MAIL: binding }))).toBeUndefined()
+  const record = {
+    id: '00000000-0000-4000-8000-000000000001',
+    slug: 'marine',
+    createdAt: new Date().toISOString(),
+    category: 'general' as const,
+    message: 'A reader message',
+    pageUrl: 'https://portal.example.org/t/marine',
+    delivery: 'pending' as const,
+  }
+  const portal = { slug: 'marine', branding: { productName: 'Marine research' } } as never
+  for (
+    const values of [
+      env({ SITE_FEEDBACK_EMAIL: binding }),
+      env({ MAIL: binding, SITE_FEEDBACK_EMAIL_BINDING: 'MAIL' }),
+    ]
+  ) {
+    expect(await notifier(values)!(portal, record)).toBe('email-1')
+  }
+  expect(sent.map((message) => [message.to, message.from.email])).toEqual([
+    ['team@portal.example.org', 'feedback@portal.example.org'],
+    ['team@portal.example.org', 'feedback@portal.example.org'],
+  ])
+})

@@ -19,6 +19,8 @@ interface Stop {
   resourceId: string
   title: string
   quote: string
+  /** The page `quote` sits on in the stored file, when known. */
+  page?: number
   score: number
   labels: string[]
   cited: boolean
@@ -197,6 +199,9 @@ export function AnswerJourney({
         resourceId: source.id,
         title: source.title,
         quote: source.matchedPassage ?? '',
+        ...(source.matchedPassage && source.matchedField !== 'summary' && source.matchedPage
+          ? { page: source.matchedPage }
+          : {}),
         score: source.relevance,
         labels: source.topicIds,
         cited: cited.has(source.id),
@@ -466,7 +471,7 @@ export function AnswerJourney({
   const libraryHref = (stop: Stop) =>
     `/t/${slug}/library/${stop.resourceId}${
       stop.quote ? `?passage=${encodeURIComponent(stop.quote.slice(0, 300))}` : ''
-    }`
+    }${stop.quote && stop.page ? `&page=${stop.page}` : ''}`
 
   return createPortal(
     <div

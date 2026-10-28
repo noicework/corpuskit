@@ -1,3 +1,4 @@
+import { DoubleProvider } from '../../../e2e/support/double-provider.ts'
 import { afterEach, describe, it } from '@std/testing/bdd'
 import { expect } from '@std/expect'
 import {
@@ -353,6 +354,15 @@ describe('independent admin route permission matrix', () => {
   }</p><a href="https://example.test/article">Article</a></main></html>`
   // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
   const rows: [string, string, Permission, unknown?][] = [
+    ['GET', 'duplicates', 'content.write'],
+    ['POST', 'duplicates/refresh', 'content.write'],
+    ['POST', 'duplicates/review', 'content.write', {
+      pair: 'res-1/res-copy',
+      decision: 'keep-both',
+    }],
+    ['GET', '/api/admin/overlap', 'portal.create'],
+    ['POST', '/api/admin/overlap/refresh', 'portal.create'],
+    ['GET', '/api/admin/overlap/export', 'portal.create'],
     ['GET', 'lifecycle', 'portal.create'],
     ['PUT', 'lifecycle', 'portal.create', { status: 'read_only', limits: { asksPerDay: 5 } }],
     ['GET', 'usage', 'portal.create'],
@@ -433,6 +443,7 @@ describe('independent admin route permission matrix', () => {
     ['GET', 'corpus-health', 'content.write'],
     ['POST', 'purge-failed', 'content.write', { dryRun: false }],
     ['GET', 'insights', 'content.write'],
+    ['GET', 'site-feedback', 'content.write'],
     ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
     ['DELETE', 'resources/:id', 'content.write'],
     ['GET', 'link-health', 'content.write'],
@@ -508,6 +519,7 @@ describe('independent admin route permission matrix', () => {
         ),
         ...ACCESS_ROUTE_CASES.map(({ method, path }) => `${method} ${path}`),
         ...AUDIT_ROUTE_CASES.map(([path]) => `GET ${path}`),
+        'GET /api/admin/t/:slug/export',
         'PATCH /api/admin/t/:slug/access',
       ].sort()
       expect(actual).toEqual(expected)
@@ -661,6 +673,7 @@ describe('independent admin route permission matrix', () => {
           },
         }) as AragProvider
         const fixture = createEnforcementFixture({
+          provider: suffix.startsWith('duplicates') ? DoubleProvider.withDuplicates() : undefined,
           management,
           operatorDeleteAfterDays: 30,
           domainProvisioner: {
@@ -730,9 +743,13 @@ describe('independent admin route permission matrix', () => {
           }
           if (suffix.endsWith('/erase')) fixture.stores.tenants.remove('a')
           const snapshot = () =>
-            ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
-              fixture.database.all(`SELECT * FROM ${table}`)
-            )
+            [
+              'state',
+              'branding_assets',
+              'enrichment_records',
+              'routing_records',
+              'duplicate_reviews',
+            ].map((table) => fixture.database.all(`SELECT * FROM ${table}`))
           const baseline = snapshot()
           globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
             calls.push('fetch')
@@ -826,6 +843,10 @@ describe('independent admin route permission matrix', () => {
                   ...fixture.stores.insights.summary('a'),
                   feedback: { helpful: 0, unhelpful: 0, flagged: [] },
                 })
+              } else if (suffix === 'site-feedback') {
+                expect(JSON.parse(result)).toEqual({
+                  feedback: fixture.stores.siteFeedback.recent('a', 50),
+                })
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
               else if (suffix === 'lifecycle') {
                 expect(JSON.parse(result)).toEqual({
@@ -834,9 +855,20 @@ describe('independent admin route permission matrix', () => {
                 })
               } else if (suffix === 'aliases') {
                 expect(JSON.parse(result)).toEqual({ aliases: [], hostname: null })
+              } else if (suffix === 'duplicates') {
+                expect(JSON.parse(result).candidates.length).toBeGreaterThan(0)
+              } else if (suffix === '/api/admin/overlap') {
+                expect(JSON.parse(result).rows.length).toBeGreaterThan(0)
+              } else if (suffix === '/api/admin/overlap/export') {
+                expect(result).toContain('Shared title pairs')
               } else if (suffix === 'usage') {
                 expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
               } else throw new Error(`Missing positive assertion for ${template}`)
+            } else if (suffix.endsWith('/refresh')) {
+              expect(result).toContain('generatedAt')
+              expect(fixture.providerCalls.some((call) => call.method === 'listResources')).toBe(
+                true,
+              )
             } else {
               expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
               if (suffix === 'disable' || suffix === 'enable') {

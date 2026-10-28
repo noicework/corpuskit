@@ -18,7 +18,7 @@
   color: var(--rp-primary);
 }
 
-/* The hover card follows text scaling while projected map captions stay in pixels. */
+/* The hover card follows the reader's text scaling. */
 .rp-map3d .rp-graph-popup {
   padding: 0.625rem 0.75rem;
   background: var(--rp-surface);
@@ -45,5 +45,118 @@
 @media (max-width: 389px) {
   .rp-graph-mobile-chrome {
     padding-inline: 1rem;
+  }
+}
+
+/* Caption text uses the palette's validated ink/surface pair at full opacity.
+ * A solid ground preserves that pair over category marks and links. */
+.rp-map3d .rp-map3d-label,
+.rp-map3d .rp-map3d-territory,
+.rp-map3d .rp-map3d-edge-label {
+  color: var(--rp-ink);
+  background: var(--rp-surface);
+  border-radius: var(--rp-radius-chip);
+  text-shadow: none;
+}
+
+.rp-map3d .rp-map3d-label {
+  font-size: 0.75rem;
+}
+
+.rp-map3d .rp-map3d-territory {
+  font-size: 0.6875rem;
+}
+
+.rp-map3d .rp-map3d-territory[data-hub],
+.rp-map3d .rp-map3d-label[data-selected] {
+  font-size: 0.8125rem;
+}
+
+.rp-map3d canvas.rp-focus:focus-visible,
+svg.rp-map.rp-focus:focus-visible {
+  outline: 2px solid transparent;
+  outline-offset: -4px;
+}
+
+.rp-map-camera {
+  position: absolute;
+  inset-block-start: 0.75rem;
+  inset-inline-end: 0.75rem;
+  z-index: 25;
+  max-width: calc(100% - 4.5rem);
+}
+
+.rp-map-camera-panel {
+  position: absolute;
+  inset-block-start: calc(100% + 0.5rem);
+  inset-inline-end: 0;
+  width: min(19rem, calc(100vw - 1.5rem));
+  max-height: min(28rem, 55dvh);
+  overflow: auto;
+  background: var(--rp-surface);
+}
+
+/* The page toolbar keeps camera controls clear of both floating detail panels. */
+.rp-graph-view-switch {
+  position: relative;
+  z-index: 35;
+}
+
+.rp-map-camera[data-inline] {
+  position: relative;
+  inset: auto;
+  max-width: none;
+}
+
+/* Keep the validated text/surface pair over every colour in the graph. */
+[data-graph-page] .rp-map-panel {
+  background: var(--rp-surface);
+}
+
+/* Give the ring a known adjacent surface even where a map mark passes below. */
+.rp-map-camera .rp-btn:focus-visible {
+  outline: 2px solid var(--rp-ink);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--rp-surface);
+}
+
+@media (forced-colors: active) {
+  .rp-map-camera .rp-btn:focus-visible,
+  .rp-map3d canvas.rp-focus:focus-visible,
+  svg.rp-map.rp-focus:focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+[data-graph-page][data-graph-view='list'] {
+  height: auto;
+  min-height: calc(100dvh - var(--rp-header-h));
+  overflow: visible;
+}
+
+.rp-graph-list-stage {
+  flex: none;
+  min-height: 20rem;
+}
+
+/* Enlarged type and text spacing may need more height than the viewport.
+ * Keep a usable map and allow document scrolling instead of clipping controls. */
+[data-graph-page][data-graph-view='map'] {
+  overflow: visible;
+}
+
+[data-graph-view='map'] [data-graph-stage] {
+  min-height: 20rem;
+}
+
+/* Short landscape viewports can scroll to the map instead of squeezing it away. */
+@media (max-height: 600px) {
+  [data-graph-page][data-graph-view='map'] {
+    height: auto;
+    overflow: visible;
+  }
+
+  [data-graph-view='map'] [data-graph-stage] {
+    min-height: 28rem;
   }
 }

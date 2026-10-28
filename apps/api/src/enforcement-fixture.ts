@@ -41,6 +41,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['GET', '/api/t/:slug/labelsets', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/suggest', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/resources', 'portal.read', 'viewer'],
+  ['GET', '/api/t/:slug/titles', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/resources/:id', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/resources/:id/questions', 'portal.read', 'viewer'],
   ['GET', '/api/t/:slug/resources/:id/content', 'portal.read', 'viewer'],
@@ -58,6 +59,11 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   ['POST', '/api/t/:slug/feedback', 'portal.ask', 'viewer', {
     learningId: 'learning-123',
     good: true,
+  }],
+  ['POST', '/api/t/:slug/site-feedback', 'portal.ask', 'viewer', {
+    message: 'The library filters are hard to find.',
+    category: 'suggestion',
+    pagePath: '/t/a/library',
   }],
   ['POST', '/api/t/:slug/generate', 'portal.generate', 'analyst', {
     kind: 'comparison',
@@ -121,6 +127,7 @@ export const PORTAL_MATRIX_ROWS: readonly MatrixRow[] = [
   }],
   ['DELETE', '/api/t/:slug/mcp/keys/:id', 'keys.manage', 'portal-admin'],
   ['ALL', '/api/t/:slug/mcp', 'portal.read', 'viewer'],
+  ['ALL', '/api/estate/mcp', 'portal.read', 'viewer'],
   ['PATCH', '/api/admin/t/:slug/access', 'behaviour.write', 'portal-admin', {
     accessMode: 'authenticated',
   }],
@@ -142,6 +149,8 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
       permission: path.includes(':slug') ? 'members.manage' : 'platform.members.manage',
     })),
     ...AUDIT_ROUTE_CASES.map(([path, permission]) => ({ method: 'GET', path, permission })),
+    // The binary bundle has its own role/lifecycle matrix in portal-export.test.ts.
+    { method: 'GET', path: '/api/admin/t/:slug/export', permission: 'audit.export' },
   ]
   const keys = rows.map((r) => `${r.method} ${r.path}`).sort()
   expect(new Set(keys).size).toBe(keys.length)
@@ -225,7 +234,14 @@ export function matrixManagement(calls: string[]): AragProvider {
 export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
   const [method, template, permission, role, body] = row
   const calls: string[] = []
-  const f = createEnforcementFixture({ management: matrixManagement(calls) })
+  const notified: string[] = []
+  const f = createEnforcementFixture({
+    management: matrixManagement(calls),
+    siteFeedbackNotifier: (_portal, record) => {
+      notified.push(record.id)
+      return Promise.resolve('matrix-notification')
+    },
+  })
   try {
     assertExpectedPermission(
       method,
@@ -284,6 +300,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       f.authorityDependencies(),
     )
     key.commit()
+    f.stores.tenants.patch('a', { siteFeedback: true })
     const id = template.includes('/sessions')
       ? 'session'
       : template.includes('/watches')
@@ -310,6 +327,8 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       headers: {
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
+        // Reader feedback is accepted only from the portal's own pages.
+        origin: 'http://localhost',
       },
       ...(body !== undefined || template.endsWith('/mcp')
         ? { body: JSON.stringify(body ?? rpc) }
@@ -322,6 +341,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         'enrichment_records',
         'routing_records',
         'answer_feedback',
+        'site_feedback',
         'audit_query_snapshots',
       ]
         .map((table) => f.database.all(`SELECT * FROM ${table}`))
@@ -333,6 +353,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       '/api/tenants',
       '/api/ask-estate',
       '/api/t/:slug/config',
+      '/api/estate/mcp',
     ].includes(template)
     if (!special) {
       for (
@@ -359,7 +380,10 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
     const response = await f.requestAs(session, path, init)
     const result = await response.text()
     expect(response.status, `${template}: ${result}`).toBe(
-      template === '/t/*' ? 308 : template.endsWith('/mcp/keys') && method === 'POST' ? 201 : 200,
+      template === '/t/*' ? 308 : (template.endsWith('/mcp/keys') && method === 'POST') ||
+          template.endsWith('/site-feedback')
+        ? 201
+        : 200,
     )
     expect(result).not.toContain('"error":')
     expect(result).not.toContain('"type":"error"')
@@ -380,6 +404,7 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         labelsets: 'labelsets',
         suggest: 'suggest',
         resources: 'listResources',
+        titles: 'listResources',
         'resources/:id': 'resource',
         'resources/:id/thumbnail': 'thumbnailResponse',
         'resources/:id/content': 'resourceContent',
@@ -427,6 +452,8 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         '/api/t/:slug/investigations/:id': 'Seeded investigation',
         '/api/t/:slug/mcp/keys': 'Seeded client',
         '/api/t/:slug/mcp': 'search_corpus',
+        '/api/estate/mcp': 'search_estate',
+        '/api/t/:slug/site-feedback': '"ok":true',
       }
       expect(expected[template], `missing positive assertion ${template}`).toBeDefined()
       expect(result).toContain(expected[template]!)
@@ -435,6 +462,12 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
           '/t/a/ask?q=abalone&name=Abalone&labelsets=topic,kind',
         )
       }
+    }
+    if (template === '/api/t/:slug/site-feedback') {
+      expect(notified).toHaveLength(1)
+      expect(f.stores.siteFeedback.recent('a', 10)).toMatchObject([
+        { id: notified[0], delivery: 'sent', notificationId: 'matrix-notification' },
+      ])
     }
     if (template === '/api/t/:slug/config') {
       const safe = await (await f.requestAs(f.unassigned, path)).json()
@@ -451,6 +484,19 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
         headers: { ...init.headers, authorization: `Bearer ${key.key}` },
       })
       expect(denied.status).toBe(403)
+      f.assertNoProtectedDispatch(before)
+    }
+    if (template === '/api/estate/mcp') {
+      // The one aggregate that takes a key; without a portal to reach it is refused.
+      const keyed = await f.requestAs(null, path, {
+        ...init,
+        headers: { ...init.headers, authorization: `Bearer ${key.key}` },
+      })
+      expect(keyed.status).toBe(200)
+      expect(await keyed.text()).toContain('answer_estate')
+      const before = f.providerCalls.length
+      expect((await f.requestAs(f.unassigned, path, init)).status).toBe(403)
+      expect((await f.requestAs(null, path, init)).status).toBe(401)
       f.assertNoProtectedDispatch(before)
     }
   } finally {
@@ -529,8 +575,11 @@ export function createEnforcementFixture(
       | 'rateLimitAnonPortalAskPerMin'
       | 'rateLimitAnonAddressAskPerMin'
       | 'rateLimitEstatePerMin'
+      | 'rateLimitMcpAuthPerMin'
+      | 'estateSourceTimeoutMs'
       | 'operatorDeleteAfterDays'
       | 'linkProvisionalBytes'
+      | 'siteFeedbackNotifier'
     >
     & {
       bindingKey?: string
@@ -683,7 +732,7 @@ export function createEnforcementFixture(
     rateLimitAnonPortalAskPerMin: options.rateLimitAnonPortalAskPerMin ?? 0,
     rateLimitAnonAddressAskPerMin: options.rateLimitAnonAddressAskPerMin ?? 0,
     rateLimitEstatePerMin: options.rateLimitEstatePerMin ?? 0,
-    rateLimitMcpAuthPerMin: 0,
+    rateLimitMcpAuthPerMin: options.rateLimitMcpAuthPerMin ?? 0,
   })
   const routeCases: EnforcementRouteCase[] = []
   return {
@@ -843,6 +892,12 @@ const html = `<html><title>Research</title><main><p>${
 }</p><a href="https://example.test/article">Article</a></main></html>`
 // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
 export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
+  ['GET', 'duplicates', 'content.write'],
+  ['POST', 'duplicates/refresh', 'content.write'],
+  ['POST', 'duplicates/review', 'content.write', { pair: 'res-1/res-copy', decision: 'keep-both' }],
+  ['GET', '/api/admin/overlap', 'portal.create'],
+  ['POST', '/api/admin/overlap/refresh', 'portal.create'],
+  ['GET', '/api/admin/overlap/export', 'portal.create'],
   ['GET', 'lifecycle', 'portal.create'],
   ['PUT', 'lifecycle', 'portal.create', { status: 'active', limits: null }],
   ['GET', 'usage', 'portal.create'],
@@ -923,6 +978,7 @@ export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
   ['GET', 'corpus-health', 'content.write'],
   ['POST', 'purge-failed', 'content.write', { dryRun: false }],
   ['GET', 'insights', 'content.write'],
+  ['GET', 'site-feedback', 'content.write'],
   ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
   ['DELETE', 'resources/:id', 'content.write'],
   ['GET', 'link-health', 'content.write'],
@@ -1099,6 +1155,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       },
     }) as AragProvider
     const fixture = createEnforcementFixture({
+      provider: suffix.startsWith('duplicates') ? DoubleProvider.withDuplicates() : undefined,
       management,
       operatorDeleteAfterDays: 30,
       domainProvisioner: {
@@ -1147,6 +1204,15 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
         labelset: { id: 'species', title: 'Species', paragraphs: false, labels: ['Abalone'] },
       }])
       fixture.stores.kgProposals.set('a', proposal)
+      fixture.stores.siteFeedback.save('a', {
+        id: '00000000-0000-4000-8000-000000000001',
+        slug: 'a',
+        createdAt: new Date().toISOString(),
+        category: 'general',
+        message: 'Seeded reader feedback',
+        pageUrl: 'http://localhost/t/a',
+        delivery: 'failed',
+      })
       if (suffix === 'enable') fixture.stores.tenants.setDisabled('a', true)
       if (method === 'DELETE' && suffix === 'branding/image/:name') {
         fixture.stores.branding.put('a', 'image-banner', {
@@ -1169,9 +1235,8 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       }
       if (suffix.endsWith('/erase')) fixture.stores.tenants.remove('a')
       const snapshot = () =>
-        ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
-          fixture.database.all(`SELECT * FROM ${table}`)
-        )
+        ['state', 'branding_assets', 'enrichment_records', 'routing_records', 'duplicate_reviews']
+          .map((table) => fixture.database.all(`SELECT * FROM ${table}`))
       const baseline = snapshot()
       globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
         calls.push('fetch')
@@ -1263,6 +1328,10 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
               ...fixture.stores.insights.summary('a'),
               feedback: { helpful: 0, unhelpful: 0, flagged: [] },
             })
+          } else if (suffix === 'site-feedback') {
+            expect(JSON.parse(result).feedback).toMatchObject([
+              { message: 'Seeded reader feedback', delivery: 'failed' },
+            ])
           } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
           else if (suffix === 'lifecycle') {
             expect(JSON.parse(result)).toEqual({
@@ -1271,9 +1340,18 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
             })
           } else if (suffix === 'aliases') {
             expect(JSON.parse(result)).toEqual({ aliases: [], hostname: null })
+          } else if (suffix === 'duplicates') {
+            expect(JSON.parse(result).candidates.length).toBeGreaterThan(0)
+          } else if (suffix === '/api/admin/overlap') {
+            expect(JSON.parse(result).rows.length).toBeGreaterThan(0)
+          } else if (suffix === '/api/admin/overlap/export') {
+            expect(result).toContain('Shared title pairs')
           } else if (suffix === 'usage') {
             expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
           } else throw new Error(`Missing positive assertion for ${template}`)
+        } else if (suffix.endsWith('/refresh')) {
+          expect(result).toContain('generatedAt')
+          expect(fixture.providerCalls.some((call) => call.method === 'listResources')).toBe(true)
         } else {
           expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
           if (suffix === 'disable' || suffix === 'enable') {

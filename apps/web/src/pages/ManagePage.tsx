@@ -1,3 +1,4 @@
+import { DuplicatesPanel } from './admin/DuplicatesPanel.tsx'
 import { LinkHealthPanel } from './admin/LinkHealthPanel.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useLayoutEffect, useRef, useState } from 'react'
@@ -35,6 +36,7 @@ const TABS: { id: string; label: string; permission: Permission }[] = [
   { id: 'overview', label: 'Overview', permission: 'content.write' },
   { id: 'insights', label: 'Insights', permission: 'content.write' },
   { id: 'content', label: 'Content', permission: 'content.write' },
+  { id: 'duplicates', label: 'Duplicates and versions', permission: 'content.write' },
   { id: 'enrichments', label: 'Enrichments', permission: 'enrichments.write' },
   { id: 'taxonomy', label: 'Taxonomy', permission: 'taxonomy.write' },
   { id: 'graph', label: 'Knowledge graph', permission: 'graph.write' },
@@ -376,6 +378,7 @@ function ManageContent() {
               <AppearancePanel slug={slug} branding={config.branding} />
             )}
             {tab === 'behaviour' && can('behaviour.write') && <BehaviourPanel slug={slug} />}
+            {tab === 'duplicates' && can('content.write') && <DuplicatesPanel slug={slug} />}
             {tab === 'extraction' && can('content.write') && <ExtractionPanel slug={slug} />}
             {tab === 'details' && can('appearance.write') && (
               <div className='rp-card p-5 lg:p-6'>

@@ -568,7 +568,7 @@ function EvidenceCard(
 
   const sourceHref = `/t/${slug}/library/${encodeURIComponent(item.resourceId)}?passage=${
     encodeURIComponent(item.passage.slice(0, 200))
-  }`
+  }${item.page ? `&page=${item.page}` : ''}`
   const askQuestion = item.question ||
     ui('What does the research say about {name}?', { name: item.resourceTitle })
   const askHref = `/t/${slug}/ask?ask=${encodeURIComponent(askQuestion)}`

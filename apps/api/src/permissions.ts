@@ -75,6 +75,12 @@ function entry(
   })
 }
 
+/**
+ * The estate MCP endpoint: one credential reaches several portals. A key is accepted here as well
+ * as on its own portal's routes, so authority selection needs this path before any route matches.
+ */
+export const ESTATE_MCP_ROUTE = '/api/estate/mcp'
+
 /** D11's sole route/tool catalogue, consumed by registration and request authorisation. */
 /**
  * Turning on the knowledge box's hidden resources, which adding a draft or hiding a resource does
@@ -87,6 +93,14 @@ const HIDDEN_RESOURCES_ENABLE = {
 } as const
 
 export const DECLARATIONS: readonly Declaration[] = Object.freeze([
+  entry('http', 'GET', '/api/admin/t/:slug/duplicates', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/duplicates/refresh', 'content.write', 'portal'),
+  entry('http', 'POST', '/api/admin/t/:slug/duplicates/review', 'content.write', 'portal', {
+    subActions: [{ action: 'duplicate.review', permission: 'content.write', scope: 'portal' }],
+  }),
+  entry('http', 'GET', '/api/admin/overlap', 'portal.create', 'platform'),
+  entry('http', 'POST', '/api/admin/overlap/refresh', 'portal.create', 'platform'),
+  entry('http', 'GET', '/api/admin/overlap/export', 'portal.create', 'platform'),
   entry('http', 'GET', '/api/admin/t/:slug/lifecycle', 'portal.create', 'platform', {
     operator: true,
   }),
@@ -124,6 +138,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   }),
   entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/export', 'audit.export', 'portal', {
+    subActions: [{ action: 'portal.export.bundle', permission: 'audit.export', scope: 'portal' }],
+  }),
   entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),
   entry('http', 'GET', '/api/admin/audit/export', 'audit.export', 'platform'),
   ...['people', 'groups'].flatMap((family) => [
@@ -147,6 +164,8 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ),
   ]),
   ...([
+    ['duplicates', ['decide'], 'content.write', 'portal'],
+    ['duplicates', ['erase'], 'portal.create', 'platform'],
     ['lifecycle', ['set'], 'portal.create', 'platform'],
     ['lifecycle', ['remove'], 'portal.delete', 'platform'],
     ['lifecycle', ['consumeAsk', 'refundAsk'], 'portal.ask', 'portal'],
@@ -178,6 +197,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     ['sessions', ['put', 'remove'], 'portal.ask', 'portal'],
     ['insights', ['record'], 'portal.ask', 'portal'],
     ['feedback', ['record'], 'portal.ask', 'portal'],
+    ['siteFeedback', ['save'], 'portal.ask', 'portal'],
     ['routing', ['record'], 'portal.ask', 'portal'],
     ['watches', ['add', 'update', 'remove'], 'portal.watch', 'portal'],
     ['sources', ['add', 'update', 'remove'], 'content.write', 'portal'],
@@ -247,6 +267,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/t/:slug/labelsets', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/suggest', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources', 'portal.read', 'portal'),
+  entry('http', 'GET', '/api/t/:slug/titles', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id', 'portal.read', 'portal'),
   entry('http', 'GET', '/api/t/:slug/resources/:id/questions', 'portal.read', 'portal', {
     subActions: [
@@ -264,6 +285,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/t/:slug/graph', 'portal.read', 'portal'),
   entry('http', 'POST', '/api/t/:slug/generate', 'portal.generate', 'portal'),
   entry('http', 'POST', '/api/t/:slug/feedback', 'portal.ask', 'portal'),
+  entry('http', 'POST', '/api/t/:slug/site-feedback', 'portal.ask', 'portal'),
   entry('http', 'POST', '/api/t/:slug/summarize', 'portal.generate', 'portal'),
   entry('http', 'POST', '/api/t/:slug/subqueries', 'portal.generate', 'portal'),
   entry('http', 'GET', '/api/t/:slug/entity', 'portal.read', 'portal'),
@@ -405,7 +427,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
         action: 'tenant.behaviour.update',
         permission: 'behaviour.write',
         scope: 'portal',
-        fields: ['searchPlaceholder', 'regionalDiscovery'],
+        fields: ['searchPlaceholder', 'regionalDiscovery', 'siteFeedback'],
       },
     ],
   }),
@@ -487,6 +509,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/admin/t/:slug/corpus-health', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/purge-failed', 'content.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/insights', 'content.write', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/site-feedback', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/:id/hidden', 'content.write', 'portal', {
     subActions: [HIDDEN_RESOURCES_ENABLE],
   }),
@@ -525,6 +548,16 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('mcp', 'MCP', 'get_document', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'browse_catalogue', 'portal.read', 'portal'),
   entry('mcp', 'MCP', 'answer_question', 'portal.ask', 'portal'),
+  // The estate MCP endpoint reaches every portal its caller may use, as a cross-portal ask does.
+  entry('http', 'ALL', ESTATE_MCP_ROUTE, 'portal.read', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
+  entry('mcp', 'MCP', 'search_estate', 'portal.read', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
+  entry('mcp', 'MCP', 'answer_estate', 'portal.ask', 'portal', {
+    aggregate: 'authorised-portals',
+  }),
   entry('http', 'ALL', '/t/*', 'portal.read', 'public', {
     reason: 'Application shell bookmark redirects only; no research data is returned.',
   }),
@@ -600,10 +633,11 @@ export function isAccessTightening(
  */
 export type AskUse = 'count' | 'gate'
 const ASK_FREE_ROUTES: ReadonlySet<string> = new Set([
-  // A user's own saved research and answer feedback make no model call.
+  // Saved research and readers' feedback, on an answer or the portal, make no model call.
   'PUT /api/t/:slug/sessions/:id',
   'DELETE /api/t/:slug/sessions/:id',
   'POST /api/t/:slug/feedback',
+  'POST /api/t/:slug/site-feedback',
 ])
 const ASK_GATED_ROUTES: ReadonlySet<string> = new Set([
   'POST /api/t/:slug/route',
@@ -732,8 +766,14 @@ export function assertRouteInventory(
     throw new Error('Route permission inventory mismatch')
   }
 }
-export function assertToolInventory(names: readonly string[]): void {
-  const expected = DECLARATIONS.filter((item) => item.kind === 'mcp').map((item) => item.path)
+/** A portal's MCP endpoint lists the portal tools; the estate endpoint lists the aggregate ones. */
+export function assertToolInventory(
+  names: readonly string[],
+  endpoint: 'portal' | 'estate' = 'portal',
+): void {
+  const expected = DECLARATIONS.filter((item) =>
+    item.kind === 'mcp' && (item.aggregate === 'authorised-portals') === (endpoint === 'estate')
+  ).map((item) => item.path)
   if (
     new Set(names).size !== names.length || expected.length !== names.length ||
     names.some((name) => !expected.includes(name))

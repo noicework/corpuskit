@@ -1,3 +1,4 @@
+import { DuplicateReviewStore } from './duplicate-store.ts'
 import { LinkHealthStore } from './link-health-store.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import {
@@ -17,6 +18,7 @@ import {
   McpKeyStore,
   RoutingLog,
   SessionsStore,
+  SiteFeedbackStore,
   SourceStore,
   WatchStore,
 } from './stores.ts'
@@ -133,6 +135,7 @@ export function localOwnedStores(
       if (
         (operation.name === 'tenants.patch' &&
           ['tenant.access.update', 'tenant.configuration.update'].includes(context.input.action)) ||
+        (operation.name === 'duplicates.decide' && context.input.action === 'duplicate.review') ||
         (operation.name === 'lifecycle.set' &&
           context.input.action === 'portal.lifecycle.update') ||
         (operation.name === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
@@ -246,11 +249,21 @@ export function localOwnedStores(
   })
   return {
     localMutations,
+    duplicates: wrap(
+      'duplicates',
+      new DuplicateReviewStore(database, (work) =>
+        database.transactionSync(() => {
+          const result = work()
+          boundary.complete()
+          return result
+        })),
+    ),
     linkHealth: wrap('linkHealth', new LinkHealthStore(database, boundary)),
     attach,
     erasureTransaction: <T>(slug: string, work: () => T): T => erasure.erase(slug, work) as T,
     insights: wrap('insights', new InsightsStore(dataDir), files('insights', 'jsonl')),
     feedback: wrap('feedback', new FeedbackStore(dataDir), files('feedback')),
+    siteFeedback: wrap('siteFeedback', new SiteFeedbackStore(dataDir), files('site-feedback')),
     routing: wrap('routing', new RoutingLog(dataDir), files('routing', 'jsonl')),
     suggestions: wrap('suggestions', new SuggestionStore(dataDir), files('suggestions')),
     kgProposals: wrap(
