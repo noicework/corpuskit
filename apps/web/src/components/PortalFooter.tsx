@@ -132,7 +132,9 @@ function LayoutFooter(
             : null}
         </div>
         <div className='mt-12 flex flex-col gap-3 border-t border-[var(--rp-on-primary)]/15 pt-6 text-xs leading-relaxed text-[var(--rp-on-primary-2)] md:flex-row md:flex-wrap md:items-baseline md:gap-8'>
-          <p className='min-w-0'>&copy; {year} {branding.organisation}</p>
+          {footer.showOrganisationCopyright !== false
+            ? <p className='min-w-0'>&copy; {year} {branding.organisation}</p>
+            : null}
           {footer.note ? <p className='min-w-0 max-w-prose md:flex-1'>{footer.note}</p> : null}
           <AccessibilityLink slug={slug} />
           {credits.length

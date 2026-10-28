@@ -504,6 +504,14 @@ export const TenantConfigSchema = z.object({
    * examples can leak into its pages.
    */
   copy: z.object({
+    /** Explicit provenance labels supplied by the collection owner, keyed by resource ID. */
+    resourceLabels: z.record(z.string(), z.string().min(1).max(200)).optional(),
+    defaultResourceLabel: z.string().min(1).max(200).optional(),
+    /** Optional interface wording by display language. Never applied to source documents. */
+    interfaceMessages: z.object({
+      en: z.record(z.string().max(1000), z.string().min(1).max(2000)).optional(),
+      ja: z.record(z.string().max(1000), z.string().min(1).max(2000)).optional(),
+    }).optional(),
     /** Placeholder for a new investigation's name, e.g. "Does X pay off in Y?". */
     investigationExample: z.string().optional(),
     /** Placeholder per Generate kind (comparison, briefing, timeline, proscons, faq, assessment). */
@@ -1243,7 +1251,13 @@ export const CitationSchema = z.object({
   title: z.string().min(1),
   /** The generated headline, when it differs from the title - shown as a subtitle. */
   headline: z.string().optional(),
+  /** The text of the first paragraph the answer cited in this resource, when known. */
   passage: z.string().optional(),
+  /**
+   * The page (counted from one) that `passage` sits on in the stored file, when the platform
+   * reported one, so the citation opens the PDF there. Absent for a passage outside a paged file.
+   */
+  page: z.number().int().positive().optional(),
 })
 
 export const AskStageSchema = z.enum([

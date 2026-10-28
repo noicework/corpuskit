@@ -32,6 +32,14 @@ const render = (value: Branding) =>
   )
 
 describe('PortalFooter', () => {
+  it('can omit an inferred ownership line while preserving explicit source notices', () => {
+    const footer = { note: 'Source papers © their authors.', showOrganisationCopyright: false }
+    const html = render({ ...branding, layout: { footer } })
+    expect(html).toContain('Source papers © their authors.')
+    expect(html).not.toContain(`© ${new Date().getFullYear()} Example User Group`)
+    expect(render({ ...branding, layout: { footer: { note: footer.note } } }))
+      .toContain(`© ${new Date().getFullYear()} Example User Group`)
+  })
   it('renders from the tenant branding rather than a per-slug content table', () => {
     expect(source).toContain('branding: Branding')
     expect(source).not.toMatch(/Record<string,\s*FooterContent>/)

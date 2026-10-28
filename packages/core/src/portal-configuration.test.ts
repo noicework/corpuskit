@@ -107,6 +107,19 @@ Deno.test('the accessibility statement travels with the configuration and takes 
   }
 })
 
+Deno.test('interface wording survives configuration import and export without changing policy', () => {
+  const copy = { interfaceMessages: { en: { Graph: 'Knowledge map' }, ja: { Graph: '地図' } } }
+  const exported = portalConfigurationExport({ ...config, copy })
+  expect(PortalConfigurationImportSchema.parse(exported).copy).toEqual(copy)
+  expect(TenantConfigSchema.parse({ ...config, copy }).accessMode).toBe('restricted')
+  expect(
+    PortalConfigurationImportSchema.safeParse({
+      ...exported,
+      copy: { interfaceMessages: { en: { Graph: '' } } },
+    }).success,
+  ).toBe(false)
+})
+
 Deno.test('configuration import rejects protected or unknown fields at every nested level', () => {
   const valid = portalConfigurationExport(config)
   for (

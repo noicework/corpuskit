@@ -227,6 +227,8 @@ export const PortalLayoutSchema = z.object({
     /** Links in the closing row, beside the note: a credit that `note` cannot carry as text. */
     credits: list(LayoutLinkSchema, LAYOUT_LIMITS.footerCredits, 'credits').optional(),
     poweredBy: z.boolean().optional(),
+    /** Demonstrations can retain source notices without claiming the organisation owns the portal. */
+    showOrganisationCopyright: z.boolean().optional(),
   }).strict().optional(),
   home: z.object({
     hero: z.object({
