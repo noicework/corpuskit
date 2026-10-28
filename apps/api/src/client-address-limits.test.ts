@@ -13,6 +13,12 @@ import type { TrustedSessionFacts } from './principal.ts'
 // tests rotate every address and browser header a caller can write and still reach the 429.
 
 const ASK = JSON.stringify({ query: 'What is known about abalone stock health?' })
+// A cross-portal ask naming the fixture's four public portals. An anonymous ask that names none
+// reaches only the request host's own portal.
+const ESTATE = JSON.stringify({
+  query: 'What is known about abalone stock health?',
+  slugs: ['grains', 'marine', 'public-a', 'public-b'],
+})
 const post = (headers: Record<string, string> = {}, body = ASK): RequestInit => ({
   method: 'POST',
   headers: { 'content-type': 'application/json', ...headers },
@@ -176,7 +182,8 @@ for (const adapter of ['durable', 'local'] as const) {
       adapter,
     )
     try {
-      const estate = (from: string) => status(f.requestFrom(from, null, '/api/ask-estate', post()))
+      const estate = (from: string) =>
+        status(f.requestFrom(from, null, '/api/ask-estate', post({}, ESTATE)))
       const ask = (from: string) => status(f.requestFrom(from, null, '/api/t/public-a/ask', post()))
       // Four public portals (the seeded two and public-a and public-b): one cross-portal ask is
       // four of the address's five.
@@ -197,13 +204,11 @@ for (const adapter of ['durable', 'local'] as const) {
       adapter,
     )
     try {
+      const estate = (from: string) =>
+        status(g.requestFrom(from, null, '/api/ask-estate', post({}, ESTATE)))
       // Each cross-portal ask takes a turn on both portals, from whichever address it comes.
-      for (let i = 1; i <= 3; i++) {
-        expect(await status(g.requestFrom(`198.51.100.${40 + i}`, null, '/api/ask-estate', post())))
-          .toBe(200)
-      }
-      expect(await status(g.requestFrom('198.51.100.44', null, '/api/ask-estate', post())))
-        .toBe(429)
+      for (let i = 1; i <= 3; i++) expect(await estate(`198.51.100.${40 + i}`)).toBe(200)
+      expect(await estate('198.51.100.44')).toBe(429)
       expect(await status(g.requestFrom('198.51.100.45', null, '/api/t/public-b/ask', post())))
         .toBe(429)
       // A refused cross-portal ask costs no portal its daily quota.
@@ -225,7 +230,15 @@ function localServer(env: Record<string, string>) {
     TENANTS_PATH: `${directory}/tenants.json`,
     SHOWCASE_PORTALS: 'marine,grains',
   })
-  const ingress = new LocalIngress({ rbac, tenants, env: { ENTRA_TENANT_ID: 'tenant-1', ...env } })
+  const ingress = new LocalIngress({
+    rbac,
+    tenants,
+    env: {
+      ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+      ENTRA_TENANT_ID: 'tenant-1',
+      ...env,
+    },
+  })
   const app = buildApp({
     provider: new DoubleProvider(),
     tenants,

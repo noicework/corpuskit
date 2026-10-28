@@ -12,6 +12,7 @@ install.
 | Stored knowledge box tokens sealed with a deployment key | [Knowledge box credential encryption](#knowledge-box-credential-encryption) |
 | A separate credential for hosting automation | [Operator credential](#operator-credential) |
 | Per-portal status, limits and usage | [Portal lifecycle, limits and usage](#portal-lifecycle-limits-and-usage) |
+| Microsoft Entra sign-in on the single-process server | [Entra sign-in on single-process hosting](#entra-sign-in-on-single-process-hosting) |
 | Sign-in through a trusted outside identity issuer | [External sign-in handoff](#external-sign-in-handoff) |
 | The hostname portals and sessions live under | [Configurable platform domain](#configurable-platform-domain) |
 | Serving a portal on hostnames outside the platform domain | [Portal host aliases](#portal-host-aliases) |
@@ -25,6 +26,131 @@ behaviour that changes, stored data that changes, and whether rolling back is sa
 [`docs/RELEASING.md`](RELEASING.md) describes how releases are cut and what rollback safety
 covers. `GET /api/health` reports the `release` and `buildSha` a deployment is serving (see
 [Readiness signals](#readiness-signals)).
+
+## Single-process container hosting
+
+The Deno server supports one process with a persistent volume mounted at `DATA_DIR` (by default
+`./data`, or `/app/data` in the image). The image listens on port 8787 by default; `PORT` overrides
+it. Build with `--build-arg BUILD_SHA=<commit>` to retain that commit in the runtime environment,
+the web build stamp and `/api/health`. The pinned web tooling uses Linux x64 binaries, so build
+for `linux/amd64`, including on an ARM development machine:
+
+```sh
+docker build --platform linux/amd64 --build-arg BUILD_SHA=YOUR_COMMIT_SHA -t corpuskit .
+```
+
+CI checks the Docker COPY list and local runtime import coverage without building an image.
+
+Before opening stores, the process takes an exclusive operating-system lock on
+`DATA_DIR/.writer.lock`. A second process waits at most `WRITER_LOCK_WAIT_SECONDS`, then logs a
+`server.writer_lock` failure and exits non-zero. The lock is released on clean shutdown or by the
+operating system when the process dies. Do not delete the lock file: its inode is the fence, and
+an empty lock file after exit is normal. Each development server also needs its own `DATA_DIR`
+as well as its own port: the lock refuses a second server on the same directory even if its
+port differs. Run only one writer per data directory. Store path overrides must remain on that
+deployment's volume. Every `TENANTS_PATH`, `BINDINGS_PATH`, `KG_PROPOSALS_PATH` and on-disk
+`RBAC_PATH` file gets a persistent sibling lock named `<file>.writer.lock`, and `BRANDING_PATH`
+gets its own directory
+lock at `BRANDING_PATH/.writer.lock`. These store locks are always taken, including inside
+`DATA_DIR`, so servers with different data roots still exclude each other when they share a
+store. Different files in one shared folder can be used by separate servers. Identical canonical
+lock paths are deduplicated and acquired in sorted order; a timeout names the held lock path.
+Paths and existing data stay in place. `TENANTS_PATH` and `BINDINGS_PATH` still default to
+`./data/tenants.json` and `./data/bindings.json`; knowledge graph proposals, branding and
+`RBAC_PATH` (by default `rbac.sqlite`) default inside `DATA_DIR`. SQLite's `:memory:` and empty
+temporary database paths keep their existing meaning and need no sibling lock.
+For isolated dev servers with custom data directories, also set `TENANTS_PATH` and `BINDINGS_PATH`
+inside each server's own directory. A network file system must support cross-client advisory
+locks and atomic rename;
+configure NFS locking on the server and clients, without local-only locking, and verify contention
+between containers on the actual mounted volume before using it.
+
+Local SQLite uses `journal_mode=DELETE`, `synchronous=FULL` and `busy_timeout=5000`. Startup
+refuses an existing WAL database before migrations or writes. Stop every process using such a
+database, take a backup, checkpoint its WAL and convert it to DELETE mode with SQLite before
+starting this build. WAL is unsuitable for this network-file-system deployment model. The
+filesystem must also honour SQLite's locking and flush operations. JSON files, suggestions and
+branding replacements flush a unique sibling temporary file before an atomic rename, then flush
+the containing directory where supported. Windows directory-open or flush `EPERM` and `EACCES`
+errors are treated as unsupported directory flushing; file writes still flush before rename, and
+other I/O failures still fail the write. After taking every writer lock at boot, the server
+sweeps orphaned atomic-write `.tmp-*` siblings from `DATA_DIR` and `BRANDING_PATH`, and the named
+siblings of external JSON store overrides. It matches only the writer's UUID suffix, removes
+regular files only and never follows symlinks. Unrelated files and directories stay untouched.
+It skips any directory with a writer lock it does not own, and temporary siblings of files
+with another deployment's writer lock. Unreadable directories and undeletable orphans log
+`storage.sweep_failed` with only the basename and error code; cleanup continues without
+blocking boot.
+Never treat a temporary file as a backup.
+
+SIGTERM and SIGINT start the same bounded shutdown. The process stops scheduling and accepting
+new HTTP connections immediately. In-flight requests get up to three seconds to finish (at most
+half the configured grace period), then remaining HTTP work is aborted. Maintenance cancellation
+and checkpoints share the same overall grace period. The process drains HTTP work, closes SQLite
+and releases the writer lock. A second SIGINT forces an immediate non-zero exit. Each phase emits
+one JSON `server.shutdown` line. Syncs checkpoint progress every five
+pages; scheduled syncs also save their last partial batch when interrupted. An interrupted HTTP
+sync may retry its last partial batch because its request audit boundary refuses further writes
+after cancellation. A later run skips the pages already recorded. An upstream write
+whose reply is lost can still have happened, so these checkpoints do not promise exactly-once
+remote ingestion. Shutdown waits for active producers to finish their checkpoint. If they exceed
+the grace period, the process exits non-zero and the operating system releases its lock.
+**Configure a container stop timeout of 120 seconds**, longer than the default 100-second grace.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DATA_DIR` | `./data` | Persistent local state; mount `/app/data` when using the image. |
+| `WRITER_LOCK_WAIT_SECONDS` | `60` | Maximum time to wait for the exclusive writer lock. |
+| `SHUTDOWN_GRACE_SECONDS` | `100` | Maximum shutdown time before a forced non-zero exit. |
+| `MAINTENANCE_AT_UTC` | `15:17` | Daily maintenance time, exactly `HH:MM` in UTC, matching the Worker cron. Invalid values fail startup. |
+| `LOCAL_SCHEDULER_ENABLED` | enabled | Set exactly `false` to register no maintenance timers. |
+| `AUTO_ENRICH_CADENCE_HOURS` | `24` | Separate enrichment and suggested-question cadence. Finite positive values are clamped to 1 through 744 hours (31 days); zero, negative and non-finite values fail startup. |
+
+Timing settings for lock wait and shutdown accept seconds from 0 to 86400; invalid values fail
+startup. Daily maintenance follows the UTC wall clock rather than the time the container started.
+The daily pass and enrichment runs are serialised. A boot pass normally runs after 90 seconds,
+but is skipped when `DATA_DIR/maintenance-state.json` records a successful daily pass less than
+20 hours ago, or any daily attempt already started on the current UTC day. The boot attempt
+counts against that day's page budget, including a failed or interrupted attempt, so the scheduled
+pass and a same-day restart do not spend it again. The state file records `lastStart`, `lastSuccess` and `lastEnrichmentRun` as ISO
+timestamps, plus `consecutiveFailures`. An interrupted or failed daily pass does not advance
+`lastSuccess`. Enrichment keeps its separate cadence across restarts, even when the daily boot
+pass is skipped. Its first attempt is due at the later of 90 seconds after boot or
+`lastEnrichmentRun` plus the cadence; older state without that field starts enrichment after
+90 seconds. Each attempted enrichment pass records its start before dispatch, including failed
+or interrupted attempts, and does not advance the daily success timestamp.
+Long waits, including the 720-hour and 744-hour cadences, are split into chunks no larger than
+2,147,483,647 milliseconds. Daily waits recheck wall time at least once a minute so a forward
+clock step or resume from sleep does not postpone an overdue pass. Chunk wake-ups start no maintenance work until the target is due.
+
+Every executed pass emits one structured heartbeat line with the token `maintenance.heartbeat`,
+its `kind` (`daily` or `enrichment`), `outcome` (`success`, `failure` or `aborted`) and `durationMs`:
+
+```json
+{"event":"maintenance.heartbeat","kind":"daily","outcome":"success","durationMs":1234}
+```
+
+Failed passes may include `error`, a safe maintenance summary naming jobs, portals and unit
+kinds; raw upstream error details are withheld. Monitor failures and the age of the last daily
+success. A skipped boot pass emits no heartbeat.
+
+Back up all of `DATA_DIR`, including SQLite, source checkpoints, maintenance state and uploaded
+branding, plus any store path overrides. Stop the container first for a consistent snapshot of
+SQLite and the file-backed stores, then take a volume snapshot or copy. Preserve deployment
+secrets such as `BINDING_KEY` separately in protected backup storage so sealed credentials can be
+restored. Test restoration into an isolated directory with one writer before relying on backups.
+The writer lock does not replace backups or coordinate processes that bypass it.
+
+### Upgrade notes
+
+- Every deployment takes `DATA_DIR/.writer.lock`, `<file>.writer.lock` beside each of `TENANTS_PATH`, `BINDINGS_PATH`, `KG_PROPOSALS_PATH` and on-disk `RBAC_PATH`, and `BRANDING_PATH/.writer.lock`, even when the stores are inside `DATA_DIR`. Identical canonical lock paths are deduplicated. Legacy defaults and explicit overrides stay unchanged, and distinct files can share a parent directory. Grant write access for all lock files and never delete them.
+
+- The container now listens on **8787 by default**, matching its exposed port. Previously it listened on 8791 unless `PORT` was set. Update container routing and health checks to 8787, or set `PORT=8791` explicitly to retain the previous listener. Direct Deno runs still default to 8791.
+- New settings are `WRITER_LOCK_WAIT_SECONDS=60`, `SHUTDOWN_GRACE_SECONDS=100` and `MAINTENANCE_AT_UTC=15:17`. Lock and shutdown settings accept seconds from 0 to 86400, and maintenance requires `HH:MM` UTC; invalid values fail startup. Use a 120-second container stop timeout. `LOCAL_SCHEDULER_ENABLED=false` still disables all maintenance timers. `AUTO_ENRICH_CADENCE_HOURS` still defaults to 24 and caps finite positive values at 744 hours (31 days), but now rejects zero, negative and non-finite values instead of silently using the default.
+- Daily upkeep now runs at a fixed UTC time, 15:17 by default, rather than every 24 hours from boot. Review overnight schedules and set `MAINTENANCE_AT_UTC` if needed. The 90-second boot pass is skipped after a daily success less than 20 hours old or any daily attempt on the current UTC day. Enrichment retains its separate cadence.
+- Use a **stop-then-start (recreate) deployment strategy** on a shared volume. The new container cannot write or listen until the old process releases `.writer.lock`; it waits up to 60 seconds by default, then exits non-zero. Start-before-stop deployment strategies cannot overlap writers on the same data directory.
+- Atomic replacements now create files with mode **0600**, readable and writable only by their owner. Existing files acquire this mode when replaced. Backup and sidecar tooling using a different user must be adjusted to read as the file owner; preserve the deployment's user identity when restoring data.
+- Rollback of these durability changes is safe with one process under the same file owner: stop the new process before starting the older binary, preserve the port configuration, and keep the deployment's data and credential backups. Older binaries ignore `.writer.lock` and `maintenance-state.json`, so they do not enforce the new writer fence. File permissions remain 0600 until another write or an explicit permission change.
 
 ## Knowledge box credential encryption
 
@@ -243,7 +369,9 @@ it continues to exclude portal topics, questions and private configuration.
 `branding.logoMaxWidth` optionally caps a logo at an integer pixel width from 80 through 640.
 The rendered logo also fits the available header space and a 170px phone / 640px desktop cap.
 Omitting the field keeps existing logo sizing. `branding.showPortalSwitcher: false` hides the
-switcher beside the logo; omitted or `true` keeps it. The logo remains a link to the portal home.
+switcher beside the logo; omitted or `true` keeps it, and it then shows only when the viewer's
+portal list holds another portal or they can create portals (see
+[Portal list](RBAC.md#portal-list)). The logo remains a link to the portal home.
 Both fields are accepted by the strict configuration import. The safe pre-auth projection includes
 only the logo width; it has no portal switcher.
 
@@ -1070,6 +1198,54 @@ unit. One failing unit never stops the others:
 - The pass starts at a different portal each day, so a portal late in the list is not always the
   one a short pass leaves out.
 
+## Entra sign-in on single-process hosting
+
+The Deno server and Worker use the same OpenID Connect handler for `/auth/login` and
+`/auth/callback`, including state, nonce, PKCE, token verification and sealed session cookies.
+The Deno ingress accepts both Entra and external sessions, with the same role and host boundaries.
+Entra sign-in is unavailable on a portal's alias host.
+
+Set these variables in the single-process server's environment:
+
+| Variable | Meaning |
+|---|---|
+| `ENTRA_TENANT_ID` | Microsoft Entra directory tenant identifier. |
+| `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | The app registration's client identifier and secret. |
+| `SESSION_SECRET` | Random secret of at least 32 bytes. Required in production; keep it stable across restarts. |
+| `ENTRA_REDIRECT_URI` | Explicit public callback URL, for example `https://research.example/auth/callback`. Register exactly this URL with Entra. |
+
+When `ENTRA_TENANT_ID` is set, the Deno server refuses to start without an absolute HTTPS
+`ENTRA_REDIRECT_URI`, even if the other Entra settings are incomplete. HTTP is allowed only for
+local development on `localhost`, `127.0.0.1` or `[::1]`. Any supplied callback URL is validated
+at startup. A TLS-terminating proxy forwards an HTTP request to Deno, so deriving the callback
+from that request would use the wrong origin. Keep the public host in the forwarded request.
+The handler uses the explicit callback URL for the token exchange, and its scheme for the
+post-login return URL; forwarded scheme headers are not trusted. Use HTTPS for a hosted
+deployment. Entra sign-in stays unavailable until all credentials are configured. External-only
+deployments do not need `ENTRA_REDIRECT_URI`.
+
+## Single-process mutation audit
+
+Every file-store write declared `local` in `apps/api/src/permissions.ts` participates in the
+same request audit boundary as the Worker. Each declared mutation records one `local.mutation`
+with its permission, actor, scope and request identifier, including sources, enrichments,
+suggestions, feedback, insights, routing, knowledge graph proposals and branding. Nested file
+writes within one method do not duplicate that record. Failed required audit appends fail the
+request, restore that synchronous mutation's file bytes and cached state, and block later writes
+in the same request. Earlier committed mutations remain committed. Portal erasure retains its
+existing retry-to-complete behaviour described below.
+
+The Worker-only tenant seeding and enrichment migration declarations create no equivalent Deno
+write: the local tenant seed is read from code, and enrichment records are already stored in the
+JSON format the Worker imports. Scheduled jobs retain their system audit boundaries. See
+[RBAC](RBAC.md#audit-log) for the redacted audit fields and retention rules.
+
+New branding writes are stored under `BRANDING_PATH/assets/<slug>/<kind>.json`, with binary
+bytes encoded as base64 beside the content type and version. Existing fixed branding files and
+layout images remain readable. Replacing a slot commits its new record before removing the old
+files within the same audited mutation, so a crash before that commit leaves the legacy asset
+readable. Removing or erasing an asset also removes those legacy files.
+
 ## External sign-in handoff
 
 A deployment can accept a short-lived, signed identity assertion from a trusted external issuer,
@@ -1091,8 +1267,8 @@ Configure the same values in the Worker environment or the local server's `.env`
 The Worker and a production local server require `SESSION_SECRET`. For local development only,
 an omitted secret uses a randomly generated process key, so sessions end on restart. Replay
 identifiers still persist independently in SQLite; restarting does not make an assertion reusable.
-The local server serves only `/auth/external` and `/auth/logout` from the `/auth/*` boundary and
-reads only external session cookies; its Entra behaviour is unchanged.
+The local server also serves `/auth/login` and `/auth/callback` through the shared Entra handler
+and reads both kinds of session cookie (see [Entra sign-in](#entra-sign-in-on-single-process-hosting)).
 
 External sign-in is off unless both issuer and public JWK are set. Invalid configuration fails
 closed. Entra credentials are not required for an external-only deployment. When Entra is also
@@ -1319,6 +1495,12 @@ Worker configurations in this repository set it.
 
 ## Configurable platform domain
 
+**Deno upgrade:** Sessions on platform hosts now use `Domain=<PLATFORM_DOMAIN>` instead of a
+host-only cookie. With a company apex such as `example.com`, the browser sends the session cookie
+to that apex and all its subdomains, including unrelated services. Choose a dedicated hostname
+such as `research.example.com` when other company services must not receive CorpusKit cookies.
+Sign-in and logout clear the old host-only cookie on the host issuing the response.
+
 Set the runtime `PLATFORM_DOMAIN` variable to the deployment's platform hostname, such as
 `research.example`. It defaults to `corpuskit.org`. Use a DNS hostname without a scheme, path or
 port. Explicitly malformed values return HTTP 503 `platform_domain_invalid` at the Worker
@@ -1371,6 +1553,26 @@ name. Before changing it on a deployment that already attached hostnames, list t
 Worker custom domains: a portal whose hostname is attached to the previous script cannot be
 removed (`domain_removal_failed`) until that hostname is detached or moved.
 
+### Shared HTTP edge rules
+
+The Worker and Deno ingress both use `apps/api/src/edge.ts` for security headers, static-response
+caching, platform-host redirects and the About-page and documentation boundaries:
+
+- Every response has a content security policy, Permissions Policy, Referrer Policy, HSTS,
+  `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`. A stricter policy supplied by an
+  API or stored-file response is preserved. HSTS includes subdomains only on platform hosts.
+- HTML is served with `Cache-Control: no-store`. Other static responses use
+  `Cache-Control: public, max-age=300`. API and authentication responses keep their existing
+  cache rules, including `private, no-store` for identity-dependent portal data.
+- GET and HEAD on `www.<PLATFORM_DOMAIN>` redirect permanently (308) to the HTTPS apex with the
+  path and query preserved. GET and HEAD on a valid `<slug>.<PLATFORM_DOMAIN>/` redirect (308)
+  to `/t/<slug>` with the query preserved. Reserved or invalid portal labels do not redirect.
+  Operator credential checks run before these redirects.
+- `/about`, `/about/` and `/about.html` are served only on the platform apex. Every other host,
+  including localhost, answers 404 for them. Use the configured apex host to preview About.
+- `/docs` and every path under `/docs/`, including raw HTML asset URLs, also answer 404 off the
+  platform apex. Documentation remains available on the configured apex.
+
 ## Search engines
 
 The Worker and the local server answer three files for crawlers themselves, built from
@@ -1394,6 +1596,18 @@ A portal's pages are open to search engines unless the deployment says otherwise
 Set `PORTAL_INDEXING=deny` on a deployment that hosts portals for other organisations, whose names
 and content should not reach search results just because someone linked to a portal. A deployment
 whose public portals should be found keeps the default.
+
+To have Bing and the other [IndexNow](https://www.indexnow.org) search engines crawl new and
+changed pages within days, set a key on the Worker and send the sitemap after each deploy that
+changes the home page, About or the documentation:
+
+| Variable | Meaning |
+|---|---|
+| `INDEXNOW_KEY` | 8 to 128 letters, digits or hyphens, for example 32 random hex characters. With it set, the platform domain answers `/<key>.txt` with the key, which the search engines fetch to confirm a submission is yours. Without it there is no key file. Set it as a secret (`wrangler secret put INDEXNOW_KEY`). |
+
+Then run `INDEXNOW_KEY=<key> deno task indexnow <platform domain>`. It reads the live sitemap,
+checks the key file answers, and sends every page the sitemap lists; `--dry-run` prints the
+submission instead.
 
 ## Portal host aliases
 
@@ -1568,9 +1782,10 @@ The SPA calls the API with relative URLs, so it works unchanged on an alias host
 a `corpuskit-host-portal` shell setting with the portal's slug on its alias hosts and leaves it
 empty on every other host. On an alias host the SPA keeps links to its own portal on that host,
 and sends links to any other portal to that portal's canonical hostname, or to the platform domain
-when it has none. The portal switcher lists only the alias host's portal, because the portal list
-does. Platform administration links, which only platform administrators see, lead to the platform
-pages, which are not served on an alias host.
+when it has none. The portal switcher is not shown, because the portal list holds only the alias
+host's portal and platform authority, which could create portals, does not apply there. Platform
+administration links, which only platform administrators see, lead to the platform pages, which
+are not served on an alias host.
 
 ### Alias and candidate hosts
 

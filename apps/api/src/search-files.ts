@@ -122,6 +122,33 @@ export function sitemapXml(domain: string): string {
     `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`
 }
 
+/**
+ * `INDEXNOW_KEY` (https://www.indexnow.org): the key, 8 to 128 letters, digits or hyphens, that
+ * proves to Bing and the other IndexNow search engines that a list of changed pages comes from
+ * this deployment. Anything else, including an absent value, is no key.
+ */
+export function indexNowKey(value: string | undefined): string | null {
+  const key = value?.trim() ?? ''
+  return /^[A-Za-z0-9-]{8,128}$/.test(key) ? key : null
+}
+
+/**
+ * The IndexNow key file: with a key set, the platform apex answers `/<key>.txt` with the key, which
+ * the search engines fetch to confirm a submission (`deno task indexnow`). Null for any other
+ * request, so every other host and path behaves as before.
+ */
+export function indexNowKeyFile(
+  domain: string,
+  hostname: string,
+  pathname: string,
+  value: string | undefined,
+): string | null {
+  const key = indexNowKey(value)
+  return key && hostname.toLowerCase() === getPlatformDomain(domain) && pathname === `/${key}.txt`
+    ? key
+    : null
+}
+
 /** The project's one-line description, as the home page and About give it. */
 export const PROJECT_DESCRIPTOR =
   'CorpusKit, the open source research portal for Progress Agentic RAG'

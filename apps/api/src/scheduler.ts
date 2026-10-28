@@ -30,8 +30,10 @@ import {
 } from './lifecycle-management.ts'
 import { PortalLifecycleError } from './lifecycle-error.ts'
 import { readLifecycle } from './lifecycle-policy.ts'
+import { startMaintenanceTimers } from './local-scheduler.ts'
 
 interface SystemJobContext {
+  signal?: AbortSignal
   localMutations?: LocalMutationScope
   audit: AuditStore
   requestId: string
@@ -182,6 +184,7 @@ function* scheduledPortals(
   ledger: MaintenanceLedger,
 ): Generator<TenantConfig> {
   for (const summary of maintenanceOrder(tenants.list(), (context?.now ?? Date.now)())) {
+    context?.signal?.throwIfAborted()
     if (ledger.halted) return
     let config: TenantConfig | undefined
     try {
@@ -205,10 +208,13 @@ function scopedSystemAction<T>(
   target: { kind: string; id: string },
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
+  context?.signal?.throwIfAborted()
   if (!context) return run(new AbortController().signal)
   const declaration = DECLARATIONS.find((d) => d.kind === 'internal' && d.path === action)
   if (!declaration) throw new Error('Missing internal audit declaration')
+  let running: Promise<T> | undefined
   return executeAudited({
+    signal: context.signal,
     audit: context.audit,
     localMutations: context.localMutations,
     input: {
@@ -219,7 +225,11 @@ function scopedSystemAction<T>(
       target,
       detail: { permission: declaration.permission },
     },
-    run,
+    run: (signal) => running = run(signal),
+  }).finally(async () => {
+    // executeAudited records cancellation promptly; shutdown also waits for the producer
+    // to save its final checkpoint before closing the connection.
+    if (context.signal?.aborted) await running?.catch(() => {})
   })
 }
 
@@ -319,8 +329,9 @@ export async function runSystemMaintenance(
   retentionDays: string | undefined,
   jobs: readonly MaintenanceJob[] = ['sync', 'watch', 'enrichment'],
   retain = true,
-  options: { now?: () => number } = {},
+  options: { now?: () => number; signal?: AbortSignal } = {},
 ): Promise<void> {
+  options.signal?.throwIfAborted()
   const days = auditRetentionDays(retentionDays)
   const guarded = stores.lifecycle ? guardManagement(management, stores.lifecycle) : management
   // No platform exception: a background job never writes to a suspended or read-only portal.
@@ -334,12 +345,14 @@ export async function runSystemMaintenance(
   }
   let halted = false
   for (const job of jobs) {
+    options.signal?.throwIfAborted()
     try {
       await runSystemJob(stores.rbac.audit, job, (context) => {
         context.localMutations = stores.localMutations
         context.lifecycle = stores.lifecycle
         context.bindings = stores.bindings
         context.now = options.now
+        context.signal = options.signal
         if (job === 'sync') return runAutoSyncs(guarded, stores.tenants, sources, context)
         if (job === 'watch') return runWatches(guarded, stores.tenants, stores.watches, context)
         return runAutoEnrichments(guarded, stores.tenants, enrichments, context)
@@ -405,8 +418,10 @@ export async function syncSource(
   stopTaking?: () => boolean,
 ): Promise<{ added: number; deferred: number; backpressure: boolean; boxBusy: boolean }> {
   const perRun = pagesPerRun(source)
-  const discovered = await discoverLinks(source.url, DISCOVER_CAP)
-  const known = new Set(source.synced ?? [])
+  signal?.throwIfAborted()
+  const discovered = await discoverLinks(source.url, DISCOVER_CAP, signal)
+  const progress = sources.list(config.slug).find((entry) => entry.id === source.id) ?? source
+  const known = new Set(progress.synced ?? [])
   const freshAll = discovered.links.filter((l) => !known.has(l))
   const fresh = freshAll.slice(0, perRun)
   await emit(
@@ -414,6 +429,23 @@ export async function syncSource(
       (freshAll.length > fresh.length ? ` (ingesting ${fresh.length} this run)` : ''),
   )
   let added = 0
+  const pending = new Set<string>()
+  let checkpointed = known.size
+  const checkpoint = () => {
+    if (checkpointed === known.size) return
+    const stored = sources.list(config.slug).find((entry) => entry.id === source.id) ?? progress
+    const synced = new Set(stored.synced ?? [])
+    const itemCount = (stored.itemCount ?? synced.size) +
+      [...pending].filter((url) => !synced.has(url)).length
+    // A producer released at its deadline can finish after a newer run saved progress.
+    for (const url of synced) known.add(url)
+    sources.update(config.slug, source.id, {
+      synced: [...known].slice(-5000),
+      itemCount,
+    })
+    pending.clear()
+    checkpointed = known.size
+  }
   let rejected = 0
   let deferred = 0
   /** Pages we could not read cleanly - never guessed at, never ingested. */
@@ -428,132 +460,141 @@ export async function syncSource(
   let boxBusy = false
   /** Pages the knowledge box could not take this time (408 or 5xx), left for the next sync. */
   let retry = 0
-  for (const [i, url] of fresh.entries()) {
-    signal?.throwIfAborted()
-    if (stopTaking?.()) {
-      deferred = fresh.length - i
-      await emit(
-        `Stopping this run to stay within its time limit - ` +
-          `${deferred} ${deferred === 1 ? 'page' : 'pages'} left for the next sync.`,
-      )
-      break
-    }
-    try {
-      // Fetch and clean the page ourselves so the index holds body content,
-      // not nav chrome - and so bot walls never enter the corpus.
-      let ingested = false
-      try {
-        const res = await fetch(url, {
-          headers: { 'user-agent': CRAWLER_USER_AGENT },
-          signal: signal
-            ? AbortSignal.any([signal, AbortSignal.timeout(25_000)])
-            : AbortSignal.timeout(25_000),
-        })
-        if (!res.ok) {
-          // A refusal (typically a bot wall answering 403) used to fall
-          // through to createLink, handing the same blocked URL to the
-          // platform crawler - which fails the same way and leaves an empty
-          // junk resource behind. Reject it here instead.
-          const body = await res.text().catch(() => '')
-          rejectedReason ??= describeFetchFailure(res.status, body)
-          rejected += 1
-          known.add(url)
-          continue
-        }
-        if ((res.headers.get('content-type') ?? '').includes('html')) {
-          const html = await res.text()
-          if (looksLikeChallengePage(html)) {
-            // Checked BEFORE extraction, not only as its fallback: a
-            // challenge page can carry enough prose to clear the extractor's
-            // word floor and would otherwise be ingested as real content.
-            rejectedReason ??= describeFetchFailure(res.status, html)
-            rejected += 1
-            known.add(url)
-            continue
-          }
-          const cleaned = extractMainContent(html)
-          if (cleaned) {
-            signal?.throwIfAborted()
-            await management.createText(config, {
-              title: cleaned.title,
-              body: cleaned.body,
-              format: 'MARKDOWN',
-              originUrl: url,
-            })
-            ingested = true
-          }
-        }
-      } catch (err) {
-        signal?.throwIfAborted()
-        // Errors from the knowledge box are not fetch/parse failures and must
-        // not be masked as "the site was awkward, skip it". Back-pressure
-        // needs the outer catch's deferral, and a 401/403 means the box
-        // refuses writes outright - both belong to the caller.
-        if (err instanceof PortalLifecycleError) throw err
-        if (err instanceof AragApiError) {
-          // Back-pressure, a rate limit and a platform fault are the box's answer, not the
-          // page's: they must never mark the page synced.
-          if (
-            err.backpressure || err.status === 401 || err.status === 403 ||
-            err.status === 408 || err.status === 429 || err.status >= 500
-          ) throw err
-        }
-        // Our own fetch or parse failed - fall through to the skip below.
-      }
-      if (!ingested) {
-        // This used to hand the url to the platform's own crawler
-        // (createLink) as a fallback. That bypasses this function's entire
-        // quality gate: the platform crawler has no bot-wall check, so on a
-        // site that challenges intermittently it stores the interstitial as
-        // a resource - verified live, a page titled "Just a moment..."
-        // carrying Cloudflare's "Performing security verification" copy.
-        // An unattended job feeding a shared corpus must not create junk it
-        // cannot recognise. Skip the page instead; `known` still records it
-        // so one stubborn url cannot starve every later page of the run, and
-        // an administrator can still force it in from Add content > Add link.
-        skipped += 1
-        known.add(url)
-        continue
-      }
-      known.add(url)
-      added += 1
-      if (added % 5 === 0) await emit(`Ingested ${added} of ${fresh.length} new pages…`)
-    } catch (err) {
-      if (err instanceof PortalLifecycleError) {
-        // The portal refuses every further page the same way (its limit is reached, or it is
-        // read-only or paused): stop and say so once, keeping the pages already added.
-        refusal = err
-        await emit(err.message)
-        break
-      }
-      if (err instanceof AragApiError && (err.backpressure || err.status === 429)) {
-        // The box's ingestion queue is full, or the account is rate limited. Stop this run
-        // cleanly rather than hammering it for every remaining page - they stay un-synced
-        // (not added to `known`) so the next scheduled or manual sync picks them up once the
-        // queue has drained. A backlog of this box's own processing holds back this portal
-        // alone; anything else is the account every portal shares.
+  try {
+    for (const [i, url] of fresh.entries()) {
+      signal?.throwIfAborted()
+      if (stopTaking?.()) {
         deferred = fresh.length - i
-        if (isKnowledgeBoxBackpressure(err)) boxBusy = true
-        else backpressure = true
         await emit(
-          `Knowledge box is busy processing recent changes - stopping this run early. ` +
+          `Stopping this run to stay within its time limit - ` +
             `${deferred} ${deferred === 1 ? 'page' : 'pages'} left for the next sync.`,
         )
         break
       }
-      if (err instanceof AragApiError && (err.status === 408 || err.status >= 500)) {
-        // A fault on the platform's side: this page is left for the next sync, not skipped.
-        retry += 1
-        continue
+      try {
+        // Fetch and clean the page ourselves so the index holds body content,
+        // not nav chrome - and so bot walls never enter the corpus.
+        let ingested = false
+        try {
+          const res = await fetch(url, {
+            headers: { 'user-agent': CRAWLER_USER_AGENT },
+            signal: signal
+              ? AbortSignal.any([signal, AbortSignal.timeout(25_000)])
+              : AbortSignal.timeout(25_000),
+          })
+          if (!res.ok) {
+            // A refusal (typically a bot wall answering 403) used to fall
+            // through to createLink, handing the same blocked URL to the
+            // platform crawler - which fails the same way and leaves an empty
+            // junk resource behind. Reject it here instead.
+            const body = await res.text().catch(() => '')
+            rejectedReason ??= describeFetchFailure(res.status, body)
+            rejected += 1
+            known.add(url)
+            continue
+          }
+          if ((res.headers.get('content-type') ?? '').includes('html')) {
+            const html = await res.text()
+            if (looksLikeChallengePage(html)) {
+              // Checked BEFORE extraction, not only as its fallback: a
+              // challenge page can carry enough prose to clear the extractor's
+              // word floor and would otherwise be ingested as real content.
+              rejectedReason ??= describeFetchFailure(res.status, html)
+              rejected += 1
+              known.add(url)
+              continue
+            }
+            const cleaned = extractMainContent(html)
+            if (cleaned) {
+              signal?.throwIfAborted()
+              await management.createText(config, {
+                title: cleaned.title,
+                body: cleaned.body,
+                format: 'MARKDOWN',
+                originUrl: url,
+              })
+              ingested = true
+            }
+          }
+        } catch (err) {
+          signal?.throwIfAborted()
+          // Errors from the knowledge box are not fetch/parse failures and must
+          // not be masked as "the site was awkward, skip it". Back-pressure
+          // needs the outer catch's deferral, and a 401/403 means the box
+          // refuses writes outright - both belong to the caller.
+          if (err instanceof PortalLifecycleError) throw err
+          if (err instanceof AragApiError) {
+            // Back-pressure, a rate limit and a platform fault are the box's answer, not the
+            // page's: they must never mark the page synced.
+            if (
+              err.backpressure || err.status === 401 || err.status === 403 ||
+              err.status === 408 || err.status === 429 || err.status >= 500
+            ) throw err
+          }
+          // Our own fetch or parse failed - fall through to the skip below.
+        }
+        if (!ingested) {
+          // This used to hand the url to the platform's own crawler
+          // (createLink) as a fallback. That bypasses this function's entire
+          // quality gate: the platform crawler has no bot-wall check, so on a
+          // site that challenges intermittently it stores the interstitial as
+          // a resource - verified live, a page titled "Just a moment..."
+          // carrying Cloudflare's "Performing security verification" copy.
+          // An unattended job feeding a shared corpus must not create junk it
+          // cannot recognise. Skip the page instead; `known` still records it
+          // so one stubborn url cannot starve every later page of the run, and
+          // an administrator can still force it in from Add content > Add link.
+          skipped += 1
+          known.add(url)
+          continue
+        }
+        known.add(url)
+        pending.add(url)
+        added += 1
+        if (added % 5 === 0) await emit(`Ingested ${added} of ${fresh.length} new pages...`)
+      } catch (err) {
+        if (err instanceof PortalLifecycleError) {
+          // The portal refuses every further page the same way (its limit is reached, or it is
+          // read-only or paused): stop and say so once, keeping the pages already added.
+          refusal = err
+          await emit(err.message)
+          break
+        }
+        if (err instanceof AragApiError && (err.backpressure || err.status === 429)) {
+          // The box's ingestion queue is full, or the account is rate limited. Stop this run
+          // cleanly rather than hammering it for every remaining page - they stay un-synced
+          // (not added to `known`) so the next scheduled or manual sync picks them up once the
+          // queue has drained. A backlog of this box's own processing holds back this portal
+          // alone; anything else is the account every portal shares.
+          deferred = fresh.length - i
+          if (isKnowledgeBoxBackpressure(err)) boxBusy = true
+          else backpressure = true
+          await emit(
+            `Knowledge box is busy processing recent changes - stopping this run early. ` +
+              `${deferred} ${deferred === 1 ? 'page' : 'pages'} left for the next sync.`,
+          )
+          break
+        }
+        if (err instanceof AragApiError && (err.status === 408 || err.status >= 500)) {
+          // A fault on the platform's side: this page is left for the next sync, not skipped.
+          retry += 1
+          continue
+        }
+        // A 401/403 from the platform is a credential problem, not a bad page:
+        // it will reject every remaining page identically. Stop and say so once,
+        // rather than emitting a "skipped" line per page and finishing "complete".
+        if (err instanceof AragApiError && (err.status === 401 || err.status === 403)) {
+          throw new Error(READ_ONLY_BOX_MESSAGE)
+        }
+        signal?.throwIfAborted()
+        await emit(`Skipped ${url} - the platform rejected it`)
+      } finally {
+        if (known.size - checkpointed >= 5) checkpoint()
       }
-      // A 401/403 from the platform is a credential problem, not a bad page:
-      // it will reject every remaining page identically. Stop and say so once,
-      // rather than emitting a "skipped" line per page and finishing "complete".
-      if (err instanceof AragApiError && (err.status === 401 || err.status === 403)) {
-        throw new Error(READ_ONLY_BOX_MESSAGE)
-      }
-      await emit(`Skipped ${url} - the platform rejected it`)
     }
+  } finally {
+    // Also runs on cancellation, provider failure and a client closing its event stream.
+    checkpoint()
   }
   if (rejected > 0) {
     await emit(
@@ -574,19 +615,10 @@ export async function syncSource(
     )
   }
   signal?.throwIfAborted()
-  if (refusal) {
-    // Keep what this run got through, so the next sync neither re-adds nor re-reads it.
-    sources.update(config.slug, source.id, {
-      synced: [...known].slice(-5000),
-      itemCount: (source.itemCount ?? source.synced?.length ?? 0) + added,
-    })
-    throw refusal
-  }
+  if (refusal) throw refusal
   sources.update(config.slug, source.id, {
     lastSync: new Date().toISOString(),
     lastAdded: added,
-    synced: [...known].slice(-5000),
-    itemCount: (source.itemCount ?? source.synced?.length ?? 0) + added,
     lastStatus: 'ok',
     lastError: null,
   })
@@ -639,6 +671,7 @@ export async function runWatches(
       continue
     }
     for (const watch of saved) {
+      context?.signal?.throwIfAborted()
       if (ledger.halted) break
       await ledger.unit(
         { slug: config.slug, target: 'watch' },
@@ -687,7 +720,9 @@ const MAX_AUTO_ENRICH_CADENCE_HOURS = 24 * 31
 export function autoEnrichmentCadenceMs(raw: string | undefined): number {
   if (raw == null || raw.trim() === '') return DEFAULT_AUTO_ENRICH_CADENCE_MS
   const requested = Number(raw)
-  if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_AUTO_ENRICH_CADENCE_MS
+  if (!Number.isFinite(requested) || requested <= 0) {
+    throw new Error('AUTO_ENRICH_CADENCE_HOURS must be finite and positive')
+  }
   const hours = Math.min(
     Math.max(requested, MIN_AUTO_ENRICH_CADENCE_HOURS),
     MAX_AUTO_ENRICH_CADENCE_HOURS,
@@ -722,7 +757,10 @@ export async function runAutoEnrichments(
     if (!hasKnowledgeBox(context, config.slug)) continue
     // Rechecked before each model call and write, so a portal paused, made read-only or with
     // agents disabled while its run is going stops there.
-    const proceed = lifecycle ? () => assertAgentRunAllowed(lifecycle, config.slug) : undefined
+    const proceed = () => {
+      context?.signal?.throwIfAborted()
+      if (lifecycle) assertAgentRunAllowed(lifecycle, config.slug)
+    }
     let refused = false
     let nothingToDo = false
     /** The box stayed busy through the enrichment run's retries: leave it alone this pass. */
@@ -823,6 +861,7 @@ export async function runAutoSyncs(
     }
     for (const source of registered) {
       if (!source.auto) continue
+      context?.signal?.throwIfAborted()
       if (ledger.halted) break
       let refused = false
       await ledger.unit(
@@ -907,10 +946,10 @@ export function startScheduler(
   env: Record<string, string | undefined>,
   lifecycle?: PortalLifecycleStore,
   bindings?: Pick<BindingStoreApi, 'status'>,
-): () => void {
+): () => Promise<void> {
   // Local, explicitly operated demos may allow manual agents while scheduling no upkeep.
   // Unset or any value other than the exact string 'false' keeps the existing timers.
-  if (env.LOCAL_SCHEDULER_ENABLED === 'false') return () => {}
+  if (env.LOCAL_SCHEDULER_ENABLED === 'false') return async () => {}
   // The feedback files `buildApp` keeps by default, under the same DATA_DIR.
   const stores = {
     rbac,
@@ -920,45 +959,20 @@ export function startScheduler(
     enrichments,
     lifecycle,
     bindings,
-    feedback: new FeedbackStore(),
+    feedback: new FeedbackStore(env.DATA_DIR ?? './data'),
   }
-  const runDaily = () =>
-    runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'])
-  const runEnrichments = () =>
-    runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['enrichment'], false)
-
-  // Serialise scheduled platform work. A configurable enrichment timer must
-  // never overlap the daily ingest pass and recreate the contention this
-  // scheduler is meant to avoid.
-  let stopped = false
-  let queue = Promise.resolve()
-  const enqueue = (task: () => Promise<void>) => {
-    queue = queue.then(() => stopped ? undefined : task()).catch((error: unknown) => {
-      // Keep the timer usable for its next cadence, without replaying this failed task. A
-      // maintenance error names only jobs, portals and kinds of unit, never upstream detail.
-      console.error(
-        '[scheduler] maintenance failed; no automatic retry',
-        error instanceof MaintenanceError ? error.message : '',
-      )
-    })
-  }
-
-  // First pass shortly after boot (machines may sleep between requests). The enrichment pass
-  // runs even when the daily pass had failures.
-  const boot = setTimeout(() =>
-    enqueue(async () => {
-      const daily = await runDaily().then(() => null, (error: unknown) => error)
-      // A daily pass the shared account turned away is not followed by more of its work.
-      if (!(daily instanceof MaintenanceError && daily.halted)) await runEnrichments()
-      if (daily) throw daily
-    }), 90_000)
-  const daily = setInterval(() => enqueue(runDaily), 24 * 3600 * 1000)
-  const cadence = autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS)
-  const enrichment = setInterval(() => enqueue(runEnrichments), cadence)
-  return () => {
-    stopped = true
-    clearTimeout(boot)
-    clearInterval(daily)
-    clearInterval(enrichment)
-  }
+  return startMaintenanceTimers({
+    dataDir: env.DATA_DIR ?? './data',
+    atUtc: env.MAINTENANCE_AT_UTC,
+    cadenceMs: autoEnrichmentCadenceMs(env.AUTO_ENRICH_CADENCE_HOURS),
+    failureMessage: (error) => error instanceof MaintenanceError ? error.message : undefined,
+    runDaily: (signal) =>
+      runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['sync', 'watch'], true, {
+        signal,
+      }),
+    runEnrichments: (signal) =>
+      runSystemMaintenance(management, stores, env.AUDIT_RETENTION_DAYS, ['enrichment'], false, {
+        signal,
+      }),
+  })
 }

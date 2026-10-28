@@ -157,13 +157,13 @@ export async function handleAuthRequest(
     return json({ authenticated: Boolean(user), user }, 200)
   }
   if (url.pathname === '/auth/logout' && (request.method === 'GET' || request.method === 'POST')) {
+    const headers = new Headers({ location: '/', 'cache-control': 'no-store' })
+    headers.append('set-cookie', clearCookie(SESSION_COOKIE, config.cookieDomain))
+    // Earlier Deno sessions used a host-only cookie, which survives a domain-scoped deletion.
+    if (config.cookieDomain) headers.append('set-cookie', clearCookie(SESSION_COOKIE))
     return new Response(null, {
       status: 302,
-      headers: {
-        location: '/',
-        'cache-control': 'no-store',
-        'set-cookie': clearCookie(SESSION_COOKIE, config.cookieDomain),
-      },
+      headers,
     })
   }
   if (url.pathname.startsWith('/auth/')) return json({ error: 'not_found' }, 404)
@@ -220,19 +220,15 @@ async function finishExternalLogin(
       throw new ExternalLoginError('session')
     }
     // Build the complete response first, so nothing after the single-use consume can fail.
-    const success = new Response(null, {
-      status: 303,
-      headers: {
-        location: externalReturnTo(
-          url.searchParams.getAll('returnTo').length === 1
-            ? url.searchParams.get('returnTo')
-            : null,
-        ),
-        'cache-control': 'no-store',
-        'referrer-policy': 'no-referrer',
-        'set-cookie': setCookie(SESSION_COOKIE, session, 8 * 3600, config.cookieDomain),
-      },
+    const headers = new Headers({
+      location: externalReturnTo(
+        url.searchParams.getAll('returnTo').length === 1 ? url.searchParams.get('returnTo') : null,
+      ),
+      'cache-control': 'no-store',
+      'referrer-policy': 'no-referrer',
     })
+    appendSessionCookie(headers, session, config.cookieDomain)
+    const success = new Response(null, { status: 303, headers })
     let consumed: boolean
     try {
       consumed = await services.consume(claims.replayKey, claims.exp * 1000)
@@ -409,10 +405,7 @@ async function finishLogin(request: Request, url: URL, config: AuthConfig): Prom
     location: state.returnTo,
     'cache-control': 'no-store',
   })
-  headers.append(
-    'set-cookie',
-    setCookie(SESSION_COOKIE, session, 8 * 60 * 60, config.cookieDomain),
-  )
+  appendSessionCookie(headers, session, config.cookieDomain)
   headers.append('set-cookie', clearCookie(STATE_COOKIE, config.cookieDomain))
   return new Response(null, { status: 302, headers })
 }
@@ -534,6 +527,12 @@ function setCookie(name: string, value: string, maxAge: number, domain?: string)
 function clearCookie(name: string, domain?: string): string {
   const cookieDomain = domain ? `; Domain=${domain}` : ''
   return `${name}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0${cookieDomain}`
+}
+
+/** Retire the pre-upgrade Deno cookie so it cannot shadow a new platform session. */
+function appendSessionCookie(headers: Headers, session: string, domain?: string): void {
+  headers.append('set-cookie', setCookie(SESSION_COOKIE, session, 8 * 3600, domain))
+  if (domain) headers.append('set-cookie', clearCookie(SESSION_COOKIE))
 }
 
 function cookie(request: Request, name: string): string | null {

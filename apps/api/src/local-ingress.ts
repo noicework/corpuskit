@@ -1,4 +1,12 @@
 import {
+  apexOnlyDocument,
+  hostTransportSecurity,
+  platformHostnameLocation,
+  secureAssetResponse,
+  withSecurityHeaders,
+} from './edge.ts'
+import { isPlatformHostname } from '../../../packages/core/src/platform-domain.ts'
+import {
   type AuthConfig,
   authConfigured,
   authUser,
@@ -79,6 +87,23 @@ const tcpPeer = (info?: PeerInfo) =>
 class InvalidLocalPrincipal extends Error {}
 class InvalidOperatorCredential extends Error {}
 
+function entraRedirectUri(env: LocalIngressOptions['env']): string | undefined {
+  const uri = env.ENTRA_REDIRECT_URI?.trim()
+  if (!env.ENTRA_TENANT_ID && !uri) return undefined
+  try {
+    const url = new URL(uri ?? '')
+    if (
+      url.protocol === 'https:' ||
+      (url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))
+    ) return uri
+  } catch {
+    // Report a configuration error without including a potentially sensitive URL.
+  }
+  throw new Error(
+    'Deno Entra sign-in requires ENTRA_REDIRECT_URI to be an absolute HTTPS URL (HTTP is allowed only on localhost)',
+  )
+}
+
 /** Trusted local adapter. Session fixtures are in-process arguments, never HTTP input. */
 export class LocalIngress {
   private readonly contexts = new WeakMap<Request, PortalRequestContext>()
@@ -118,6 +143,7 @@ export class LocalIngress {
     } catch {
       // An unreadable registry fails its own requests; it never stops the server starting.
     }
+    const redirectUri = entraRedirectUri(env)
     const configuredSecret = env.SESSION_SECRET
     if (
       env.ENVIRONMENT === 'production' &&
@@ -139,7 +165,7 @@ export class LocalIngress {
       clientSecret: env.ENTRA_CLIENT_SECRET ?? '',
       tenantId: env.ENTRA_TENANT_ID ?? '',
       sessionSecret: this.secret,
-      redirectUri: env.ENTRA_REDIRECT_URI,
+      redirectUri,
       adminEmails: env.ENTRA_ADMIN_EMAILS,
       externalLogin: { ...externalLoginConfig(env), audience: this.audience },
     }
@@ -208,6 +234,19 @@ export class LocalIngress {
     info?: PeerInfo,
     session: TrustedSessionFacts | null = null,
   ): Promise<Response> {
+    return withSecurityHeaders(hostTransportSecurity(
+      request,
+      this.options.env.PLATFORM_DOMAIN,
+      await this.route(request, dispatch, info, session),
+    ))
+  }
+
+  private async route(
+    request: Request,
+    dispatch: (request: Request) => Response | Promise<Response>,
+    info?: PeerInfo,
+    session: TrustedSessionFacts | null = null,
+  ): Promise<Response> {
     const requestId = crypto.randomUUID()
     const { rbac } = this.options
     const clientIp = this.clientAddress(request, info)
@@ -215,6 +254,7 @@ export class LocalIngress {
     // bucket for requests with no reported address.
     const limitKey = addressKey(clientIp)
     let operator: { id: string } | undefined
+    let sessionName = ''
     const actor = (): AuditActor =>
       operator ? { kind: 'operator', id: `operator:${operator.id}` } : { kind: 'anonymous' }
     const denial = (status: 401 | 403, code = status === 401 ? 'unauthorised' : 'forbidden') =>
@@ -231,7 +271,15 @@ export class LocalIngress {
         }),
       )
     try {
-      const path = new URL(request.url).pathname
+      const url = new URL(request.url)
+      const path = url.pathname
+      const platformDomain = this.platformDomain()
+      if (platformDomain === null) {
+        return Response.json({ error: 'platform_domain_invalid' }, {
+          status: 503,
+          headers: { 'cache-control': 'no-store' },
+        })
+      }
       const hostPortal = this.hostPortal(request)
       const host = this.hostKind(request)
       // As in the Worker: with UNKNOWN_HOSTS=deny, only platform, reserved and alias hosts answer.
@@ -246,9 +294,12 @@ export class LocalIngress {
       }
       // As in the Worker, a session issued on an alias or other candidate host is sealed to it
       // and read nowhere else, and an external assertion there must name it.
-      const auth: AuthConfig = host.kind === 'candidate'
-        ? { ...this.auth, sessionHost: normaliseHostname(new URL(request.url).hostname) }
-        : this.auth
+      const auth: Partial<AuthConfig> = {
+        ...this.auth,
+        cookieDomain: isPlatformHostname(url.hostname, platformDomain) ? platformDomain : undefined,
+        ...(hostPortal !== undefined ? { clientId: '', clientSecret: '', tenantId: '' } : {}),
+        ...(host.kind === 'candidate' ? { sessionHost: normaliseHostname(url.hostname) } : {}),
+      }
       const headers = stripIdentityHeaders(request.headers)
       // As in the Worker, an explicit operator credential is decided before sign-in routes or
       // sessions: it is the whole authority, and no session cookie is read beside it.
@@ -284,9 +335,14 @@ export class LocalIngress {
               })
           }
         }
+        const location = platformHostnameLocation(request, platformDomain)
+        if (location) return new Response(null, { status: 308, headers: { location } })
         // As in the Worker: a reserved host that still carries an alias record issues no session
         // until the alias is removed.
-        if (path === '/auth/external' && host.kind === 'reserved' && hostPortal !== undefined) {
+        if (
+          ['/auth/external', '/auth/login', '/auth/callback'].includes(path) &&
+          host.kind === 'reserved' && hostPortal !== undefined
+        ) {
           if (this.hostConflicts.check(limitKey).allowed) {
             appendAudit(
               rbac.audit,
@@ -306,18 +362,26 @@ export class LocalIngress {
             headers: { 'cache-control': 'no-store' },
           })
         }
-        // Only the external handoff and sign-out are served locally; the Entra flow is unchanged.
-        if (path === '/auth/external' || path === '/auth/logout') {
-          return (await handleAuthRequest(request, auth, {
+        if (path.startsWith('/auth/') && path !== '/auth/me') {
+          // TLS terminates upstream. Use the explicitly configured callback scheme for the
+          // shared Entra handler's return URL; never infer it from caller-supplied headers.
+          const authUrl = new URL(request.url)
+          if ((path === '/auth/login' || path === '/auth/callback') && auth.redirectUri) {
+            authUrl.protocol = new URL(auth.redirectUri).protocol
+          }
+          const response = (await handleAuthRequest(new Request(authUrl, request), auth, {
             consume: (key, expiresAt) => {
               if (!this.options.externalReplays) throw new Error('Replay store unavailable')
               return this.options.externalReplays.consume(key, expiresAt)
             },
             auditFailure: (reason) => this.externalFailures.record(reason, limitKey),
           })) ?? Response.json({ error: 'not_found' }, { status: 404 })
+          if (path !== '/auth/external' && (response.status === 401 || response.status === 403)) {
+            denial(response.status)
+          }
+          return response
         }
-        // The local server reads only the sessions it can issue: external handoff cookies.
-        if (!session && this.externalEnabled && sessionAuthConfigured(auth)) {
+        if (!session && sessionAuthConfigured(auth)) {
           // A session carried off the host it was sealed to is refused, and recorded.
           const user = await authUser(request, auth, (oid) => {
             if (!this.hostMismatches.check(limitKey).allowed) return
@@ -334,7 +398,8 @@ export class LocalIngress {
               }),
             )
           })
-          if (user?.sessionFacts.provenance === 'external') session = user.sessionFacts
+          session = user?.sessionFacts ?? null
+          sessionName = user?.name ?? ''
         }
       }
       if (session) {
@@ -355,7 +420,7 @@ export class LocalIngress {
               tid: session.tenantId,
               oid: session.oid,
               email: session.email ?? '',
-              name: '',
+              name: sessionName,
               roles: session.roles,
               groups: session.groups,
               iat: Math.floor(Date.now() / 1000),
@@ -494,7 +559,14 @@ export class LocalIngress {
       if (hostPortal !== undefined) principal.hostPortal = hostPortal
       this.contexts.set(forwarded, principal)
       try {
-        const response = await dispatch(forwarded)
+        const response = apexOnlyDocument(new URL(request.url), platformDomain)
+          ? secureAssetResponse(
+            new Response('Not found', {
+              status: 404,
+              headers: { 'content-type': 'text/plain; charset=utf-8' },
+            }),
+          )
+          : await dispatch(forwarded)
         if ((response.status === 401 || response.status === 403) && !principal.denialAudited) {
           appendAudit(
             rbac.audit,
@@ -512,7 +584,9 @@ export class LocalIngress {
             }),
           )
         }
-        return response
+        return !path.startsWith('/api/') && !path.startsWith('/auth/')
+          ? secureAssetResponse(response)
+          : response
       } finally {
         this.contexts.delete(forwarded)
       }

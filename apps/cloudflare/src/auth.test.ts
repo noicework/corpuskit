@@ -184,17 +184,27 @@ Deno.test('/auth/logout expires the encrypted session cookie', async () => {
   expect(response?.headers.get('location')).toBe('/')
   expect(response?.headers.get('set-cookie')).toContain('__Secure-corpuskit_session=;')
   expect(response?.headers.get('set-cookie')).toContain('Max-Age=0')
+  expect(response?.headers.getSetCookie()).toHaveLength(1)
+  expect(response?.headers.get('set-cookie')).not.toContain('Domain=')
 })
 
-Deno.test('/auth/logout clears a session across every corpuskit.org portal', async () => {
-  const response = await handleAuthRequest(
-    new Request('https://marine.corpuskit.org/auth/logout'),
-    { ...config, cookieDomain: 'corpuskit.org' },
-  )
-  expect(response?.headers.get('set-cookie')).toContain('Domain=corpuskit.org')
+Deno.test('/auth/logout clears platform and pre-upgrade host-only sessions', async () => {
+  for (const method of ['GET', 'POST']) {
+    const response = await handleAuthRequest(
+      new Request('https://marine.corpuskit.org/auth/logout', { method }),
+      { ...config, cookieDomain: 'corpuskit.org' },
+    )
+    expect(response?.status).toBe(302)
+    expect(response?.headers.get('location')).toBe('/')
+    expect(response?.headers.get('cache-control')).toBe('no-store')
+    expect(response?.headers.getSetCookie()).toEqual([
+      '__Secure-corpuskit_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0; Domain=corpuskit.org',
+      '__Secure-corpuskit_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0',
+    ])
+  }
 })
 
-Deno.test('login cookies and cross-portal returns use only the configured platform domain', async () => {
+Deno.test('login clears legacy host-only cookies and keeps cross-portal returns on the configured platform domain', async () => {
   const settings = { ...config, cookieDomain: 'research.example.org' }
   for (
     const [returnTo, expected] of [
@@ -216,7 +226,12 @@ Deno.test('login cookies and cross-portal returns use only the configured platfo
     expect(login.headers.get('set-cookie')).toContain('Domain=research.example.org')
     expect(callback.status).toBe(302)
     expect(callback.headers.get('location')).toBe(expected)
-    for (const cookie of callback.headers.getSetCookie()) {
+    const cookies = callback.headers.getSetCookie()
+    const hostOnlyClear =
+      '__Secure-corpuskit_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0'
+    expect(cookies).toContain(hostOnlyClear)
+    // Only the legacy host-only deletion lacks the configured domain.
+    for (const cookie of cookies.filter((value) => value !== hostOnlyClear)) {
       expect(cookie).toContain('Domain=research.example.org')
       expect(cookie).not.toContain('Domain=corpuskit.org')
     }

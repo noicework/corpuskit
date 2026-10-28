@@ -26,6 +26,7 @@ function fixture(
   const env = {
     SHOWCASE_PORTALS: 'marine,grains',
     TENANTS_PATH: `${directory}/tenants.json`,
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     OPERATOR_API_KEY: operatorKey,
     OPERATOR_ID: 'hosting-test',

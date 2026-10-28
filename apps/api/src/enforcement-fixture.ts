@@ -668,6 +668,7 @@ export function createEnforcementFixture(
   } = options
   const app = buildApp({
     ...stores,
+    webAvailable: true,
     ...appOptions,
     configuredTenantId: options.identityConfigured === false ? undefined : tenantId,
     audience,
@@ -721,6 +722,22 @@ export function createEnforcementFixture(
     async requestAs(session: TrustedSessionFacts | null, path: string, init?: RequestInit) {
       await stores.bindings.initialize()
       const request = new Request(`http://localhost${path}`, init)
+      contexts.set(request, await contextFor(session))
+      try {
+        return await app.fetch(request)
+      } finally {
+        contexts.delete(request)
+      }
+    },
+    /** As `requestAs`, on the given host rather than localhost. */
+    async requestAt(
+      host: string,
+      session: TrustedSessionFacts | null,
+      path: string,
+      init?: RequestInit,
+    ) {
+      await stores.bindings.initialize()
+      const request = new Request(`https://${host}${path}`, init)
       contexts.set(request, await contextFor(session))
       try {
         return await app.fetch(request)

@@ -6,7 +6,7 @@ import type { EnrichmentStoreApi } from './enrichments.ts'
 import type { RbacState } from './rbac-state.ts'
 import { startScheduler } from './scheduler.ts'
 
-Deno.test('local scheduler opt-out registers no timers while the default retains all three', () => {
+Deno.test('local scheduler opt-out registers no timers while the default arms boot and daily', () => {
   const timeout = globalThis.setTimeout
   const interval = globalThis.setInterval
   let timers = 0
@@ -30,7 +30,7 @@ Deno.test('local scheduler opt-out registers no timers while the default retains
     start({ LOCAL_SCHEDULER_ENABLED: 'false' })()
     expect(timers).toBe(0)
     start({})()
-    expect(timers).toBe(3)
+    expect(timers).toBe(2)
   } finally {
     globalThis.setTimeout = timeout
     globalThis.setInterval = interval

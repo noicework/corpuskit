@@ -157,11 +157,27 @@ Deno.test('switcher discards prior catalogues and checks the destination scope',
       expect(await page.evaluate(() => document.body.innerText)).not.toContain(
         'Grains private catalogue',
       )
+      const flipped = server.requests.length
       delayed.release()
-      await click(page, 'button[aria-label^="Switch portal - currently "]')
-      await page.waitForSelector('[role=menu] button[role=menuitem]')
-      expect(await page.evaluate(() => document.querySelector('[role=menu]')!.textContent)).not
-        .toContain('Grains private catalogue')
+      // The viewer holds a role on marine alone, so once their portal list arrives the switcher
+      // has nowhere else to go and is not drawn, and Grains goes with it.
+      await page.waitForSelector('a[href="/t/marine/library"]')
+      const deadline = Date.now() + 5000
+      const relisted = () =>
+        server.requests.slice(flipped).some((r) => r.path === '/api/tenants' && r.status === 200)
+      while (!relisted() && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      expect(relisted()).toBe(true)
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 300)))
+      expect(
+        await page.evaluate(() =>
+          !!document.querySelector('button[aria-label^="Switch portal - currently "]')
+        ),
+      ).toBe(false)
+      expect(await page.evaluate(() => document.body.innerText)).not.toContain(
+        'Grains private catalogue',
+      )
       expect(server.requests.filter((r) => r.status === 401 || r.status === 403)).toEqual([])
     } finally {
       await page.close()
@@ -176,6 +192,8 @@ Deno.test('navigation commands and switcher remain readable in both token scheme
   const server = startTestServer({ identity: { role: 'analyst' } })
   const browser = await launch()
   try {
+    // A role on a second portal gives the switcher somewhere to go, so it is drawn.
+    server.setAssignment({ kind: 'portal', slug: 'grains' }, 'e2e-analyst', 'viewer')
     for (const scheme of ['light', 'dark'] as const) {
       server.tenants.patchBranding('marine', {
         paletteId: scheme === 'dark' ? 'observatory' : 'default',

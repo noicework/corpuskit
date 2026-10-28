@@ -25,6 +25,21 @@ export class LocalRbacDatabase implements RbacDatabase {
 
   constructor(path: string) {
     this.database = new DatabaseSync(path)
+    try {
+      const mode = this.all<{ journal_mode: string }>('PRAGMA journal_mode')[0]?.journal_mode
+      if (mode === 'wal') {
+        throw new Error(
+          'Local SQLite uses WAL; stop all writers and convert to journal_mode=DELETE',
+        )
+      }
+      // Rollback journals work on network filesystems with functioning POSIX locks. WAL does not.
+      this.database.exec(
+        'PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000',
+      )
+    } catch (error) {
+      this.database.close()
+      throw error
+    }
   }
 
   exec(query: string, ...bindings: SqlValue[]): void {

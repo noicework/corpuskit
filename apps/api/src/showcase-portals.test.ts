@@ -28,7 +28,11 @@ function localServer(env: Record<string, string>) {
   const ingress = new LocalIngress({
     rbac,
     tenants,
-    env: { ENTRA_TENANT_ID: 'tenant-1', ...settings },
+    env: {
+      ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
+      ENTRA_TENANT_ID: 'tenant-1',
+      ...settings,
+    },
   })
   const app = buildApp({
     ...owned,
@@ -43,9 +47,9 @@ function localServer(env: Record<string, string>) {
     rateLimitAskPerMin: 0,
     rateLimitAnonPortalAskPerMin: 0,
   })
-  const request = async (path: string, init?: RequestInit) => {
+  const request = async (path: string, init?: RequestInit, host = 'localhost') => {
     const response = await ingress.handle(
-      new Request(`http://localhost${path}`, init),
+      new Request(`http://${host}${path}`, init),
       (forwarded) => app.fetch(forwarded),
       peer,
     )
@@ -86,16 +90,25 @@ Deno.test('a deployment that does not turn the showcase on lists and serves no s
   try {
     expect(server.tenants.list(true)).toEqual([])
     expect(server.tenants.get('marine')).toBeUndefined()
-    // The deployment's own portal, public as every new portal is.
+    // The deployment's own portal, public as every new portal is, on its platform hostname.
     server.tenants.add({ name: 'Acme Research' })
-    // The portal list, and a cross-portal ask, reach no showcase portal.
-    const listed = await server.request('/api/tenants')
+    server.tenants.patch('acme-research', { hostname: 'acme-research.corpuskit.org' })
+    // The portal list, and a cross-portal ask, reach no showcase portal: not on the hostname a
+    // served showcase portal would have, and not when the ask names one.
+    const listed = await server.request('/api/tenants', undefined, 'acme-research.corpuskit.org')
     expect(listed.status).toBe(200)
     expect(slugsOf(listed.text)).toEqual(['acme-research'])
+    expect(await server.request('/api/tenants', undefined, 'marine.corpuskit.org')).toEqual({
+      status: 200,
+      text: '[]',
+    })
     const estate = await server.request('/api/ask-estate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ query: 'What is known about abalone stock health?' }),
+      body: JSON.stringify({
+        query: 'What is known about abalone stock health?',
+        slugs: ['acme-research', 'marine', 'grains'],
+      }),
     })
     expect(estate.status).toBe(200)
     expect(estate.text).toContain('"slug":"acme-research"')
@@ -145,9 +158,14 @@ Deno.test('a deployment that does not turn the showcase on lists and serves no s
 })
 
 Deno.test('a deployment serves exactly the showcase portals SHOWCASE_PORTALS names', async () => {
+  // An anonymous portal list holds the request host's own portal, here a showcase portal's
+  // hostname, and only a served showcase portal has one.
+  const listedAt = async (server: ReturnType<typeof localServer>, host: string) =>
+    slugsOf((await server.request('/api/tenants', undefined, host)).text)
   const server = localServer({ SHOWCASE_PORTALS: 'grains' })
   try {
-    expect(slugsOf((await server.request('/api/tenants')).text)).toEqual(['grains'])
+    expect(await listedAt(server, 'grains.corpuskit.org')).toEqual(['grains'])
+    expect(await listedAt(server, 'marine.corpuskit.org')).toEqual([])
     expect((await server.request('/api/t/grains/config')).status).toBe(200)
     const marine = await server.request('/api/t/marine/config')
     const unknown = await server.request('/api/t/no-such-portal/config')
@@ -157,7 +175,8 @@ Deno.test('a deployment serves exactly the showcase portals SHOWCASE_PORTALS nam
   }
   const both = localServer({ SHOWCASE_PORTALS: 'marine,grains' })
   try {
-    expect(slugsOf((await both.request('/api/tenants')).text).sort()).toEqual(['grains', 'marine'])
+    expect(await listedAt(both, 'grains.corpuskit.org')).toEqual(['grains'])
+    expect(await listedAt(both, 'marine.corpuskit.org')).toEqual(['marine'])
   } finally {
     both.close()
   }

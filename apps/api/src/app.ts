@@ -16,7 +16,12 @@ import {
 import { lifecycleAuditDetail, registerLifecycleRoutes } from './lifecycle-routes.ts'
 import { registerAliasRoutes } from './alias-routes.ts'
 import type { WebBuildStamp } from './build-stamp.ts'
-import { maxPortalAliases, reservedHostnames, transportSecurityFor } from './portal-aliases.ts'
+import {
+  maxPortalAliases,
+  normaliseHostname,
+  reservedHostnames,
+  transportSecurityFor,
+} from './portal-aliases.ts'
 import {
   assertAgentRunAllowed,
   capacityUsage,
@@ -173,7 +178,8 @@ import {
   replaceGraphStrategy,
   validateGraphStrategy,
 } from './kg.ts'
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { writeAssetAtomic } from './persist.ts'
 import process from 'node:process'
 import {
   CRAWLER_USER_AGENT,
@@ -1105,7 +1111,26 @@ interface RequestAuthorisation {
   subActions(names: readonly string[]): Promise<RequestAuthority>
   owner(): Promise<ResearchOwner>
   aggregateAuthority(): Promise<RequestAuthority>
+  /** The selected portals the caller may use, or without a selection their directory's. */
   aggregate(slugs?: readonly string[]): Promise<TenantConfig[]>
+}
+/**
+ * Which portals belong in the caller's directory: the portal list, and the portals a cross-portal
+ * ask reaches when it names none. Being able to read a portal is not enough, or every public
+ * portal on a deployment would be listed to anyone. Platform authority lists every portal; anyone
+ * else gets the portals they hold a role on, directly or through a group, and the portal whose
+ * canonical hostname is the request's host. A listed portal must still be readable.
+ */
+function portalDirectory(
+  authority: RequestAuthority,
+  requestHostname: string,
+): (config: TenantConfig) => boolean {
+  if (isPlatformAuthority(authority)) return () => true
+  const host = normaliseHostname(requestHostname)
+  const roles = authority.kind === 'session' ? authority.effectiveRoles.portalRoles : []
+  return (config) =>
+    roles.some((grant) => grant.slug === config.slug) ||
+    (config.hostname !== undefined && normaliseHostname(config.hostname) === host)
 }
 const authorisationContextKey = 'corpuskit.authorisation'
 function requestAuthorisation(c: Context): RequestAuthorisation {
@@ -1454,10 +1479,16 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const selected = await aggregateAuthority()
         const declaration = operation()
         const requested = slugs ? new Set(slugs) : undefined
+        // Without a selection the caller gets their directory. A selection, such as the alias
+        // host's portal, is authorised as it stands.
+        const listed = requested
+          ? undefined
+          : portalDirectory(selected, new URL(c.req.url).hostname)
         const targets: TenantConfig[] = []
         tenants.list(false, (config) => {
           const slug = config.slug
           if (requested && !requested.has(slug)) return false
+          if (listed && !listed(config)) return false
           // The portal list still shows a suspended portal, with its status, so the picker
           // can mark it paused; cross-portal asks leave it out. A portal whose lifecycle cannot
           // be read is left out on its own.
@@ -3917,7 +3948,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return c.json({ ok: true })
   })
 
-  // Federated ask: stream one grounded answer per enabled portal.
+  // Federated ask: stream one grounded answer per selected portal, or per portal in the caller's
+  // directory when the ask names none.
   app.post(declaredRoute('POST', '/api/ask-estate'), estateRateLimit, async (c) => {
     const parsed = estateAskSchema.safeParse(await c.req.json().catch(() => null))
     if (!parsed.success) return c.json({ error: 'invalid_query' }, 400)
@@ -5708,19 +5740,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       })
       return c.json({ ok: true, url: `/api/t/${config.slug}/branding/${kind}` })
     }
-    mkdirSync(brandingDir, { recursive: true })
-    // Drop any previous file for this slot so only one extension exists.
-    for (const old of brandingExts(kind)) {
-      const p = `${brandingDir}/${config.slug}-${kind}.${old}`
-      if (existsSync(p)) {
-        try {
-          Deno.removeSync(p)
-        } catch {
-          // ignore
-        }
-      }
-    }
-    writeFileSync(`${brandingDir}/${config.slug}-${kind}.${ext}`, bytes)
+    writeAssetAtomic(`${brandingDir}/${config.slug}-${kind}`, ext, brandingExts(kind), bytes)
     return c.json({ ok: true, url: `/api/t/${config.slug}/branding/${kind}` })
   })
 
@@ -5761,10 +5781,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       })
       return c.json({ ok: true, url })
     }
-    mkdirSync(layoutImageDir(config.slug), { recursive: true })
-    // Replacing an image under another type leaves only the new file.
-    removeLayoutImageFile(config.slug, name)
-    writeFileSync(`${layoutImageDir(config.slug)}/${name}.${ext}`, bytes)
+    writeAssetAtomic(`${layoutImageDir(config.slug)}/${name}`, ext, LAYOUT_IMAGE_EXTS, bytes)
     return c.json({ ok: true, url })
   })
 

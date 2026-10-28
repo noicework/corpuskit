@@ -15,12 +15,22 @@ import { EnrichmentStore } from './enrichments.ts'
 import { DocsHealth } from './docs-health.ts'
 import { loadRootEnv } from './load-env.ts'
 import { startScheduler } from './scheduler.ts'
+import { installShutdown, secondsSetting } from './local-runtime.ts'
+import { acquireStorageLocks, localStoragePaths, sweepAtomicTemps } from './local-storage.ts'
+import { scheduleAfter } from './local-timers.ts'
 import { LocalIngress } from './local-ingress.ts'
 import { openLocalRbac } from './rbac-local.ts'
 import { infrastructureHandler } from './permissions.ts'
 import { documentPath, probePath } from './public-paths.ts'
 import { platformShellResponse } from './platform-shell.ts'
-import { llmsTxt, robotsTag, robotsTxt, sitemapXml, withRobotsMeta } from './search-files.ts'
+import {
+  indexNowKeyFile,
+  llmsTxt,
+  robotsTag,
+  robotsTxt,
+  sitemapXml,
+  withRobotsMeta,
+} from './search-files.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
 import { operatorDeleteWarning } from './portal-erasure.ts'
 import { showcasePortalsWarning } from './tenants.ts'
@@ -35,7 +45,27 @@ if (showcaseWarning) console.warn(showcaseWarning)
 const port = Number(process.env.PORT ?? 8791)
 const zone = process.env.ARAG_ZONE ?? 'aws-ap-southeast-2-1'
 
-const bindings = new BindingStore()
+const shutdownGrace = secondsSetting(
+  process.env.SHUTDOWN_GRACE_SECONDS,
+  100,
+  'SHUTDOWN_GRACE_SECONDS',
+)
+const storagePaths = localStoragePaths(process.env)
+const storageEnv = { ...process.env, ...storagePaths }
+const releaseWriter = await acquireStorageLocks(
+  storagePaths,
+  secondsSetting(process.env.WRITER_LOCK_WAIT_SECONDS, 60, 'WRITER_LOCK_WAIT_SECONDS'),
+).catch((error) => {
+  console.error(
+    JSON.stringify({ event: 'server.writer_lock', outcome: 'failure', message: error.message }),
+  )
+  Deno.exit(1)
+})
+console.log(JSON.stringify({ event: 'server.writer_lock', outcome: 'acquired' }))
+sweepAtomicTemps(storagePaths, releaseWriter.paths)
+const shutdownController = new AbortController()
+
+const bindings = new BindingStore(storageEnv)
 await bindings.initialize()
 // Extraction Lab sandboxes bind under `<slug>-lab` straight from the environment.
 const labs = labBindings()
@@ -48,8 +78,9 @@ const provider = new AragProvider({
 // read-modify-write the same file (see the note on startScheduler).
 const sources = new SourceStore()
 const enrichments = new EnrichmentStore()
-const { database, rbac } = openLocalRbac(process.env)
-const owned = localOwnedStores(process.env.DATA_DIR ?? './data', database, rbac.audit, process.env)
+const { database, rbac } = openLocalRbac(storageEnv)
+const owned = localOwnedStores(storagePaths.DATA_DIR, database, rbac.audit, storageEnv)
+owned.attach({ bindings, sources, enrichments })
 const tenants = owned.tenants!
 const { watches } = owned
 const ingress = new LocalIngress({
@@ -107,7 +138,7 @@ const app = buildApp({
   webBuild,
 })
 
-startScheduler(
+const stopScheduler = startScheduler(
   provider,
   tenants,
   sources,
@@ -119,7 +150,7 @@ startScheduler(
   bindings,
 )
 // Off the listen path: the probe is a live retrieval call per portal.
-setTimeout(() => void docsHealth.check(), 3_000)
+const cancelDocsProbe = scheduleAfter(3_000, () => void docsHealth.check())
 
 // Serve the built SPA (deno task build:web) alongside the API - one origin, no proxy.
 // Cache-bust the entry bundle so a deploy is never masked by a stale copy in the
@@ -163,7 +194,6 @@ app.get(
   '/',
   infrastructureHandler(async (c) => {
     if (!homeHtml) return c.text('The web build is not available.', 503)
-    c.header('Cache-Control', 'no-cache')
     return c.html(homeHtml)
   }),
 )
@@ -173,7 +203,6 @@ for (const path of ['/about', '/about/']) {
     path,
     infrastructureHandler(async (c) => {
       if (!aboutHtml) return c.text('The web build is not available.', 503)
-      c.header('Cache-Control', 'no-cache')
       return c.html(aboutHtml)
     }),
   )
@@ -207,6 +236,21 @@ app.get(
     return c.text(llmsTxt(domain))
   }),
 )
+// The IndexNow key file, on the apex, when INDEXNOW_KEY is set (search-files.ts).
+app.get(
+  '*',
+  infrastructureHandler(async (c, next) => {
+    const url = new URL(c.req.url)
+    const key = indexNowKeyFile(
+      process.env.PLATFORM_DOMAIN ?? 'corpuskit.org',
+      url.hostname,
+      url.pathname,
+      process.env.INDEXNOW_KEY,
+    )
+    if (!key) return await next()
+    return c.text(key)
+  }),
+)
 app.use('*', infrastructureHandler(serveStatic({ root: './apps/web/dist' })))
 // The same answers the Worker gives: probes are refused, and an unknown path
 // still renders the shell (the app has its own not-found page) but as a 404.
@@ -216,31 +260,48 @@ app.get(
     if (!indexHtml) return c.text('The web build is not available.', 503)
     const path = new URL(c.req.url).pathname
     if (!documentPath(path) && probePath(path)) return c.text('Not found', 404)
-    c.header('Cache-Control', 'no-cache')
     return c.html(indexHtml, documentPath(path) ? 200 : 404)
   }),
 )
 
 const platformDomain = getPlatformDomain(process.env.PLATFORM_DOMAIN)
-Deno.serve({ port, hostname: process.env.HOST ?? '0.0.0.0' }, async (request, info) => {
-  const url = new URL(request.url)
-  const response = platformShellResponse(
-    await ingress.handle(request, (clean) => app.fetch(clean), info),
-    platformDomain,
-    ingress.hostPortal(request),
-    url.hostname,
-  )
-  // As in the Worker: PORTAL_INDEXING=deny keeps a portal's pages out of search.
-  const tag = robotsTag(platformDomain, url.hostname, url.pathname, process.env.PORTAL_INDEXING)
-  if (!tag || response.headers.has('x-robots-tag')) return response
-  const headers = new Headers(response.headers)
-  headers.set('x-robots-tag', tag)
-  return await withRobotsMeta(
-    new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    }),
-    tag,
-  )
+const server = Deno.serve(
+  { port, hostname: process.env.HOST ?? '0.0.0.0' },
+  async (request, info) => {
+    request = new Request(request, {
+      signal: AbortSignal.any([request.signal, shutdownController.signal]),
+    })
+    const url = new URL(request.url)
+    const response = platformShellResponse(
+      await ingress.handle(request, (clean) => app.fetch(clean), info),
+      platformDomain,
+      ingress.hostPortal(request),
+      url.hostname,
+    )
+    // As in the Worker: PORTAL_INDEXING=deny keeps a portal's pages out of search.
+    const tag = robotsTag(platformDomain, url.hostname, url.pathname, process.env.PORTAL_INDEXING)
+    if (!tag || response.headers.has('x-robots-tag')) return response
+    const headers = new Headers(response.headers)
+    headers.set('x-robots-tag', tag)
+    return await withRobotsMeta(
+      new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      }),
+      tag,
+    )
+  },
+)
+
+installShutdown({
+  graceSeconds: shutdownGrace,
+  stopScheduler: () => {
+    cancelDocsProbe()
+    return stopScheduler()
+  },
+  abort: () => shutdownController.abort(),
+  shutdownServer: () => server.shutdown(),
+  closeDatabase: () => database.close(),
+  releaseLock: releaseWriter,
 })

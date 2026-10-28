@@ -36,6 +36,7 @@ function fixture(overrides: Record<string, string | undefined> = {}) {
   const env = {
     TENANTS_PATH: `${directory}/tenants.json`,
     SHOWCASE_PORTALS: 'marine,grains',
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     OPERATOR_API_KEY: operatorKey,
     OPERATOR_ID: 'hosting-test',

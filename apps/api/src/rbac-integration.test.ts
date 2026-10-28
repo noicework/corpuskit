@@ -40,6 +40,7 @@ Deno.test('local signed ingress integrates current assignments, audit failures a
       rbac,
       tenants,
       env: {
+        ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
         ENTRA_TENANT_ID: 'tenant-1',
         SESSION_SECRET: fixtureSecret,
         WORKER_NAME: 'corpuskit',

@@ -32,6 +32,7 @@ Deno.test('real local ingress restores exact owned files after observed append a
   const directory = Deno.makeTempDirSync({ prefix: 'owned-ingress-' })
   const env = {
     DATA_DIR: directory,
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     ENVIRONMENT: 'development',
     ADMIN_PASSCODE: 'fixture',

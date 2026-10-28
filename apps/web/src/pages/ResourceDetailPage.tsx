@@ -192,7 +192,7 @@ function DocBlockView(
     : ''
   const emphasisStyle = emphasised
     ? {
-      borderColor: 'var(--rp-accent)',
+      borderColor: 'var(--rp-accent-line)',
       backgroundColor: 'color-mix(in srgb, var(--rp-accent) 14%, var(--rp-surface))',
     }
     : undefined

@@ -1,17 +1,9 @@
-import {
-  appendFileSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs'
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import process from 'node:process'
 import type { Enrichment } from '@research-portal/core'
 import { EnrichmentStore } from './enrichments.ts'
-import { readJsonSafe, writeFileAtomic, writeJsonAtomic } from './persist.ts'
+import { readJsonSafe, reportRestoreFailure, writeFileAtomic, writeJsonAtomic } from './persist.ts'
 import { appendAudit, type AuditStore, AuditWriteError, createAuditEvent } from './audit.ts'
 import type { RbacDatabase } from './rbac-state.ts'
 import {
@@ -133,9 +125,13 @@ export function ownedMutation(
     else work()
   } catch (error) {
     for (const [index, { path }] of [...changes.entries()].reverse()) {
-      const before = originals[index]
-      if (before !== undefined) writeFileSync(path, before)
-      else removeIfPresent(path)
+      try {
+        const before = originals[index]
+        if (before !== undefined) writeFileAtomic(path, before)
+        else removeIfPresent(path)
+      } catch (restoreError) {
+        reportRestoreFailure(path, restoreError)
+      }
     }
     // The writes and their audit record were made, and committing them failed: the record was
     // never kept, which is an audit failure like any other.

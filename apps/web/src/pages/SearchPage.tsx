@@ -119,7 +119,7 @@ function RelevanceMeter(
       >
         <div
           className='h-full'
-          style={{ width: `${percent}%`, backgroundColor: 'var(--rp-accent)' }}
+          style={{ width: `${percent}%`, backgroundColor: 'var(--rp-accent-line)' }}
         />
       </div>
       <span className='text-xs font-medium tabular-nums text-ink-3'>{percent}%</span>
@@ -543,7 +543,7 @@ function WatchStrip(
                   <span
                     role='status'
                     className='h-1.5 w-1.5 shrink-0 rounded-full'
-                    style={{ backgroundColor: 'var(--rp-accent)' }}
+                    style={{ backgroundColor: 'var(--rp-accent-line)' }}
                     aria-label={ui('New results')}
                   />
                   <span className='sr-only'>{ui('has new results')}</span>

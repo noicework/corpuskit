@@ -11,6 +11,17 @@ import { runSystemMaintenance, syncSource } from './scheduler.ts'
 import { SourceStore, WatchStore } from './stores.ts'
 import { EnrichmentStore } from './enrichments.ts'
 import { TenantStore } from './tenants.ts'
+import { AUDIT_TIMEOUT_MS } from './audit-execution.ts'
+import { checkLateSourceCheckpoint } from './sync-checkpoint-fixture.ts'
+
+Deno.test('Deno late checkpoints preserve newer source progress after deadline release', async (t) => {
+  const directory = Deno.makeTempDirSync()
+  try {
+    await checkLateSourceCheckpoint(t, new SourceStore(directory))
+  } finally {
+    Deno.removeSync(directory, { recursive: true })
+  }
+})
 
 // Scheduled maintenance is one pass over every portal. These tests pin down that one portal, one
 // source or one job failing never costs the other portals their sync, watches or enrichment, and
@@ -540,6 +551,78 @@ function stubArticles(): () => void {
     globalThis.fetch = original
   }
 }
+
+Deno.test('a stalled ingestion with the maintenance signal still releases its unit at 120 seconds', async () => {
+  const f = fixture()
+  const restore = stubArticles()
+  const originalTimeout = globalThis.setTimeout
+  const started = Promise.withResolvers<void>()
+  const controller = new AbortController()
+  let expire: (() => void) | undefined
+  globalThis.setTimeout = ((...args: Parameters<typeof setTimeout>) => {
+    const [handler, ms, ...rest] = args
+    if (ms === AUDIT_TIMEOUT_MS && typeof handler === 'function') {
+      expire = () => handler(...rest)
+    }
+    return originalTimeout(...args)
+  }) as typeof setTimeout
+  try {
+    const [slug] = f.order as [string]
+    const source = f.sources.add(slug, 'https://one.example/news', true, 10)
+    let settled = false
+    let failure: unknown
+    const management = {
+      createText: () => {
+        started.resolve()
+        return new Promise<string>(() => {})
+      },
+    } as unknown as AragProvider
+    const pass = runSystemMaintenance(
+      management,
+      { ...f, bindings: bindingsFor([slug]) },
+      undefined,
+      ['sync'],
+      false,
+      { signal: controller.signal },
+    ).catch((error) => {
+      failure = error
+    }).finally(() => {
+      settled = true
+    })
+    await started.promise
+    expect(AUDIT_TIMEOUT_MS).toBe(120_000)
+    expect(expire).toBeDefined()
+    expire!()
+    for (let i = 0; i < 100; i++) await Promise.resolve()
+    // A live shutdown signal must not make the audited deadline await an uncooperative POST.
+    expect(controller.signal.aborted).toBe(false)
+    expect(settled).toBe(true)
+    await pass
+    expect(failures(failure)).toEqual([`sync:${slug}:source`])
+    const events = f.rbac.audit.read({ scope: { kind: 'portal', slug }, limit: 100 })
+    expect(
+      events.some((event) =>
+        event.action === 'maintenance.source.sync' && event.outcome === 'uncertain' &&
+        JSON.parse(event.detail_json).code === 'deadline_exceeded'
+      ),
+    ).toBe(true)
+
+    // The next pass can use the same signal and pick up the unfinished source.
+    await runSystemMaintenance(
+      { createText: () => Promise.resolve('created') } as unknown as AragProvider,
+      { ...f, bindings: bindingsFor([slug]) },
+      undefined,
+      ['sync'],
+      false,
+      { signal: controller.signal },
+    )
+    expect(f.sources.find(slug, source.id)?.synced).toHaveLength(6)
+  } finally {
+    globalThis.setTimeout = originalTimeout
+    restore()
+    f.close()
+  }
+})
 
 /** Structured back-pressure of one of the platform's kinds, as a 429 carries it. */
 const backPressure = (kind: string) =>

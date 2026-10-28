@@ -120,6 +120,7 @@ async function localServer() {
     TENANTS_PATH: join(directory, 'tenants.json'),
     BINDINGS_PATH: join(directory, 'bindings.json'),
     KG_PROPOSALS_PATH: join(directory, 'kg-proposals.json'),
+    ENTRA_REDIRECT_URI: 'https://corpuskit.org/auth/callback',
     ENTRA_TENANT_ID: 'tenant-1',
     OPERATOR_API_KEY: operatorKey,
     OPERATOR_ID: 'retention-test',

@@ -303,6 +303,7 @@ Deno.test('external exchange issues normal eight-hour encrypted sessions without
     const responses = await Promise.all([exchange(), exchange()])
     expect(responses.map((r) => r!.status).sort()).toEqual([303, 401])
     const response = responses.find((r) => r!.status === 303)!
+    expect(response.headers.getSetCookie()).toHaveLength(1)
     expect(response.headers.get('location')).toBe('/t/marine')
     const cookie = response.headers.get('set-cookie')!
     expect(cookie).toContain('Secure; HttpOnly; SameSite=Lax; Max-Age=28800')
@@ -571,6 +572,7 @@ Deno.test('local ingress exchanges, reads and logs out external sessions using d
     const env = {
       SESSION_SECRET: secret,
       WORKER_NAME: 'portal-deployment',
+      PLATFORM_DOMAIN: 'portal.example',
       EXTERNAL_LOGIN_ISSUER: config.externalLogin!.issuer,
       EXTERNAL_LOGIN_JWK: config.externalLogin!.jwk,
       EXTERNAL_LOGIN_START_URL: 'https://issuer.example/start',
@@ -586,6 +588,11 @@ Deno.test('local ingress exchanges, reads and logs out external sessions using d
     const token = await mint({ host: 'portal.example' })
     const response = await ingress.handle(request(token), () => new Response('unexpected'))
     expect(response.status).toBe(303)
+    expect(response.headers.getSetCookie()).toHaveLength(2)
+    expect(response.headers.getSetCookie()[0]).toContain('Domain=portal.example')
+    expect(response.headers.getSetCookie()[1]).toBe(
+      '__Secure-corpuskit_session=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0',
+    )
     const cookie = response.headers.get('set-cookie')!.split(';')[0]!
     const me = await ingress.handle(
       new Request('https://portal.example/auth/me', { headers: { cookie } }),
@@ -615,13 +622,14 @@ Deno.test('local ingress exchanges, reads and logs out external sessions using d
       provenance: 'external',
       roles: [],
     })
-    // The Entra flow is not served locally, so its paths still reach the application.
+    // Entra routes share the Worker handler and refuse sign-in when it is not configured.
     for (const path of ['/auth/login', '/auth/callback']) {
       const passed = await ingress.handle(
         new Request(`https://portal.example${path}`),
         () => new Response('application'),
       )
-      expect(await passed.text()).toBe('application')
+      expect(passed.status).toBe(503)
+      expect(await passed.json()).toEqual({ error: 'microsoft_sign_in_not_configured' })
     }
     const logout = await ingress.handle(
       new Request('https://portal.example/auth/logout', { headers: { cookie } }),

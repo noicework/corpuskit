@@ -70,13 +70,37 @@ Only `PATCH /api/admin/t/:slug/access` changes the mode. It needs `behaviour.wri
 and takes effect on the next request; identity-dependent responses are served `private,
 no-store` so a cached copy cannot outlive a change of mode.
 
+## Portal list
+
+The portal list (`GET /api/tenants`), which the switcher beside a portal's logo shows, holds the
+portals a caller is entitled to, not every portal they could read. A portal is listed when the
+caller can read it and one of these holds:
+
+- the caller has platform authority (an owner or platform administrator, or break-glass access),
+  which lists every portal;
+- the caller holds a role on the portal, assigned to them directly or through a group mapping;
+- the portal's canonical hostname is the request's host, compared without regard to case or port.
+
+So a public portal is not listed to an anonymous visitor on the platform domain or on another
+portal's host, and on its own hostname it lists itself. A signed-in user of the configured tenant
+who holds no role on an `authenticated` portal can still open it, but it is listed to them only on
+its own hostname. A list with nothing in it is `200 []`, not a refusal, and is not audited. On a
+portal's alias host the list holds that portal alone, as it always has.
+
+A cross-portal ask (`POST /api/ask-estate`) that names no portals reaches the portals in the same
+list, and is refused when the list is empty. One that names portals reaches every named portal the
+caller may read.
+
+The switcher beside the logo draws nothing, neither its button nor its menu, unless the list holds
+a portal other than the current one or the caller can create portals.
+
 ## Where identity comes from
 
-1. **Sign-in.** The Worker runs OpenID Connect against Microsoft Entra and seals the verified
-   claims into an encrypted cookie scoped to the platform domain. Sessions last up to eight
-   hours. If a token carries so many group ids that the cookie would exceed the browser limit,
-   the groups are dropped and the session records `groupStatus: overage`, which disables group
-   mappings for that session rather than truncating the list.
+1. **Sign-in.** The Worker and single-process Deno server share OpenID Connect against Microsoft
+   Entra and seal the verified claims into an encrypted cookie scoped to the platform domain.
+   Sessions last up to eight hours. If a token carries so many group ids that the cookie would
+   exceed the browser limit, the groups are dropped and the session records `groupStatus: overage`,
+   which disables group mappings for that session rather than truncating the list.
 2. **Principal envelope.** For every request the Worker forwards to the Durable Object it strips
    any identity headers the caller supplied and, when there is a session, adds one signed header,
    `x-corpuskit-principal`: `{ v, aud, tid, oid, email, name, roles, groups, iat }` plus an
@@ -150,6 +174,11 @@ part of the request: if the write fails the request fails with 500. For a privil
 whose response is built in memory, the completion record is written before the response is
 released; streaming responses are buffered up to a fixed cap for the same reason.
 
+Every declared local store mutation on either runtime also records `local.mutation`, including
+sources, generated enrichments, suggestions, answer feedback, insights, routing, knowledge graph
+proposals and branding. On Deno, the synchronous file write and its required audit completion
+form one rollback boundary. See [single-process hosting](HOSTING.md#single-process-mutation-audit).
+
 Read at `GET /api/admin/t/:slug/audit` (portal `audit.read`) or `GET /api/admin/audit` (platform
 `audit.read`), export as CSV or JSON from the `/export` siblings (`audit.export`). Retention is
 `AUDIT_RETENTION_DAYS` (default 400), applied by the maintenance cron, and the purge is itself
@@ -172,6 +201,7 @@ address in ten minutes lock the path for ten minutes.
 | `SESSION_SECRET` | Worker secret | Cookie sealing and, via HKDF, principal signing. At least 32 bytes. |
 | `WORKER_NAME` | `wrangler.jsonc` var | Signing audience: `corpuskit`, `corpuskit-demo`, or the name of another deployment. |
 | `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET` | Worker | Sign-in. Without them sign-in is unconfigured and every visitor is anonymous. |
+| `ENTRA_REDIRECT_URI` | Worker or Deno environment | Public callback URL; required on Deno whenever `ENTRA_TENANT_ID` is set. |
 | `ENTRA_ADMIN_EMAILS` | Worker secret | Migrated once, on first boot, into owner assignments. |
 | `ADMIN_PASSCODE`, `ADMIN_BREAK_GLASS` | Worker | Break-glass, above. |
 | `AUDIT_RETENTION_DAYS` | Worker var | Default 400. |
