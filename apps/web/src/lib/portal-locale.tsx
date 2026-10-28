@@ -29,7 +29,9 @@ export function localisePortalConfig<T extends TenantConfig>(
     const [root, field] = path
     const leaf = path[path.length - 1]
     if (root === 'searchPlaceholder' || root === 'assessmentHeading') return true
-    if (root === 'copy') return true
+    if (root === 'copy') return field !== 'interfaceMessages'
+    // The statement's headings, paragraphs and contact note; an address is not copy.
+    if (root === 'accessibility') return !['email', 'phone', 'url'].includes(leaf!)
     if (root === 'topics') return leaf === 'label' || leaf === 'description'
     if (root === 'suggestedQuestions') return leaf === 'text'
     if (root !== 'branding') return false
@@ -58,6 +60,7 @@ export function localisePortalConfig<T extends TenantConfig>(
 }
 
 export type Locale = {
+  resourceLabel?: (resourceId: string) => string | undefined
   language: PortalLanguage
   setLanguage: (language: PortalLanguage) => void
   ui: (text: string, values?: MessageValues) => string
@@ -69,11 +72,18 @@ export type Locale = {
 export function createPortalLocale(
   language: PortalLanguage,
   setLanguage: (language: PortalLanguage) => void = () => {},
+  messages?: TenantConfig['copy'],
 ): Locale {
+  const dictionary = messages?.interfaceMessages?.[language]
   return {
+    resourceLabel: (resourceId) =>
+      messages?.resourceLabels?.[resourceId] ?? messages?.defaultResourceLabel,
     language,
     setLanguage,
-    ui: (text, values) => portalUi(language, text, values),
+    ui: (text, values) =>
+      dictionary && Object.hasOwn(dictionary, text)
+        ? portalUi('en', dictionary[text]!, values)
+        : portalUi(language, text, values),
     number: (value, options) => portalNumber(language, value, options),
     date: (value, options) => portalDate(language, value, options),
     error: (error, fallback) => portalError(language, error, fallback),
@@ -158,7 +168,17 @@ export function usePortalLocaleState(config: TenantConfig | undefined): Locale {
       localStorage.setItem(`corpuskit-language-v1:${config.slug}`, next)
     } catch { /* optional */ }
   }, [config?.slug, available, shared?.choose])
-  return useMemo(() => createPortalLocale(language, setLanguage), [language, setLanguage])
+  return useMemo(() =>
+    createPortalLocale(
+      language,
+      setLanguage,
+      config ? localisePortalConfig(config, language).copy : undefined,
+    ), [
+    language,
+    setLanguage,
+    config?.copy,
+    config?.languagePolicy,
+  ])
 }
 
 function LanguageChoices({ languages, locale }: {
