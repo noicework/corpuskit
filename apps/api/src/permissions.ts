@@ -124,6 +124,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   }),
   entry('http', 'GET', '/api/admin/t/:slug/audit', 'audit.read', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/audit/export', 'audit.export', 'portal'),
+  entry('http', 'GET', '/api/admin/t/:slug/export', 'audit.export', 'portal', {
+    subActions: [{ action: 'portal.export.bundle', permission: 'audit.export', scope: 'portal' }],
+  }),
   entry('http', 'GET', '/api/admin/audit', 'audit.read', 'platform'),
   entry('http', 'GET', '/api/admin/audit/export', 'audit.export', 'platform'),
   ...['people', 'groups'].flatMap((family) => [

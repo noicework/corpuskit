@@ -3,7 +3,7 @@ import type { TenantConfig } from '@research-portal/core'
 import { AragProvider } from './index.ts'
 
 const tenant = { slug: 'export-fixture' } as TenantConfig
-function provider(repeat = false, malformed = false) {
+function provider(repeat = false, malformed = false, firstSize = 100) {
   const pages: URL[] = []
   const fetchImpl: typeof fetch = (input) => {
     const url = new URL(String(input))
@@ -11,8 +11,8 @@ function provider(repeat = false, malformed = false) {
     const page = Number(url.searchParams.get('page_number'))
     if (malformed) return Promise.resolve(Response.json({}))
     const resources = Object.fromEntries(
-      Array.from({ length: page === 0 || repeat ? 100 : 1 }, (_, index) => {
-        const id = `resource-${(repeat ? 0 : page * 100) + index}`
+      Array.from({ length: page === 0 || repeat ? firstSize : 1 }, (_, index) => {
+        const id = `resource-${(repeat ? 0 : page * firstSize) + index}`
         return [id, {
           id,
           title: 'Research report',
@@ -43,7 +43,9 @@ function provider(repeat = false, malformed = false) {
         }]
       }),
     )
-    return Promise.resolve(Response.json({ resources }))
+    return Promise.resolve(
+      Response.json({ resources, fulltext: { next_page: page === 0 || repeat } }),
+    )
   }
   return {
     pages,
@@ -90,4 +92,14 @@ Deno.test('provider export fails on repeated pages or malformed inventory and re
   await expect(instance.exportResources(tenant, controller.signal)[Symbol.asyncIterator]().next())
     .rejects.toBeDefined()
   expect(pages.length).toBe(0)
+})
+
+Deno.test('provider export honours next_page on a short catalogue page', async () => {
+  const { instance, pages } = provider(false, false, 5)
+  const rows = []
+  for await (const row of instance.exportResources(tenant, new AbortController().signal)) {
+    rows.push(row)
+  }
+  expect(rows.length).toBe(6)
+  expect(pages.length).toBe(2)
 })

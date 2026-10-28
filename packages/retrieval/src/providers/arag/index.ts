@@ -1441,7 +1441,10 @@ export class AragProvider implements RetrievalProvider {
     const seen = new Set<string>()
     for (let page = 0;; page++) {
       signal.throwIfAborted()
-      const catalog = await client.getJson<{ resources: Record<string, RawResource> }>(
+      const catalog = await client.getJson<{
+        resources: Record<string, RawResource>
+        fulltext?: { next_page?: boolean }
+      }>(
         `/catalog?page_number=${page}&page_size=100&show=basic&show=extra&show=origin&show=values`,
         { signal },
       )
@@ -1456,7 +1459,12 @@ export class AragProvider implements RetrievalProvider {
         seen.add(id)
         yield exportResource(this.toSummary(id, raw), raw)
       }
-      if (batch.length < 100) return
+      const more = catalog.fulltext?.next_page
+      if (more !== undefined && typeof more !== 'boolean') {
+        throw new Error('Invalid export pagination')
+      }
+      if (more === true && batch.length === 0) throw new Error('Incomplete export inventory')
+      if (more === false || (more === undefined && batch.length < 100)) return
     }
   }
 

@@ -184,6 +184,10 @@ Read at `GET /api/admin/t/:slug/audit` (portal `audit.read`) or `GET /api/admin/
 `AUDIT_RETENTION_DAYS` (default 400), applied by the maintenance cron, and the purge is itself
 recorded.
 
+The administrative portal bundle at `GET /api/admin/t/:slug/export` also requires portal
+`audit.export`. Its `portal.export.bundle` events record the explicit feedback selection.
+See [the versioned bundle format](PORTAL-EXPORT.md) for included data and bounds.
+
 ## Break-glass
 
 `ADMIN_PASSCODE` no longer opens the whole administration surface. It grants `owner` for a single
