@@ -108,6 +108,11 @@ Deno.test('graph display aliases switch on the real graph and dossier at wide390
           await page.setViewportSize({ width, height: 1100 })
           await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
           await page.goto(`${server.url}/t/marine/graph`)
+          // Reduced motion starts in the complete list; these journeys exercise the map.
+          await page.waitForSelector('[data-graph-view-choice=map]')
+          await page.evaluate(() =>
+            document.querySelector<HTMLButtonElement>('[data-graph-view-choice=map]')!.click()
+          )
           await page.waitForSelector('.rp-map3d canvas')
           await assertCurrentBuild(page)
           await page.evaluate(
