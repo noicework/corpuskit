@@ -59,6 +59,10 @@ Server-side, a tenant record also holds the knowledge-box binding: zone, KB id, 
 token (minted at provision time, never sent to the client). The Deno development server uses the
 file stores in `apps/api`; Cloudflare production injects equivalent synchronous adapters over a
 SQLite-backed Durable Object. Credentials never reach the browser.
+Portal answer preferences and guardrails live beside that portal's private configuration and run
+in the shared API on both runtimes. See [Answer policy](ANSWER-POLICY.md) for the evidence boundary,
+buffered streaming checks, storage, audit and retention rules.
+
 Routing: path-based (`/t/marine/...`, `/t/grains/...`), with a tenant picker at `/`. Subdomains can
 come later at the reverse proxy without code changes.
 

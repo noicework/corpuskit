@@ -52,8 +52,10 @@ export interface AskOptions {
    */
   resourceIds?: string[]
   topicIds?: string[]
-  /** Override the surface's system prompt (portal management setting). */
+  /** Legacy additional instructions. Never replaces the surface's built-in grounding prompt. */
   systemPrompt?: string
+  /** Portal-authored additions. Built-in grounding instructions always remain. */
+  answerInstructions?: string
   /** 'deep' grounds on the full text of matching resources. */
   depth?: 'default' | 'deep'
   /** Sub-questions to research before the main query (deep-research mode). */
@@ -259,7 +261,7 @@ export interface RetrievalProvider {
     tenant: TenantConfig,
     question: string,
     passages: readonly ComposePassage[],
-    opts?: Pick<AgentAskOptions, 'context'>,
+    opts?: Pick<AgentAskOptions, 'context'> & { answerInstructions?: string },
   ): Promise<string>
   catalog(tenant: TenantConfig, opts?: CatalogOptions): Promise<CatalogPage>
   /** Top resources filed under one topic (Explore's topic rows) - via the classification index, not per-resource topicIds. */

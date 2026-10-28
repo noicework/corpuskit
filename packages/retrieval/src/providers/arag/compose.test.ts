@@ -52,6 +52,7 @@ describe('AragProvider.compose', () => {
     const { provider, bodies } = providerAnswering({ answer: ' Oysters died after heat. [1] ' })
     const answer = await provider.compose(TENANT, 'What changed?', PASSAGES, {
       context: [{ author: 'USER', text: 'An earlier question' }],
+      answerInstructions: 'Explain specialist terms.',
     })
     expect(answer).toBe('Oysters died after heat. [1]')
     expect(bodies.length).toBe(1)
@@ -69,6 +70,10 @@ describe('AragProvider.compose', () => {
       /STRICTLY from the numbered passages/,
     )
     expect((body.prompt as { system: string }).system).toMatch(/Australian English/)
+    const system = (body.prompt as { system: string }).system
+    expect(system.indexOf('Explain specialist terms.')).toBeGreaterThan(
+      system.indexOf('STRICTLY from the numbered passages'),
+    )
     // The passages are the grounding: the box's own retrieval is held to one paragraph.
     expect(body.top_k).toBe(1)
     expect(body.generative_model).toBe('host-model')

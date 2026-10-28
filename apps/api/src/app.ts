@@ -1,3 +1,10 @@
+import {
+  guardAgentAnswer,
+  portalAnswerPolicy,
+  withPortalAnswerPolicy,
+} from './answer-guardrails.ts'
+import { registerPromptRoutes } from './prompt-routes.ts'
+import { withPortalInstructions } from './portal-instructions.ts'
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
@@ -926,11 +933,6 @@ const newTenantSchema = z.object({
   organisation: z.string().max(120).optional(),
   tagline: z.string().max(160).optional(),
 }).strict()
-const promptsSchema = z.object({
-  ask: z.string().max(4000).optional(),
-  images: z.boolean().optional(),
-  uncitedAnswers: z.enum(['show', 'refuse']).optional(),
-})
 const labelDefinitionSchema = z.object({
   title: z.string().trim().min(1).max(60),
   text: z.string().trim().max(600).optional(),
@@ -1263,12 +1265,17 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
       : {}),
   }
-  const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
   const platformDomain = getPlatformDomain(opts.platformDomain ?? process.env.PLATFORM_DOMAIN)
   const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
+  opts = {
+    ...opts,
+    provider: withPortalInstructions(opts.provider, (slug) => tenants.promptsFor(slug)),
+  }
+  const { provider } = opts
   const answerRecords = opts.answerRecords ?? transientAnswerRecordStore(opts.now)
   const insights = opts.insights ?? new InsightsStore()
+  const answerPolicy = portalAnswerPolicy(tenants, insights)
   const feedback = opts.feedback ?? new FeedbackStore()
   const siteFeedback = opts.siteFeedback ?? new SiteFeedbackStore()
   const routing = opts.routing ?? new RoutingLog()
@@ -2483,7 +2490,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const toolGuard = lifecycleToolGuard(lifecycle, () => opts.now?.() ?? Date.now())
   registerMcpRoutes(app, {
     localMutations: opts.localMutations,
-    provider,
+    provider: withPortalAnswerPolicy(provider, answerPolicy),
     tenant,
     keys: mcpKeys,
     audit: opts.audit,
@@ -2509,7 +2516,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const estateTimeoutMs = opts.estateSourceTimeoutMs ??
     Number(process.env.ESTATE_SOURCE_TIMEOUT_MS ?? DEFAULT_ESTATE_SOURCE_TIMEOUT_MS)
   registerEstateMcpRoutes(app, {
-    provider,
+    provider: withPortalAnswerPolicy(provider, answerPolicy),
     audit: opts.audit,
     requestContext,
     authorise: authoriseDeclared,
@@ -4247,13 +4254,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const record = { citations: 0, groundedness: null as number | null, failed: false }
         try {
           for await (
-            const event of recordComposedSource({
-              store: answerRecords,
-              config,
-              question: parsed.data.query,
-              buildId: opts.buildSha,
-              now: opts.now,
-            }, provider)
+            const event of recordComposedSource(
+              {
+                store: answerRecords,
+                config,
+                question: parsed.data.query,
+                buildId: opts.buildSha,
+                now: opts.now,
+              },
+              withPortalAnswerPolicy(provider, (portal, question) =>
+                answerPolicy(
+                  portal,
+                  question,
+                  requestContext(c.req.raw).requestId,
+                  true,
+                )),
+            )
           ) {
             if (stream.aborted || c.req.raw.signal.aborted) return
             const current = tenant(config.slug)
@@ -4281,6 +4297,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           insights.record(config.slug, {
             ts: new Date().toISOString(),
             question: parsed.data.query.slice(0, 500),
+            policyRequestId: requestContext(c.req.raw).requestId,
             answered: !record.failed && record.citations > 0,
             citations: record.citations,
             durationSec: null,
@@ -6107,27 +6124,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return removed ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.get(declaredRoute('GET', '/api/admin/t/:slug/prompts'), (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(tenants.promptsFor(config.slug))
-  })
-
-  app.put(declaredRoute('PUT', '/api/admin/t/:slug/prompts'), async (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const parsed = promptsSchema.safeParse(await c.req.json().catch(() => null))
-    if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    // An absent uncited-answers choice keeps the portal's current one.
-    const uncitedAnswers = parsed.data.uncitedAnswers ??
-      tenants.promptsFor(config.slug).uncitedAnswers
-    tenants.patch(config.slug, {
-      prompts: {
-        ask: parsed.data.ask?.trim() || undefined,
-        ...(uncitedAnswers ? { uncitedAnswers } : {}),
-      },
-    })
-    return c.json({ ok: true })
+  registerPromptRoutes(app, {
+    tenants,
+    tenant,
+    localMutations: opts.localMutations,
+    context: (c) => ({
+      requestId: requestContext(c.req.raw).requestId,
+      actor: requestContext(c.req.raw).actor!,
+    }),
+    signal: (c) => operationSignals.get(c.req.raw) ?? c.req.raw.signal,
   })
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/search-configs'), async (c) => {
@@ -6842,6 +6847,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       store: answerRecords,
       config,
       question: parsed.data.query,
+      policy: answerPolicy(config, parsed.data.query, requestContext(c.req.raw).requestId),
       resourceId: parsed.data.resourceId,
       buildId: opts.buildSha,
       now: opts.now,
@@ -6885,7 +6891,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           learningId = learning.id
         }
         if (
-          firstWordsAt === undefined && (learning?.type === 'delta' || learning?.type === 'done') &&
+          firstWordsAt === undefined &&
+          (!evidence.policy.holdsAnswer || learning?.type === 'done') &&
+          (learning?.type === 'delta' || learning?.type === 'done') &&
           typeof learning.text === 'string' && learning.text.trim()
         ) firstWordsAt = performance.now()
         return write(publicSseEvent(event, 'ask'))
@@ -8102,7 +8110,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                   resourceId: group.resourceId,
                   promptAddendum: clauseAddendum(group),
                   noRefusalRetry: true,
-                  ...(settings.ask ? { systemPrompt: settings.ask } : {}),
+                  ...(settings.ask ? { answerInstructions: settings.ask } : {}),
                 })
               ) {
                 if (event.type === 'delta') {
@@ -8255,7 +8263,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 ? { priorResourceIds: priorIds }
                 : {}),
               ...(pinnedQueries.length > 0 ? { pinnedQueries } : {}),
-              ...(settings.ask ? { systemPrompt: settings.ask } : {}),
+              ...(settings.ask ? { answerInstructions: settings.ask } : {}),
               ...(settings.images ? { images: true } : {}),
               ...(attemptContext ? { sourceContext: attemptContext } : {}),
               ...(attemptAddendum ? { promptAddendum: attemptAddendum } : {}),
@@ -8413,6 +8421,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         insights.record(config.slug, {
           ts: new Date().toISOString(),
           question: query.slice(0, 500),
+          policyRequestId: requestContext(c.req.raw).requestId,
           answered: !record.failed && !record.refused && record.citations > 0,
           citations: record.citations,
           durationSec: record.durationSec,
@@ -8525,27 +8534,34 @@ export function buildApp(opts: BuildAppOptions): Hono {
       try {
         if (cancelled()) return
         for await (
-          const event of agentAnswer({
-            provider,
-            host,
-            portals,
-            peers,
-            stillParticipates: (slug) => {
-              const current = tenant(slug)
-              return current !== undefined && participatesInFederation(current)
-            },
-            question: request.query,
-            ...(request.context ? { context: request.context } : {}),
-            signal: upstream.signal,
-            ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
-            ...(opts.agentComposeTimeoutMs ? { composeTimeoutMs: opts.agentComposeTimeoutMs } : {}),
-          })
+          const event of guardAgentAnswer(answerPolicy(host, request.query), request.query, () =>
+            agentAnswer({
+              provider,
+              host,
+              portals,
+              peers,
+              stillParticipates: (slug) => {
+                const current = tenant(slug)
+                return current !== undefined && participatesInFederation(current)
+              },
+              question: request.query,
+              ...(request.context ? { context: request.context } : {}),
+              signal: upstream.signal,
+              ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
+              ...(opts.agentComposeTimeoutMs
+                ? { composeTimeoutMs: opts.agentComposeTimeoutMs }
+                : {}),
+            }))
         ) {
-          if (cancelled()) return
+          if (cancelled()) {
+            return
+          }
           await send(event)
         }
       } catch (err) {
-        if (cancelled()) return
+        if (cancelled()) {
+          return
+        }
         await send(
           err instanceof AgentAskError
             ? { type: 'error', code: err.code, message: err.message, retryable: err.retryable }
