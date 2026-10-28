@@ -58,6 +58,13 @@ import {
   type BreakGlassService,
 } from '../../api/src/break-glass.ts'
 import { runSystemMaintenance } from '../../api/src/scheduler.ts'
+import {
+  isSiteFeedbackEmailBinding,
+  siteFeedbackEmailConfig,
+  siteFeedbackEmailNotifier,
+  type SiteFeedbackNotifier,
+  siteFeedbackWarning,
+} from '../../api/src/site-feedback.ts'
 import { linkProvisionalBytes } from '../../api/src/lifecycle-management.ts'
 import { embeddedWebBuild } from './build-stamp.ts'
 import { AragProvider } from '@research-portal/retrieval'
@@ -153,6 +160,11 @@ export class PortalDurableObject extends DurableObject<Env> {
     if (deleteWarning) console.warn(deleteWarning)
     const showcaseWarning = showcasePortalsWarning(bindings)
     if (showcaseWarning) console.warn(showcaseWarning)
+    const feedbackWarning = siteFeedbackWarning(
+      bindings,
+      (name) => isSiteFeedbackEmailBinding(Reflect.get(env, name)),
+    )
+    if (feedbackWarning) console.warn(feedbackWarning)
     this.stores = durableStores(state, bindings)
     this.externalFailures = new ExternalFailureAudit(this.stores.audit)
     this.breakGlass = this.stores.rbac.breakGlassService({
@@ -205,6 +217,8 @@ export class PortalDurableObject extends DurableObject<Env> {
       lifecycle: this.stores.lifecycle,
       insights: this.stores.insights,
       feedback: this.stores.feedback,
+      siteFeedback: this.stores.siteFeedback,
+      siteFeedbackNotifier: siteFeedbackNotifier(env, bindings),
       sessions: this.stores.sessions,
       watches: this.stores.watches,
       sources: this.stores.sources,
@@ -565,6 +579,22 @@ export class PortalDurableObject extends DurableObject<Env> {
   async maintenance(): Promise<void> {
     await runSystemMaintenance(this.provider, this.stores, this.bindings.AUDIT_RETENTION_DAYS)
   }
+}
+
+/**
+ * Readers' feedback goes out through the `send_email` binding `SITE_FEEDBACK_EMAIL_BINDING` names
+ * (`SITE_FEEDBACK_EMAIL` by default), from `SITE_FEEDBACK_FROM` to `SITE_FEEDBACK_TO`. Without all
+ * three no portal takes feedback.
+ */
+export function siteFeedbackNotifier(
+  env: Env,
+  bindings: Record<string, string | undefined>,
+): SiteFeedbackNotifier | undefined {
+  const config = siteFeedbackEmailConfig(bindings)
+  const binding = config && Reflect.get(env, config.binding)
+  return config && isSiteFeedbackEmailBinding(binding)
+    ? siteFeedbackEmailNotifier(binding, config)
+    : undefined
 }
 
 export default {

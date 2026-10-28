@@ -203,6 +203,11 @@ export function materialisedJsonResponse(value: unknown): Response {
   return markMaterialised(Response.json(value))
 }
 
+/** A locally prepared bounded download still requires completion audit before any byte escapes. */
+export function materialisedBlobResponse(value: Blob, init?: ResponseInit): Response {
+  return markMaterialised(new Response(value, init))
+}
+
 /** Preserve Hono's serialisation, status and headers while recording body provenance. */
 export function trackMaterialisedResponses(context: Context): void {
   context.json = new Proxy(context.json, {

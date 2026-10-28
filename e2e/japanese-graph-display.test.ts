@@ -6,6 +6,9 @@ import { DoubleProvider } from './support/double-provider.ts'
 import { createPortalLocale } from '../apps/web/src/lib/portal-locale.tsx'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
 
+// Opt-in slow-rendering coverage for retained label identities.
+const cpuThrottleRate = Number(Deno.env.get('GRAPH_CPU_THROTTLE') ?? 1)
+
 const nodes = [
   { id: 'EX-M20-032', group: 'Experiment', weight: 3 },
   { id: 'AP-M0', group: 'Material', weight: 2 },
@@ -105,9 +108,17 @@ Deno.test('graph display aliases switch on the real graph and dossier at wide390
         const browser = await launch(), page = await browser.newPage('about:blank')
         try {
           await page.bringToFront()
+          await page.unsafelyGetCelestialBindings().Emulation.setCPUThrottlingRate({
+            rate: cpuThrottleRate,
+          })
           await page.setViewportSize({ width, height: 1100 })
           await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
           await page.goto(`${server.url}/t/marine/graph`)
+          // Reduced motion starts in the complete list; these journeys exercise the map.
+          await page.waitForSelector('[data-graph-view-choice=map]')
+          await page.evaluate(() =>
+            document.querySelector<HTMLButtonElement>('[data-graph-view-choice=map]')!.click()
+          )
           await page.waitForSelector('.rp-map3d canvas')
           await assertCurrentBuild(page)
           await page.evaluate(
@@ -257,6 +268,9 @@ createRoot(document.getElementById('root')).render(<App/>);
   const browser = await launch(), page = await browser.newPage('about:blank')
   try {
     await page.bringToFront()
+    await page.unsafelyGetCelestialBindings().Emulation.setCPUThrottlingRate({
+      rate: cpuThrottleRate,
+    })
     await page.setViewportSize({ width: 1100, height: 1500 })
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }])
     await page.goto(`${server.url}/__test/rbac-component`)

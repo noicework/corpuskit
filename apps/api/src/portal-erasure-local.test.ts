@@ -39,6 +39,8 @@ const BUILD_OPTIONS: Record<keyof BuildAppOptions, Classification> = {
   bindings: { erasedBy: 'bindings' },
   insights: { erasedBy: 'insights' },
   feedback: { erasedBy: 'feedback' },
+  siteFeedback: { erasedBy: 'siteFeedback' },
+  siteFeedbackNotifier: { noPortalRecords: 'delivers messages; keeps nothing' },
   sessions: { erasedBy: 'sessions' },
   sources: { erasedBy: 'sources' },
   watches: { erasedBy: 'watches' },
@@ -96,6 +98,7 @@ const ERASURE_STORES: Record<keyof PortalErasureStores, true> = {
   sources: true,
   insights: true,
   feedback: true,
+  siteFeedback: true,
   suggestions: true,
   enrichments: true,
   kgProposals: true,
@@ -317,6 +320,16 @@ Deno.test('the local server erases every file and row a deleted portal left', as
       good: false,
       text: 'reader@first-customer.example says the year is wrong',
     })
+    s.owned.siteFeedback.save(SLUG, {
+      id: '00000000-0000-4000-8000-000000000001',
+      slug: SLUG,
+      createdAt: new Date().toISOString(),
+      category: 'problem',
+      message: 'The download link on this page is broken.',
+      email: 'reader@first-customer.example',
+      pageUrl: 'https://first-customer.example/t/erasure-probe/library',
+      delivery: 'sent',
+    })
     s.stores.routing.record(SLUG, {
       ts: new Date(s.now()).toISOString(),
       questionHash: 'abcd1234',
@@ -372,6 +385,7 @@ Deno.test('the local server erases every file and row a deleted portal left', as
         'sources',
         'insights',
         'feedback',
+        'siteFeedback',
         'suggestions',
         'enrichments',
         'kgProposals',
