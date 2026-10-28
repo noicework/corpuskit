@@ -71,9 +71,12 @@ export function scoreEvaluation(
   retrievedIds: string[],
   answer: EvaluationAnswer,
 ): EvaluationResult {
-  const citedIds = [...new Set(answer.citations.map((c) => c.resourceId))]
-  const accepted = new Set([...question.expectedSources, ...answer.verifiedIds])
   const integrity = citationIntegrity(answer.text, new Set(answer.citations.map((c) => c.index)))
+  const finalIndices = new Set(integrity.markers)
+  const citedIds = [
+    ...new Set(answer.citations.filter((c) => finalIndices.has(c.index)).map((c) => c.resourceId)),
+  ]
+  const accepted = new Set([...question.expectedSources, ...answer.verifiedIds])
   const normalise = (text: string) => text.toLocaleLowerCase('en-AU').replace(/\s+/g, ' ').trim()
   return {
     question,

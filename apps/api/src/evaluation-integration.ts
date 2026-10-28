@@ -1,3 +1,4 @@
+import { authorize, normalisePrincipal } from '@research-portal/core'
 import type { Context, Hono } from 'hono'
 import type { BuildAppOptions, PortalRequestContext } from './app.ts'
 import { authoriseDeclared } from './app.ts'
@@ -77,7 +78,18 @@ export function registerPortalEvaluations(app: Hono, opts: BuildAppOptions, serv
           configuredTenantId,
           opts.now?.(),
         )
-        : {}
+        : { effectiveRoles: original.effectiveRoles ?? { portalRoles: [] } }
+      if (original.session && !passcode) {
+        const current = tenants.get(slug)
+        const principal = normalisePrincipal(
+          { kind: 'user', tenantId: original.session.tenantId, oid: original.session.oid },
+          resolution.effectiveRoles,
+          current && { slug, accessMode: current.accessMode, configuredTenantId },
+        )
+        if (!authorize(principal, 'behaviour.write', { kind: 'portal', slug })) {
+          throw new Error('Administrator access changed during this run')
+        }
+      }
       requestContexts.set(request, {
         ...original,
         ...resolution,

@@ -27,7 +27,8 @@ const json = (method: string, body: unknown): RequestInit => ({
 
 Deno.test('evaluation scoring keeps retrieval, citations, literal facts, declines and REMi separate', () => {
   const answer = {
-    text: 'Marine heatwaves [1] and unsupported marker [9].',
+    text:
+      'Marine heatwaves [1], unexpected evidence [2], verified evidence [3], repeated [4] and unsupported marker [9].',
     refused: false,
     citations: [{ index: 1, resourceId: 'res-1' }, { index: 2, resourceId: 'unexpected' }, {
       index: 3,
@@ -41,6 +42,12 @@ Deno.test('evaluation scoring keeps retrieval, citations, literal facts, decline
   const result = scoreEvaluation(input.questions[0]!, ['other', 'res-1'], answer)
   expect(result.retrievalHit).toBe(true)
   expect(result.citationPrecision).toBe(2 / 3)
+  const finalOnly = scoreEvaluation(input.questions[0]!, ['res-1'], {
+    ...answer,
+    text: 'Final evidence [1].',
+  })
+  expect(finalOnly.citationPrecision).toBe(1)
+  expect(finalOnly.citedIds).toEqual(['res-1'])
   expect(result.factCoverage).toBe(1)
   expect(result.unresolvedMarkers).toBe(1)
   expect(result.declineCorrect).toBe(true)
@@ -289,4 +296,74 @@ Deno.test('evaluation preserves retrieval when ask fails and answer quality when
   expect(answerOnly.retrievalHit).toBeNull()
   expect(answerOnly.groundedness).toBe(4)
   expect(answerOnly.askOk).toBe(true)
+})
+
+Deno.test('reseeded managed demo portals discard retained evaluation definitions, runs and delegations', () => {
+  const f = createEnforcementFixture()
+  try {
+    const config = f.stores.tenants.get('a')!
+    const definition = f.stores.evaluations.put('a', 'checks', input, f.now())
+    f.stores.evaluations.start('a', {
+      id: 'old-run',
+      slug: 'a',
+      setId: 'checks',
+      definition,
+      startedAt: definition.updatedAt,
+      completedAt: null,
+      status: 'running',
+      results: [],
+      summary: summariseEvaluation([]),
+    })
+    f.stores.evaluations.schedule('a', 'checks', {
+      slug: 'a',
+      setId: 'checks',
+      everyDays: 1,
+      nextAt: f.now(),
+      confirmedAsks: 1,
+      updatedAt: definition.updatedAt,
+      owner: { tenantId: 'tenant-1', oid: 'portal-admin-a' },
+    })
+    f.stores.tenants.remove('a')
+    f.stores.tenants.seed(config)
+    expect(f.stores.evaluations.list('a')).toEqual([])
+    expect(f.stores.evaluations.run('a', 'old-run')).toBeNull()
+    expect(f.stores.evaluations.schedules('a')).toEqual([])
+  } finally {
+    f.close()
+  }
+})
+
+Deno.test('evaluation stops paid asks when its initiating administrator is downgraded during retrieval', async () => {
+  const f = createEnforcementFixture()
+  try {
+    const admin = f.sessionFor('portal-admin')
+    const definition = f.stores.evaluations.put('a', 'checks', input, f.now())
+    const service = f.rbac.assignmentService(f.tenantId, f.audience)
+    const assignment = service.list().find((r) => r.subjectId === admin.oid)!
+    const search = f.provider.search.bind(f.provider)
+    f.provider.search = (tenant, query) => {
+      service.change(assignment.id, { role: 'viewer' }, {
+        requestId: 'downgrade',
+        actor: { kind: 'system' },
+      })
+      return search(tenant, query)
+    }
+    const response = await f.requestAs(
+      admin,
+      '/api/admin/t/a/evaluations/checks/runs',
+      json('POST', {
+        confirmedAsks: 1,
+        updatedAt: definition.updatedAt,
+      }),
+    )
+    expect(response.status).toBe(200)
+    const run = await response.json() as EvaluationRun
+    expect(run.status).toBe('failed')
+    expect(run.results[0]?.retrievalHit).toBe(true)
+    expect(run.results[0]?.askOk).toBe(false)
+    expect(f.providerCalls.some((call) => call.method === 'ask')).toBe(false)
+    expect(f.stores.lifecycle.usage('a', 'UTC', f.now()).asksToday).toBe(0)
+  } finally {
+    f.close()
+  }
 })

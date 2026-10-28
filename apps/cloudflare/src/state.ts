@@ -931,6 +931,17 @@ export class DurableState {
         prefix,
         prefixUpperBound(prefix),
       )
+    // A demo portal can deliberately reseed a retired slug. Its previous evaluation bank,
+    // runs and delegated schedules must disappear with the other retained portal records.
+    // Older standalone state adapters may not yet have initialised evaluation storage.
+    for (const table of ['evaluation_sets', 'evaluation_runs', 'evaluation_schedules']) {
+      if (
+        this.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", table)
+          .toArray().length
+      ) {
+        this.sql.exec(`DELETE FROM ${table} WHERE slug = ?`, slug)
+      }
+    }
     underPrefix('state', `research-v2:${encodeStorageIdentifier(slug)}:`)
     this.sql.exec('DELETE FROM enrichment_records WHERE tenant_slug = ?', slug)
     this.sql.exec('DELETE FROM routing_records WHERE tenant_slug = ?', slug)
