@@ -3,7 +3,7 @@ import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { Link } from 'react-router-dom'
 import { nextAccountMenuIndex } from './account-menu-behaviour.ts'
 import { HELP_MENU_LABEL, type HelpMenuItem, helpMenuItems } from './help-menu-items.ts'
-import { HelpCircle, type IconSize, Workflow } from './icons.tsx'
+import { Compass, HelpCircle, type IconSize, Workflow } from './icons.tsx'
 import { IconButton } from './ui.tsx'
 
 const MENU_ITEM_SELECTOR = '[role="menuitem"]'
@@ -18,6 +18,8 @@ export function HelpItemIcon({
 }: { item: HelpMenuItem; className?: string; size?: IconSize }) {
   return item.key === 'how'
     ? <Workflow size={size} className={className} />
+    : item.key === 'tour'
+    ? <Compass size={size} className={className} />
     : <HelpCircle size={size} className={className} />
 }
 
@@ -34,7 +36,7 @@ function visibleTabStops(): HTMLElement[] {
  * menu-button keyboard contract (arrows, Home, End, Escape), matching the
  * account menu beside it. It does not close on pointer leave.
  */
-export function HelpMenu({ slug }: { slug: string }) {
+export function HelpMenu({ slug, tour = false }: { slug: string; tour?: boolean }) {
   const { ui } = usePortalLocale()
   const [open, setOpen] = useState(false)
   const generatedId = useId()
@@ -44,7 +46,7 @@ export function HelpMenu({ slug }: { slug: string }) {
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const focusOnOpen = useRef<'first' | 'last' | null>(null)
-  const items = helpMenuItems(slug)
+  const items = helpMenuItems(slug, { tour })
 
   useEffect(() => {
     if (!open || !focusOnOpen.current) return
@@ -156,6 +158,7 @@ export function HelpMenu({ slug }: { slug: string }) {
       <IconButton
         ref={triggerRef}
         id={triggerId}
+        data-help-trigger
         label={ui(HELP_MENU_LABEL)}
         icon={HelpCircle}
         size='lg'
