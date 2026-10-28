@@ -10,6 +10,7 @@ import { Button, LiveStatus } from '../components/ui.tsx'
 import { useAgentAnnouncements, useAgentAsk } from '../components/useAgentAsk.ts'
 import { getTenants } from '../api/client.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
+import { stepTotal } from '../lib/agent-ask-state.ts'
 import { runtimeHostPortal } from '../lib/portal-url.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 
@@ -95,11 +96,12 @@ export function AgentAskPage() {
     }, { replace: true })
   }
 
-  // `run=1` sends the prefilled question once, after the directory has answered (or failed) so
-  // the question spans every collection it can; a refresh afterwards does not ask again.
+  // `run=1` sends the prefilled question once: after access has resolved (an ask before that is
+  // dropped), and after the directory has answered or failed, so the question spans every
+  // collection it can. A refresh afterwards does not ask again.
   const runHandledRef = useRef(false)
-  const directorySettled = onPortalHost || access.state.status !== 'ready' ||
-    directory.isSuccess || directory.isError
+  const directorySettled = access.state.status === 'ready' &&
+    (onPortalHost || directory.isSuccess || directory.isError)
   useEffect(() => {
     if (runHandledRef.current || searchParams.get('run') !== '1') return
     const query = searchParams.get('q')?.trim()
@@ -280,6 +282,7 @@ export function AgentAskPage() {
             steps={state.steps}
             status={state.status}
             now={agent.elapsedMs + startedAtOf(agent)}
+            total={stepTotal(state)}
           />
           <AgentSources sources={state.sources} steps={state.steps} status={state.status} />
         </aside>

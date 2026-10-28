@@ -43,6 +43,7 @@ export const AGENT_JA: Readonly<Record<string, string>> = {
     'エージェントの作業に合わせて、各ステップがここに表示されます。',
   'Preparing': '準備',
   'Searching': '検索',
+  'Summarising': '要約',
   'Checking': '確認',
   'Writing': '執筆',
   '(failed)': '（失敗）',

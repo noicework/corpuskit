@@ -12,11 +12,13 @@ import {
   contributingSources,
   durationLabel,
   endAgentAsk,
+  expectedStepCount,
   initialAgentAskState,
   phaseOf,
   sourceKindLabel,
   sourceState,
   splitAnswerMarkers,
+  stepTotal,
 } from './agent-ask-state.ts'
 
 const fisheries = { id: 'drv-fisheries', label: 'Fisheries research' }
@@ -423,7 +425,9 @@ Deno.test('passages link to their own address, else the portal resource, and a p
 
 Deno.test('phases come from the id prefix, then the module', () => {
   expect(phaseOf({ id: 'preprocess/rephrase', module: 'x' })).toBe('preparing')
-  expect(phaseOf({ id: 'context/ctx-a/summary', module: 'summarize' })).toBe('searching')
+  expect(phaseOf({ id: 'context/ctx-a/summary', module: 'summarize' })).toBe('summarising')
+  expect(phaseOf({ id: 'odd', module: 'summarize' })).toBe('summarising')
+  expect(phaseOf({ id: 'context/ctx-a', module: 'basic_ask' })).toBe('searching')
   expect(phaseOf({ id: 'source/marine', module: 'search' })).toBe('searching')
   expect(phaseOf({ id: 'postprocess/coverage', module: 'validation' })).toBe('checking')
   expect(phaseOf({ id: 'verify', module: 'verify' })).toBe('checking')
@@ -431,6 +435,35 @@ Deno.test('phases come from the id prefix, then the module', () => {
   expect(phaseOf({ id: 'generate/answer', module: 'generation' })).toBe('writing')
   expect(phaseOf({ id: 'odd', module: 'rerank' })).toBe('checking')
   expect(phaseOf({ id: 'odd', module: 'unknown' })).toBe('preparing')
+})
+
+Deno.test('the step count starts from what agent-start promises and ends on what happened', () => {
+  expect(expectedStepCount(null, 3)).toBe(0)
+  expect(expectedStepCount('agent', 3)).toBe(11)
+  expect(expectedStepCount('orchestrated', 3)).toBe(5)
+  const started = fold([{ type: 'agent-start', mode: 'agent', sources: [fisheries, grains, soil] }])
+  expect(stepTotal(started)).toBe(11)
+  // More steps than the baseline: the count grows with them.
+  let busy = started
+  for (let index = 0; index < 12; index++) {
+    busy = applyAgentAskEvent(
+      busy,
+      { type: 'agent-step', id: `s${index}`, module: 'x', title: 'Step', status: 'started' },
+      0,
+    )
+  }
+  expect(stepTotal(busy)).toBe(12)
+  // Fewer than the baseline when the stream ends: the real count, never a promise unmet.
+  const short = applyAgentAskEvent(
+    applyAgentAskEvent(
+      started,
+      { type: 'agent-step', id: 'only', module: 'x', title: 'Step', status: 'started' },
+      0,
+    ),
+    { type: 'done', elapsedMs: 1 },
+    0,
+  )
+  expect(stepTotal(short)).toBe(1)
 })
 
 Deno.test('durations read as a person says them', () => {

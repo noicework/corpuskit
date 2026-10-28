@@ -17,7 +17,16 @@ import type {
 // ---------------------------------------------------------------------------
 
 /** Where a step sits in the agent's work, read from its id and module. */
-export type AgentPhase = 'preparing' | 'searching' | 'checking' | 'writing'
+export type AgentPhase = 'preparing' | 'searching' | 'summarising' | 'checking' | 'writing'
+
+/** The phases in the order the work happens, which is the order the timeline shows them. */
+export const PHASE_ORDER: readonly AgentPhase[] = [
+  'preparing',
+  'searching',
+  'summarising',
+  'checking',
+  'writing',
+]
 
 export interface AgentStep {
   id: string
@@ -106,6 +115,8 @@ export function initialAgentAskState(): AgentAskState {
 
 /** The phase a step belongs to, from the contract's id prefixes, then its module. */
 export function phaseOf(step: { id: string; module: string }): AgentPhase {
+  // A summary of what a lookup found is its own kind of work, whichever lookup it follows.
+  if (step.module === 'summarize' || /\/summary$/.test(step.id)) return 'summarising'
   const prefix = step.id.split('/')[0] ?? ''
   switch (prefix) {
     case 'preprocess':
@@ -126,7 +137,6 @@ export function phaseOf(step: { id: string; module: string }): AgentPhase {
       return 'preparing'
     case 'basic_ask':
     case 'search':
-    case 'summarize':
       return 'searching'
     case 'rerank':
     case 'validation':
@@ -482,6 +492,28 @@ export function durationLabel(
   return seconds === 0
     ? `${minutes} ${words.minutes}`
     : `${minutes} ${words.minutes} ${seconds} ${words.seconds}`
+}
+
+/**
+ * How many steps an answer is expected to take, known from `agent-start` before any step opens,
+ * so the count never starts at "0 of 1". An agent understands the question, plans, searches and
+ * summarises each source, ranks, checks coverage and writes: 2N + 5 for N sources. Composing
+ * searches each source, composes and verifies: N + 2. A baseline, not a promise: the view shows
+ * the larger of this and the steps it has seen, and the real count once the stream ends.
+ */
+export function expectedStepCount(mode: AgentAskMode | null, sourceCount: number): number {
+  if (mode === 'agent') return 2 * sourceCount + 5
+  if (mode === 'orchestrated') return sourceCount + 2
+  return 0
+}
+
+/** The step count to show: the baseline while streaming, and what happened once it is over. */
+export function stepTotal(
+  state: Pick<AgentAskState, 'status' | 'mode' | 'sources' | 'steps'>,
+): number {
+  return state.status === 'streaming'
+    ? Math.max(expectedStepCount(state.mode, state.sources.length), state.steps.length)
+    : state.steps.length
 }
 
 /** The step the agent is on now: the most recently opened step still running. */

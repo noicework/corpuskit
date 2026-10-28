@@ -5,27 +5,30 @@ import {
   type AgentPhase,
   type AgentStep,
   durationLabel,
+  PHASE_ORDER,
 } from '../lib/agent-ask-state.ts'
 import { AlertCircle, Check } from './icons.tsx'
 
 const PHASE_LABELS: Record<AgentPhase, string> = {
   preparing: 'Preparing',
   searching: 'Searching',
+  summarising: 'Summarising',
   checking: 'Checking',
   writing: 'Writing',
 }
 
-/** Consecutive steps of one phase, in arrival order, so the work reads as the agent did it. */
-export function phaseRuns(
+/**
+ * The steps by phase, phases in the order the work happens and steps in arrival order within
+ * each, so a second search of a source sits with the searches rather than after the summaries.
+ * A phase with no step yet is left out: nothing is claimed that has not started.
+ */
+export function phaseGroups(
   steps: readonly AgentStep[],
 ): { phase: AgentPhase; steps: AgentStep[] }[] {
-  const runs: { phase: AgentPhase; steps: AgentStep[] }[] = []
-  for (const step of steps) {
-    const last = runs[runs.length - 1]
-    if (last && last.phase === step.phase) last.steps.push(step)
-    else runs.push({ phase: step.phase, steps: [step] })
-  }
-  return runs
+  return PHASE_ORDER.flatMap((phase) => {
+    const own = steps.filter((step) => step.phase === phase)
+    return own.length > 0 ? [{ phase, steps: own }] : []
+  })
 }
 
 /**
@@ -35,22 +38,31 @@ export function phaseRuns(
  * agent never reports never appears.
  */
 export function AgentSteps(
-  { steps, status, now }: { steps: readonly AgentStep[]; status: AgentAskStatus; now: number },
+  { steps, status, now, total }: {
+    steps: readonly AgentStep[]
+    status: AgentAskStatus
+    now: number
+    /** The steps expected in all (`stepTotal`), never fewer than `steps.length`. */
+    total: number
+  },
 ) {
   const { ui } = usePortalLocale()
   const units = { seconds: ui('s'), minutes: ui('min') }
   const finished = steps.filter((step) => step.status !== 'started').length
-  const runs = phaseRuns(steps)
+  const runs = phaseGroups(steps)
   let index = 0
 
   return (
     <section aria-labelledby='agent-steps-heading' data-agent-steps>
       <div className='flex items-baseline justify-between gap-3'>
         <h2 id='agent-steps-heading' className='rp-eyebrow text-ink-3'>{ui('Steps')}</h2>
-        {steps.length > 0
+        {total > 0
           ? (
-            <span className='text-xs tabular-nums text-ink-2'>
-              {ui('{done} of {total} done', { done: finished, total: steps.length })}
+            <span className='text-xs tabular-nums text-ink-2' data-agent-step-count>
+              {ui('{done} of {total} done', {
+                done: finished,
+                total: Math.max(total, steps.length),
+              })}
             </span>
           )
           : null}
