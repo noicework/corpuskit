@@ -30,6 +30,8 @@ type Step = { kind: 'welcome' } | { kind: 'scene'; scene: ResolvedScene; index: 
 
 export function DemoTourDialog({
   onClose,
+  onStep,
+  initialStep = 0,
   slug,
   productName,
   heading,
@@ -38,6 +40,9 @@ export function DemoTourDialog({
   graphKinds,
 }: {
   onClose: () => void
+  /** Told the step on every change, so a remount can open at the same place. */
+  onStep?: (step: number) => void
+  initialStep?: number
   slug: string
   productName: string
   /** The welcome's title and words. */
@@ -53,7 +58,7 @@ export function DemoTourDialog({
   const headingRef = useRef<HTMLHeadingElement | null>(null)
   const close = useRef(onClose)
   close.current = onClose
-  const [at, setAt] = useState(0)
+  const [at, setAt] = useState(initialStep)
   // The welcome is the first slide: it names the portal and its organisation, and its one
   // button starts the steps.
   const steps: Step[] = [
@@ -94,7 +99,8 @@ export function DemoTourDialog({
   useEffect(() => {
     headingRef.current?.focus({ preventScroll: true })
     dialogRef.current?.scrollTo({ top: 0 })
-  }, [at])
+    onStep?.(at)
+  }, [at, onStep])
 
   const next = () => (at >= last ? close.current() : setAt(at + 1))
   const back = () => setAt(Math.max(0, at - 1))
