@@ -229,7 +229,11 @@ export function DemoTourDialog({
           ref={(element) => element?.setAttribute('inert', '')}
         >
           {step.kind === 'scene'
-            ? <span className='rp-tour-example rp-badge rp-badge-quiet'>{ui('Example')}</span>
+            ? (
+              <div className='mb-3 flex justify-end'>
+                <span className='rp-badge rp-badge-quiet'>{ui('Example')}</span>
+              </div>
+            )
             : null}
           <div key={`${at}-${step.kind}`} className='rp-tour-reveal'>
             {step.kind === 'scene'

@@ -2549,18 +2549,6 @@ dialog.rp-card::backdrop {
   background: var(--rp-wash);
 }
 
-/* Every illustration says it is one: the stage holds the badge in its corner. */
-.rp-tour-stage {
-  position: relative;
-}
-
-.rp-tour-example {
-  position: absolute;
-  top: 0.75rem;
-  right: 0.75rem;
-  z-index: 1;
-}
-
 /* The question a scene's button will send, quoted beside it. */
 .rp-tour-question {
   margin: 0;
