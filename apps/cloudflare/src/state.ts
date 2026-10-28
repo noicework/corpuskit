@@ -1,3 +1,5 @@
+import { DuplicateReviewStore } from '../../api/src/duplicate-store.ts'
+import { AnswerRecordStore } from '../../api/src/answer-record-store.ts'
 import {
   DEFAULT_PORTAL_COLOURS,
   DEFAULT_RESEARCH_ENRICHMENT,
@@ -248,6 +250,7 @@ export class DurableState {
             ['tenant.access.update', 'tenant.configuration.update'].includes(
               context.input.action,
             )) ||
+          (operation === 'duplicates.decide' && context.input.action === 'duplicate.review') ||
           (operation === 'lifecycle.set' && context.input.action === 'portal.lifecycle.update') ||
           (operation === 'tenants.setAlias' && context.input.action === 'portal.alias.set') ||
           (operation === 'tenants.removeAlias' && context.input.action === 'portal.alias.remove')
@@ -462,6 +465,7 @@ export class DurableState {
         throw new Error('Invalid persisted portal lifecycle')
       }
       if (key.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
+      if (key.startsWith('answer-records:')) throw new Error('Invalid persisted answer records')
       if (key.startsWith('mcp-keys:')) throw new Error('Invalid persisted key state')
       console.error(JSON.stringify({ message: 'invalid durable JSON', key, error: String(error) }))
       if (key === 'tenants') throw new Error('Invalid persisted portal configuration')
@@ -493,6 +497,15 @@ export class DurableState {
     ).one().found > 0
   }
 
+  /** Keys without decoding values, including corrupt data that portal erasure must remove. */
+  keys(prefix: string): string[] {
+    return this.sql.exec<{ key: string }>(
+      'SELECT key FROM state WHERE key >= ? AND key < ? ORDER BY key',
+      prefix,
+      prefixUpperBound(prefix),
+    ).toArray().map((row) => row.key)
+  }
+
   list<T>(prefix: string): { key: string; value: T }[] {
     return this.sql.exec<{ key: string; value: string }>(
       'SELECT key, value FROM state WHERE key >= ? AND key < ? ORDER BY key',
@@ -502,6 +515,9 @@ export class DurableState {
       try {
         return [{ key: row.key, value: JSON.parse(row.value) as T }]
       } catch (error) {
+        if (prefix.startsWith('answer-records:')) {
+          throw new Error('Invalid persisted answer records')
+        }
         if (prefix.startsWith('research-v2:')) throw new Error('Invalid persisted owned state')
         console.error(
           JSON.stringify({ message: 'invalid durable JSON', key: row.key, error: String(error) }),
@@ -2259,6 +2275,7 @@ export class DurableRoutingLog implements RoutingLogApi {
 }
 
 export interface DurableStores extends RbacStores {
+  duplicates: DuplicateReviewStore
   lifecycle: PortalLifecycleStore
   localMutations: LocalMutationScope
   /** One SQLite transaction around a whole portal erasure, audited as `erasure.erase`. */
@@ -2266,6 +2283,7 @@ export interface DurableStores extends RbacStores {
   rbac: RbacState
   bindings: DurableBindingStore
   tenants: DurableTenantStore
+  answerRecords: AnswerRecordStore
   insights: DurableInsightsStore
   feedback: DurableFeedbackStore
   siteFeedback: DurableSiteFeedbackStore
@@ -2286,6 +2304,7 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
+    duplicates: state.auditedStore('duplicates', new DuplicateReviewStore(state.rbacDatabase)),
     lifecycle: state.auditedStore('lifecycle', new PortalLifecycleStore(state)),
     localMutations: state.localMutations,
     erasureTransaction: (slug, work) => state.atomically('erasure.erase', [slug], work),
@@ -2303,6 +2322,7 @@ export function durableStores(
         showcasePortals(env),
       ),
     ),
+    answerRecords: state.auditedStore('answerRecords', new AnswerRecordStore(state)),
     insights: state.auditedStore('insights', new DurableInsightsStore(state)),
     feedback: state.auditedStore('feedback', new DurableFeedbackStore(state)),
     siteFeedback: state.auditedStore('siteFeedback', new DurableSiteFeedbackStore(state)),
