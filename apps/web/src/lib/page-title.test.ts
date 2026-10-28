@@ -22,6 +22,7 @@ describe('per-route page titles (D6-14)', () => {
     expect(surfaceName('/t/neuro/help')).toBe('Help')
     expect(surfaceName('/t/neuro/help/trust-and-citations')).toBe('Help')
     expect(surfaceName('/t/neuro/how-it-works')).toBe('How this works')
+    expect(surfaceName('/t/neuro/accessibility')).toBe('Accessibility')
     expect(surfaceName('/t/neuro/taxonomy')).toBe('Taxonomy')
   })
 
@@ -80,6 +81,7 @@ describe('per-route page titles (D6-14)', () => {
       'tools',
       'help',
       'how-it-works',
+      'accessibility',
       'taxonomy',
       'manage',
     ]

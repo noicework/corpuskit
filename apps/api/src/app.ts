@@ -715,6 +715,7 @@ const SYNTHESIS_READS_AT_ONCE = 4
 const verdictEnum = z.enum(['supports', 'partial', 'not-relevant', 'contradicts'])
 const evidenceCreateSchema = z.object({
   passage: z.string().min(1).max(8000),
+  page: z.number().int().positive().max(100_000).optional(),
   resourceId: z.string().min(1).max(64),
   resourceTitle: z.string().min(1).max(300),
   score: z.number().min(0).max(1).nullable().optional(),
@@ -1969,7 +1970,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // frame-ancestors only, not a full CSP - the app legitimately loads
   // modules from esm.sh and fonts from Google, so default-src/script-src is
   // a later work item once those origins are catalogued. A stored file keeps
-  // its own stricter policy, which forbids framing as well.
+  // its own stricter policy, which forbids framing as well; a stored PDF keeps
+  // the one exception, framing by the portal itself (STORED_PDF_FRAMING).
   registerInfrastructure(app, '*', async (c, next) => {
     await next()
     // `includeSubDomains` only inside the platform domain: any other host may be a customer's apex.
@@ -1979,7 +1981,8 @@ export function buildApp(opts: BuildAppOptions): Hono {
     )
     c.header('X-Content-Type-Options', 'nosniff')
     c.header('Referrer-Policy', 'strict-origin-when-cross-origin')
-    if (c.res.headers.get('Content-Security-Policy') !== STORED_FILE_POLICY) {
+    const policy = c.res.headers.get('Content-Security-Policy')
+    if (policy !== STORED_FILE_POLICY && policy !== STORED_PDF_FRAMING) {
       c.header('Content-Security-Policy', "frame-ancestors 'none'")
     }
   })
@@ -3248,7 +3251,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const pdf = type === 'application/pdf'
     const inline = type !== null && (pdf || passiveMedia(type))
     if (inline) headers.set('content-type', type)
-    if (!pdf) headers.set('content-security-policy', STORED_FILE_POLICY)
+    if (pdf) {
+      headers.set('content-security-policy', STORED_PDF_FRAMING)
+      headers.set('x-frame-options', 'SAMEORIGIN')
+    } else headers.set('content-security-policy', STORED_FILE_POLICY)
     headers.set('content-disposition', inline ? 'inline' : 'attachment')
     return new Response(upstream.body, { status: upstream.status, headers })
   })
@@ -4118,6 +4124,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!await adminResource(c, config, parsed.data.resourceId)) return adminNotFound(c)
     const item = investigations.addEvidence(config.slug, owner, c.req.param('id'), {
       passage: parsed.data.passage,
+      ...(parsed.data.page ? { page: parsed.data.page } : {}),
       resourceId: parsed.data.resourceId,
       resourceTitle: parsed.data.resourceTitle,
       score: parsed.data.score ?? null,
@@ -8189,6 +8196,13 @@ function nearestTitles(resources: readonly ScoredResource[]): string[] {
  * share one session cookie, so opening such a file directly must never run script there.
  */
 export const STORED_FILE_POLICY = "sandbox; default-src 'none'; frame-ancestors 'none'"
+
+/**
+ * A stored PDF opens in the browser's own viewer, which a sandboxed document cannot use, so it
+ * takes no sandbox. The portal itself may frame it - the PDF reader's fallback view and its print
+ * view are frames - and nothing else may; every other response stays unframeable.
+ */
+export const STORED_PDF_FRAMING = "frame-ancestors 'self'"
 
 /** Headers for a stored branding asset: sandboxed, never sniffed and saved rather than shown. */
 function storedFileHeaders(contentType: string): Record<string, string> {
