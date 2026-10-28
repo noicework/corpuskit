@@ -163,6 +163,24 @@ export class AnswerRecorder {
         this.value.generation.promptHashes.push(hash)
       }
     }
+    for (const context of options.sourceContext ?? []) {
+      const key = JSON.stringify([context.resourceId, null, context.text])
+      if (this.passageKeys.has(key)) continue
+      if (this.value.retrieved.length >= MAX_PASSAGES) {
+        this.value.truncated = true
+        continue
+      }
+      this.passageKeys.add(key)
+      this.value.retrieved.push({
+        resourceId: this.text(context.resourceId, 256),
+        title: this.value.retrieved.find((p) => p.resourceId === context.resourceId)?.title ??
+          'Supplied source context',
+        text: this.text(context.text),
+        page: null,
+        score: null,
+        scoreScope: 'unknown',
+      })
+    }
     for (
       const query of [
         ...options.prequeries ?? [],

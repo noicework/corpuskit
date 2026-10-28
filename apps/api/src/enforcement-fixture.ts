@@ -1240,7 +1240,15 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
             JSON.parse(result).some((row: { tenant: { slug: string } }) => row.tenant.slug === 'a'),
           ).toBe(true)
         } else if (method === 'GET') {
-          if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
+          if (suffix === 'answer-records/records/:id') {
+            expect(JSON.parse(result)).toEqual(answerRecord)
+          } else if (
+            suffix === 'answer-records/records/:id/export' || suffix === 'answer-records/export'
+          ) {
+            expect(JSON.parse(result).records).toEqual([answerRecord])
+          } else if (suffix === 'answer-records/retention') {
+            expect(JSON.parse(result)).toEqual({ days: 90 })
+          } else if (suffix === 'sources') expect(JSON.parse(result)[0].id).toBe(source.id)
           else if (suffix === 'suggestions') {
             expect(JSON.parse(result)[0].id).toBe('suggestion-a')
           } else if (suffix === 'enrichments/export') {

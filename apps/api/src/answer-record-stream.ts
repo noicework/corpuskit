@@ -46,11 +46,16 @@ export function recordAnswerStream(
       now: options.now,
     })
     let terminal: unknown
+    const tail: unknown[] = []
     const send = async (event: unknown) => {
       const parsed = AskEventSchema.safeParse(event)
       if (parsed.success) recorder.observe(parsed.data)
       if (parsed.success && parsed.data.type === 'done') {
         terminal = event
+        return
+      }
+      if (terminal) {
+        tail.push(event)
         return
       }
       await stream.writeSSE({ data: JSON.stringify(event) })
@@ -64,6 +69,7 @@ export function recordAnswerStream(
       const answerId = recorder.finish()
       await stream.writeSSE({ data: JSON.stringify({ type: 'answer-record', answerId }) })
       if (terminal) await stream.writeSSE({ data: JSON.stringify(terminal) })
+      for (const event of tail) await stream.writeSSE({ data: JSON.stringify(event) })
     } catch {
       try {
         recorder.finish(options.cancelled(stream) ? 'cancelled' : 'error')
@@ -116,6 +122,7 @@ export async function* recordComposedSource(
     now: options.now,
   })
   let terminal: import('@research-portal/core').AskEvent | undefined
+  const tail: import('@research-portal/core').AskEvent[] = []
   let completed = false
   try {
     for await (
@@ -123,12 +130,14 @@ export async function* recordComposedSource(
     ) {
       recorder.observe(event)
       if (event.type === 'done') terminal = event
+      else if (terminal) tail.push(event)
       else yield event
     }
     const answerId = recorder.finish()
     completed = true
     yield { type: 'answer-record', answerId }
     if (terminal) yield terminal
+    yield* tail
   } catch (error) {
     recorder.finish('error')
     completed = true

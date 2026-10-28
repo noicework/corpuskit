@@ -17,7 +17,6 @@ export interface AnswerRecordState {
   keys(prefix: string): string[]
   put(key: string, value: unknown): void
   delete(key: string): void
-  list<T>(prefix: string): { key: string; value: T }[]
 }
 const PREFIX = 'answer-records:'
 const DAY = 86_400_000
@@ -47,14 +46,23 @@ export class AnswerRecordStore {
     if (this.state.has(key)) throw new Error('Answer record already exists')
     this.state.put(key, parsed)
   }
-  list(slug: string, from?: string, to?: string): AnswerRecord[] {
+  /** Export traversal keeps at most one fetched record outside the bounded response page. */
+  *iterate(slug: string, from?: string, to?: string, after?: string): Iterable<AnswerRecord> {
     const cutoff = this.now() - this.retention(slug) * DAY
-    return this.state.list<AnswerRecord>(prefixFor(slug) + 'record:').map(({ value }) =>
-      AnswerRecordSchema.parse(value)
-    ).filter((r) =>
-      r.portal === slug && Date.parse(r.at) > cutoff &&
-      (!from || r.at >= from) && (!to || r.at <= to)
-    ).sort((a, b) => a.at.localeCompare(b.at) || a.answerId.localeCompare(b.answerId))
+    for (const key of this.state.keys(prefixFor(slug) + 'record:').sort()) {
+      if (after && key.slice(key.lastIndexOf(':') + 1) <= after) continue
+      const record = AnswerRecordSchema.parse(this.state.get(key, null))
+      if (record.portal !== slug) throw new Error('Answer record portal mismatch')
+      if (
+        Date.parse(record.at) > cutoff && (!from || record.at >= from) && (!to || record.at <= to)
+      ) {
+        yield record
+      }
+    }
+  }
+  list(slug: string, from?: string, to?: string): AnswerRecord[] {
+    return [...this.iterate(slug, from, to)]
+      .sort((a, b) => a.at.localeCompare(b.at) || a.answerId.localeCompare(b.answerId))
   }
   get(slug: string, id: string): AnswerRecord | null {
     if (!IdSchema.safeParse(id).success) return null
@@ -72,7 +80,8 @@ export class AnswerRecordStore {
   }
   private purgePortal(slug: string, days: number): number {
     let count = 0
-    for (const { key, value } of this.state.list<AnswerRecord>(prefixFor(slug) + 'record:')) {
+    for (const key of this.state.keys(prefixFor(slug) + 'record:')) {
+      const value = this.state.get<AnswerRecord | null>(key, null)
       if (Date.parse(AnswerRecordSchema.parse(value).at) <= this.now() - days * DAY) {
         this.state.delete(key)
         count++
@@ -95,7 +104,7 @@ export class AnswerRecordStore {
 }
 export type AnswerRecordStoreApi = Pick<
   AnswerRecordStore,
-  'record' | 'list' | 'get' | 'retention' | 'setRetention' | 'purgeExpired' | 'erase'
+  'record' | 'list' | 'iterate' | 'get' | 'retention' | 'setRetention' | 'purgeExpired' | 'erase'
 >
 
 /** Explicit DATA_DIR adapter, with no module-level paths or cached record collections. */
@@ -147,9 +156,6 @@ export class FileAnswerRecordState implements AnswerRecordState {
     }
     return keys
   }
-  list<T>(prefix: string): { key: string; value: T }[] {
-    return this.keys(prefix).map((key) => ({ key, value: this.get<T>(key, null as T) }))
-  }
   mutationPaths(args: unknown[]): string[] {
     const slug = String(args[0])
     const value = args[1]
@@ -174,8 +180,5 @@ export function transientAnswerRecordStore(now = Date.now): AnswerRecordStore {
     delete: (key) => {
       values.delete(key)
     },
-    list: <T>(prefix: string) =>
-      [...values].filter(([key]) => key.startsWith(prefix))
-        .map(([key, value]) => ({ key, value: structuredClone(value) as T })),
   }, now)
 }

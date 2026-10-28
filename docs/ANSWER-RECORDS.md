@@ -42,7 +42,8 @@ available in read-only mode and subject to suspension in the usual way. Changing
 Export range endpoints include both timestamps and reject invalid/duplicate query parameters.
 JSON returns `{ records, nextCursor }`. CSV includes JSON cells for structured fields and prevents
 spreadsheet formula execution. Export pages are bounded below the privileged response audit cap.
-Continue with `cursor=<nextCursor>` using the same range and format. CSV exposes the cursor in
+Records are fetched individually in answer-id order, so paging does not load the full history
+into Worker memory. Continue with `cursor=<nextCursor>` using the same range and format. CSV exposes the cursor in
 `X-Answer-Records-Next`; retain only the first page's header. The page downloads all pages for the
 selection and publishes a file only after every page succeeds. This is an immutable-record
 traversal, not a historical database snapshot; a concurrent retention or erasure can invalidate a
@@ -75,7 +76,8 @@ const answerId = recorder.finish() // required persistence; throws on failure
 ```
 
 The wrapper captures each `search` query/results and each `ask` query, options and raw events,
-including attempts later rejected by verification. `observe` takes the final `AskEvent` stream
+including attempts later rejected by verification. Verified `sourceContext` supplied for generation
+is also retained, with unknown pages and scores represented explicitly. `observe` takes the final `AskEvent` stream
 and retains citations whose markers survive the final text, plus audit removal counts and
 unsupported figures. Pass final quality/usage as provider events when a composed route computes
 those metrics itself. `finish('error')` or `finish('cancelled')` can record an unfinished run while

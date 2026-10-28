@@ -38,6 +38,10 @@ Deno.test('recorder retains queries, passages, final citations, dropped sentence
       depth: 'deep',
       prequeries: ['heat stress'],
       systemPrompt: 'private prompt text',
+      sourceContext: [{
+        resourceId: 'original-source',
+        text: 'Original source evidence supplied for this answer.',
+      }],
     })
   ) {
     recorder.observe(event)
@@ -78,6 +82,12 @@ Deno.test('recorder retains queries, passages, final citations, dropped sentence
     'heat stress',
   ])
   expect(record.retrieved.length).toBeGreaterThan(0)
+  expect(record.retrieved.find((p) => p.resourceId === 'original-source')).toMatchObject({
+    text: 'Original source evidence supplied for this answer.',
+    page: null,
+    score: null,
+    scoreScope: 'unknown',
+  })
   expect(record.cited[0]).toMatchObject({
     resourceId: 'res-1',
     citationIndex: 1,
@@ -401,3 +411,32 @@ for (const adapter of ['durable', 'local'] as const) {
     }
   })
 }
+
+Deno.test('export pages stop fetching record bodies once the response budget is full', async () => {
+  const f = createEnforcementFixture()
+  try {
+    for (let index = 0; index < 12; index++) {
+      const record = answerRecordFixture('a')
+      record.question = 'Research question '.repeat(10_000)
+      f.stores.answerRecords.record('a', record)
+    }
+    let reads = 0
+    const original = f.state.get.bind(f.state)
+    f.state.get = <T>(key: string, fallback: T): T => {
+      if (key.startsWith('answer-records:a:record:')) reads++
+      return original(key, fallback)
+    }
+    const response = await f.requestAs(
+      f.sessionFor('curator'),
+      '/api/admin/t/a/answer-records/export?format=json',
+    )
+    expect(response.status).toBe(200)
+    const page = await response.json()
+    expect(page.nextCursor).toBeTruthy()
+    expect(page.records.length).toBeGreaterThan(0)
+    expect(reads).toBeGreaterThan(0)
+    expect(reads).toBeLessThan(12)
+  } finally {
+    f.close()
+  }
+})
