@@ -100,6 +100,7 @@ import {
 import {
   AccessModeSchema,
   authorize,
+  DemoTourModeSchema,
   normalisePrincipal,
   portalConfigurationExport,
   PortalConfigurationImportSchema,
@@ -169,6 +170,7 @@ import {
 } from '@research-portal/retrieval'
 import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
 import { agentAnswer, type ComposeSource } from './agent-compose.ts'
+import { measureAgentAnswer } from './agent-timing.ts'
 import {
   type NewTenantInput,
   type TenantPatch,
@@ -902,6 +904,8 @@ const renameTenantSchema = z.object({
   federation: FederationSettingsSchema.optional(),
   /** Whether readers can send the portal team feedback (opt-in; see TenantConfigSchema). */
   siteFeedback: z.boolean().optional(),
+  /** The guided tour on the home page: off, request or auto (see TenantConfigSchema). */
+  demoTour: DemoTourModeSchema.optional(),
   /**
    * The portal's header links, footer and home page, or null to clear them. Checked against
    * `PortalLayoutSchema` only after authorisation, so a caller who may not change the portal's
@@ -915,6 +919,7 @@ const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'regionalDiscovery',
   'agentAsk',
   'siteFeedback',
+  'demoTour',
   'federation',
 ])
 const kgImplementSchema = z.object({
@@ -5573,6 +5578,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       agentAsk,
       federation,
       siteFeedback: siteFeedbackSetting,
+      demoTour,
       layout: _layout,
       ...branding
     } = parsed.data
@@ -5584,6 +5590,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }
         : {}),
       ...(siteFeedbackSetting !== undefined ? { siteFeedback: siteFeedbackSetting } : {}),
+      ...(demoTour !== undefined ? { demoTour } : {}),
     }
     const behaviourFields = Object.keys(behaviour)
     // A participation change is recorded with its before and after (who and when are the
@@ -8528,21 +8535,28 @@ export function buildApp(opts: BuildAppOptions): Hono {
       try {
         if (cancelled()) return
         for await (
-          const event of agentAnswer({
-            provider,
-            host,
-            portals,
-            peers,
-            stillParticipates: (slug) => {
-              const current = tenant(slug)
-              return current !== undefined && participatesInFederation(current)
-            },
-            question: request.query,
-            ...(request.context ? { context: request.context } : {}),
-            signal: upstream.signal,
-            ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
-            ...(opts.agentComposeTimeoutMs ? { composeTimeoutMs: opts.agentComposeTimeoutMs } : {}),
-          })
+          const event of measureAgentAnswer(
+            agentAnswer({
+              provider,
+              host,
+              portals,
+              peers,
+              stillParticipates: (slug) => {
+                const current = tenant(slug)
+                return current !== undefined && participatesInFederation(current)
+              },
+              question: request.query,
+              ...(request.context ? { context: request.context } : {}),
+              signal: upstream.signal,
+              ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
+              ...(opts.agentComposeTimeoutMs
+                ? { composeTimeoutMs: opts.agentComposeTimeoutMs }
+                : {}),
+            }),
+            host.slug,
+            request.query,
+            insights,
+          )
         ) {
           if (cancelled()) return
           await send(event)
@@ -8561,9 +8575,12 @@ export function buildApp(opts: BuildAppOptions): Hono {
         )
       } finally {
         stop()
+        c.req.raw.signal.removeEventListener('abort', stop)
+        operationSignals.get(c.req.raw)?.removeEventListener('abort', stop)
       }
     }))
-  const answersAgentAsk = () => Boolean(provider.agentAsk || provider.compose)
+  const answersAgentAsk = () =>
+    Boolean(provider.agentAsk || provider.compose || provider.composeStream)
 
   // A federation peer's read-only service-account key: sealed beside the portal's own binding
   // (BINDING_KEY), never returned, never in the portal's configuration. Replaces any key the peer

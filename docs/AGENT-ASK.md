@@ -5,13 +5,13 @@ Agent ask streams an answer one step at a time, from one of two writers:
 - **agent**: a retrieval agent plans, searches each of its sources, reasons aloud, then writes a
   cited answer. A real session runs for one to two minutes.
 - **orchestrated**: when the portal has no agent, the portal searches each collection itself,
-  composes one answer from the passages they returned, and checks every citation against its
-  passage before the reader sees it.
+  streams one answer from the passages they returned, and checks every citation against its
+  passage before finalising the text.
 
 Both produce the same events, and `agent-start.mode` says which wrote the answer, so a view can
 say "composed by CorpusKit across 3 collections" and never present the portal's own composition
 as an agent's. The stream is built to be watched: steps open and close, each source's passages
-arrive as they are found, and the answer streams in at the end.
+arrive as they are found, and generation deltas arrive while the host writes its answer.
 
 It is a separate contract from Ask (`AskEventSchema`): nothing that reads the portal's own Ask
 stream changes.
@@ -179,12 +179,83 @@ Composing (`mode: "orchestrated"`):
    in one `sources-failed` event, sent after every lookup has settled and before the answer.
    The answer comes from the rest. If every portal fails, the stream ends with an `error`.
 3. The host composes one answer (step `compose`, 90 s limit, `agentComposeTimeoutMs`) from the
-   passages, numbered in the portals' order, citing them as `[n]`.
+   passages, numbered in the portals' order, citing them as `[n]`. One plain streaming `/ask`
+   emits its `answer` items directly as provisional `delta` events, without a schema attempt,
+   JSON-text retry or catalogue walk. Hosted lookups request passages without fetching display summaries.
 4. Step `verify` runs the Ask answer's deterministic binding over it: each sentence keeps only
    the markers whose passage carries its words, figures and names, a sentence stating a figure
    no passage supports is removed, and the markers are renumbered by first appearance. The step's
    `reason` says what was removed. An answer left with no supported citation is declined.
-5. The answer streams a paragraph at a time, then its citations, then `done`.
+5. Verified citations follow the provisional deltas, then `done.text` supplies the complete, checked
+   answer. Consumers MUST replace the accumulated text with `done.text` when it is present. This
+   removes unsupported markers and figures, applies the final numbering, or replaces the draft
+   with the refusal when no supported citation survives. `applyAgentEvent` does this for display
+   records and evidence exports. Providers with only the older `compose` method still work, with
+   buffered paragraph deltas.
+
+### Budgets, deadlines and timing
+
+- Hosted and peer lookups start together, with each source's deadline installed before work
+  begins. Each source gets one 20-second budget across connection, MCP handshake, retries and
+  response-body reads. The same abort signal reaches hosted `/find` and peer calls. Cancellation
+  ends outstanding source and generation work; streaming generation has one absolute 90-second
+  deadline, which is not reset on each delta. These are failure limits, not latency targets.
+- Every source contributes at most **4 passages**, each **1,200 characters**. Composition admits
+  at most **16 passages** overall, round-robin by source before numbering in source order, so a
+  large first source cannot crowd out the others. Collection labels are capped at 120 characters,
+  titles at 160, the question at 2,000 and history at the last four turns of 600 characters each.
+  The question/passage prompt plus system instructions must fit **32,000 characters**. The host's
+  own retrieval remains `top_k: 1`; generation remains `max_tokens: 4096`.
+- An MCP peer's matching JSON-RPC result is consumed as soon as its SSE frame arrives. The
+  response body is then cancelled, rather than waiting for a long-lived connection to close.
+  Handshake ordering and the endpoint/tool allowlists still apply.
+- `askStructured` remembers a recognised model-refusal 412 for **five minutes**, per portal and
+  effective model, and skips the refused schema attempt on subsequent calls. Other errors do not
+  populate the hint. Rebinding/invalidation clears it. At most 256 hints live in each provider
+  instance; they retain no query, answer, error text or key and add no persistent record kind.
+- Source and composition completion events carry their own `elapsedMs`. Composition completion
+  also carries `firstTokenMs`, measured from composition start to the first upstream text delta.
+  The source clock is sampled when the lookup settles, independent of stream backpressure.
+- Both agent ask routes record one existing ask-insight row on the **host portal**. Its
+  `firstTokenSec` and `answerSec` use the server clock from entering the answer stream through
+  first text and completion, including search and verification. These feed the existing usage
+  report's nearest-rank percentiles without new columns. Failures and uncited refusals are
+  recorded as unanswered and excluded from answered-question percentiles. `durationSec` stays
+  null because this path does not report the knowledge box's generation duration. These rows
+  use the existing local and Durable Object insights adapters, retention and erasure.
+
+The performance targets are interactive search below **2 seconds p95** and completed grounded
+answers below **10 seconds p95** for typical queries. First-token time is a separate measure of
+responsiveness, not proof of answer completion. The usage report measures server-side answered
+question times; standalone search latency needs a separate representative load test. No target is
+claimed from a synthetic fixture or from a failure timeout. With concurrent sources, expected
+first-text time is the slowest admitted lookup plus the model's first delta; completion adds the
+rest of one generation and the deterministic citation check. Model speed and peer latency still
+need measurement in the intended managed deployment.
+
+### Local streaming comparison (28 October 2026)
+
+Five sequential HTTP requests to the agent stub's one-host, two-peer route, at replay speed 10,
+used `Why warming? #compose sample N` (N from 0 to 4). The client clock started before `fetch`
+and recorded the first `delta` and `done` SSE frames. The baseline was `2f857bb`; the streaming
+implementation was `6b32091`. No real retrieval or generation service was called.
+
+| Client-observed milliseconds | Before | Streaming |
+|---|---:|---:|
+| First delta p50 | 870 | 370 |
+| First delta p95 | 904 | 528 |
+| Completion p50 | 870 | 872 |
+| Completion p95 | 904 | 1046 |
+
+Percentiles here are nearest-rank over five samples, not an acceptance load test. The fixture
+keeps its original six-second generation schedule (600 ms at this speed); it now emits the
+first delta after one second of generation instead of waiting for all six. Its 2.5-second hosted
+lookup therefore puts first text near 3.5 seconds and completion near 8.5 seconds at the original
+pace, before harness overhead. The peers are in-process fixtures. Completion did not improve in
+this synthetic comparison, and the small sample on a shared development machine is insufficient
+to assess completion p95. The production provider's removed catalogue walk and schema/retry
+calls are covered by fetch-count tests; their real-world time saving remains unmeasured. The
+reported live 39 to 40 seconds was not retested because this lane uses local fixtures only.
 
 What the federated ask does today, for comparison: each portal's answer streams on its own, a
 portal that throws gets its own `error` event while the others carry on, and the stream ends with
@@ -196,18 +267,18 @@ gives up, and `estate-done` never arrives.
 | Event | Fields | When |
 | --- | --- | --- |
 | `agent-start` | `mode, sources: [{id, label, portal?, kind?, transport?}]` | First, at once: who answers (`agent` or `orchestrated`) and the sources it can search (may be empty) |
-| `agent-step` | `id, module, title, status, elapsedMs?, reason?` | A step opening (`started`) or closing (`completed` or `failed`, with `elapsedMs`) |
+| `agent-step` | `id, module, title, status, elapsedMs?, firstTokenMs?, reason?` | A step opening (`started`) or closing (`completed` or `failed`, with `elapsedMs`) |
 | `agent-sources` | `stepId, source, question?, chunks: [{id, title, text, url?, resourceId?}]` | What one source returned for a step |
 | `sources-failed` | `sources: [{id, label, portal?, kind?, transport?, reason: timeout \| unauthorised \| error}]` | Composing only: the sources that could not be searched, once, before the answer |
 | `reasoning` | `text, last` | The agent thinking aloud; `last` closes a run of reasoning |
 | `delta` | `text` | The next piece of the answer |
 | `citation` | `marker, sourceId, chunkId, title, url?` | What `[marker]` in the answer cites |
-| `done` | `elapsedMs` | The answer is complete |
+| `done` | `elapsedMs, text?` | The answer is complete; `text`, when present, replaces provisional text with the checked answer |
 | `error` | `code, message, retryable` | The stream ended without an answer |
 
 Guarantees a view can rely on:
 
-- `agent-start` comes first and arrives before anything is searched, so there is always
+- `agent-start` comes first, while source lookups begin concurrently, so there is always
   something to show. When the portal composes, every source has a `kind`: `hosted` is a portal
   of this deployment (`id` and `portal` its slug, `label` its name, a chunk's `resourceId` the
   resource it comes from, `/t/<portal>/library/<resourceId>`); `peer` is a federated partner

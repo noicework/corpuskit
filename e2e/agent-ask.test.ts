@@ -3,6 +3,7 @@
 import { expect } from '@std/expect'
 import { type AgentAskEvent, AgentAskEventSchema, TenantConfigSchema } from '@research-portal/core'
 import { AGENT_STUB_PORTAL, startAgentStub } from './support/agent-stub-server.ts'
+import { collectAgentAnswer } from '../apps/web/src/lib/agent-answer-export.ts'
 
 function askAcross(url: string, query: string, slugs: string[]) {
   return fetch(`${url}/api/ask-agent`, {
@@ -183,6 +184,50 @@ Deno.test('the stub host federates to its two partner peers, and names one that 
       })
       expect(partial.at(-1)?.type).toBe('done')
     }
+  } finally {
+    await server.close()
+  }
+})
+
+Deno.test('composition sends generation deltas well before done, with checked final text and timings', async () => {
+  const server = await startAgentStub({ speed: 10, apiOnly: true })
+  try {
+    const received = performance.now()
+    const events = await timedEvents(await askAgent(server.url, 'Why warming? #compose'))
+    const first = events.find(({ event }) => event.type === 'delta')!
+    const done = events.at(-1)!
+    expect(done.event.type).toBe('done')
+    expect(first.at).toBeLessThan(done.at - 300)
+    expect(events.filter(({ event }) => event.type === 'delta').length).toBeGreaterThan(3)
+    const compose = events.find(({ event }) =>
+      event.type === 'agent-step' && event.id === 'compose' && event.status === 'completed'
+    )!.event
+    expect(compose).toMatchObject({ firstTokenMs: expect.any(Number) })
+    if (compose.type === 'agent-step') {
+      expect(compose.firstTokenMs!).toBeLessThan(compose.elapsedMs! - 300)
+    }
+    const record = collectAgentAnswer(
+      'Why warming?',
+      events.map(({ event }) =>
+        event
+      ),
+    )
+    expect(record.status).toBe('done')
+    if (done.event.type === 'done') expect(record.text).toBe(done.event.text)
+    expect(record.citations.length).toBeGreaterThan(0)
+    const insight = JSON.parse(
+      Deno.readTextFileSync(`${server.directory}/insights/${AGENT_STUB_PORTAL}.jsonl`).trim(),
+    )
+    expect(insight.answered).toBe(true)
+    expect(insight.firstTokenSec).toBeGreaterThan(0)
+    expect(insight.answerSec).toBeGreaterThan(insight.firstTokenSec)
+    expect(insight.durationSec).toBeNull()
+    console.log(JSON.stringify({
+      replaySpeed: 10,
+      firstDeltaMs: Math.round(first.at),
+      doneMs: Math.round(done.at),
+      requestMs: Math.round(performance.now() - received),
+    }))
   } finally {
     await server.close()
   }
