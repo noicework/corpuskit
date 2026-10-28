@@ -27,11 +27,14 @@ import {
   ANSWER_FEEDBACK_DAYS,
   ANSWER_FEEDBACK_KEEP,
   type AnswerFeedback,
+  asksIn,
+  type AskWindow,
   type FeedbackRating,
   type FeedbackStoreApi,
   keptRatings,
   LEARNING_ID_PATTERN,
   type MatchedAnswers,
+  WEAK_GROUNDEDNESS,
 } from '../../api/src/stores.ts'
 import type {
   AskInsight,
@@ -1309,6 +1312,9 @@ export class DurableTenantStore implements TenantStoreApi {
   }
 }
 
+/** Asks the Durable Object keeps per portal; past it, the oldest go first. */
+export const DURABLE_ASKS_KEPT = 50_000
+
 export class DurableInsightsStore implements InsightsStoreApi {
   constructor(private readonly state: DurableState) {}
 
@@ -1324,7 +1330,7 @@ export class DurableInsightsStore implements InsightsStoreApi {
   record(slug: string, insight: AskInsight): void {
     const all = this.all(slug)
     all.push(insight)
-    this.state.put(key('insights', slug), all.slice(-50_000))
+    this.state.put(key('insights', slug), all.slice(-DURABLE_ASKS_KEPT))
   }
 
   summary(slug: string, days = 90): InsightsSummary {
@@ -1352,7 +1358,7 @@ export class DurableInsightsStore implements InsightsStoreApi {
         ([question, count]) => ({ question, count }),
       ),
       gaps: all.filter((item) =>
-        !item.answered || (item.groundedness !== null && item.groundedness <= 2)
+        !item.answered || (item.groundedness !== null && item.groundedness <= WEAK_GROUNDEDNESS)
       ).slice(-30).reverse().map((item) => ({
         question: item.question,
         ts: item.ts,
@@ -1378,6 +1384,18 @@ export class DurableInsightsStore implements InsightsStoreApi {
       }
     }
     return found
+  }
+
+  /**
+   * The asks from `from` up to `to` (epoch milliseconds), for a usage report. A full log may
+   * have dropped older asks, so its record is complete only from its oldest.
+   */
+  asksBetween(slug: string, from: number, to: number): AskWindow {
+    const all = this.all(slug)
+    return {
+      asks: asksIn(all, from, to),
+      keptSince: all.length >= DURABLE_ASKS_KEPT ? all[0]!.ts : null,
+    }
   }
 }
 

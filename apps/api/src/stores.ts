@@ -301,6 +301,20 @@ function questionsByLearningId(
   return found
 }
 
+/** A groundedness score at or below this, out of 5, is a weakly grounded answer: a knowledge gap. */
+export const WEAK_GROUNDEDNESS = 2
+
+/** A portal's asks over a period, and when its ask log's complete record begins. */
+export interface AskWindow {
+  /** The asks recorded in the period, oldest first. */
+  asks: AskInsight[]
+  /**
+   * When the log began dropping its oldest asks, as the time of the oldest it still holds; null
+   * while it holds every ask it was given.
+   */
+  keptSince: string | null
+}
+
 export interface InsightsSummary {
   totalAsks: number
   answered: number
@@ -373,7 +387,9 @@ export class InsightsStore {
     }
     // Knowledge gaps: the corpus could not answer, or answered on thin ground.
     const gaps = all
-      .filter((i) => !i.answered || (i.groundedness !== null && i.groundedness <= 2))
+      .filter((i) =>
+        !i.answered || (i.groundedness !== null && i.groundedness <= WEAK_GROUNDEDNESS)
+      )
       .slice(-30)
       .reverse()
       .map((i) => ({
@@ -402,6 +418,19 @@ export class InsightsStore {
   ): Record<string, { question: string; ts: string }> {
     return learningIds.length === 0 ? {} : questionsByLearningId(this.readAll(slug), learningIds)
   }
+
+  /** The asks from `from` up to `to` (epoch milliseconds), for a usage report. Never trimmed. */
+  asksBetween(slug: string, from: number, to: number): AskWindow {
+    return { asks: asksIn(this.readAll(slug), from, to), keptSince: null }
+  }
+}
+
+/** The asks recorded from `from` up to, not including, `to`, oldest first. */
+export function asksIn(asks: readonly AskInsight[], from: number, to: number): AskInsight[] {
+  return asks.filter((ask) => {
+    const at = Date.parse(ask.ts)
+    return at >= from && at < to
+  })
 }
 
 // --- Answer feedback ----------------------------------------------------------

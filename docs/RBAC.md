@@ -51,6 +51,11 @@ like the purge of failed crawls and reingest, which already remove resources. It
 `resource.delete`. The MCP server offers no delete tool, and keys are refused on
 `/api/admin/*`, so only a signed-in manager deletes. See `HOSTING.md`, "Deleting a document".
 
+The monthly usage report (`GET /api/admin/t/:slug/insights/usage`) is declared with
+`audit.export`, not with `content.write` like Insights: it is an accountability record of the
+portal's use, exported like the audit log, so curators read Insights but only portal
+administrators export the report. See `USAGE-REPORTS.md`.
+
 ## Portal access modes
 
 Each portal has an access mode. Existing portals are `public`.

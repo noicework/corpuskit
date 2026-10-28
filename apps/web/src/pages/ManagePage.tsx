@@ -14,6 +14,7 @@ import { ExtractionPanel } from './admin/ExtractionPanel.tsx'
 import { CorpusHealthPanel } from './admin/CorpusHealthPanel.tsx'
 import { EnrichmentsPanel } from './admin/EnrichmentsPanel.tsx'
 import { InsightsPanel } from './admin/InsightsPanel.tsx'
+import { UsageReportPanel } from './admin/UsageReportPanel.tsx'
 import { KgPanel } from './admin/KgPanel.tsx'
 import { LabelsetsPanel } from './admin/LabelsetsPanel.tsx'
 import { RecentList } from './admin/RecentList.tsx'
@@ -332,9 +333,16 @@ function ManageContent() {
             {tab === 'insights' && can('content.write') &&
               (can('content.write') && reachable
                 ? (
-                  <div className='rp-card p-5 lg:p-6'>
-                    <InsightsPanel slug={slug} />
-                  </div>
+                  <>
+                    <div className='rp-card p-5 lg:p-6'>
+                      <InsightsPanel slug={slug} />
+                    </div>
+                    <UsageReportPanel
+                      slug={slug}
+                      name={config.branding.productName}
+                      timezone={config.timezone}
+                    />
+                  </>
                 )
                 : unavailable)}
             {tab === 'taxonomy' && can('taxonomy.write') && (

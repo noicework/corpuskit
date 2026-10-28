@@ -154,6 +154,7 @@ import {
   withLayout,
 } from './tenants.ts'
 import { tenantToday } from './tenant-time.ts'
+import { buildUsageReport, usagePeriod, usageReportCsv } from './usage-report.ts'
 import { BindingStore, type BindingStoreApi } from './bindings.ts'
 import { BindingCryptoError } from './binding-crypto.ts'
 import { getPlatformDomain } from '../../../packages/core/src/platform-domain.ts'
@@ -6059,6 +6060,58 @@ export function buildApp(opts: BuildAppOptions): Hono {
         (learningIds) => feedback.comments(config.slug, learningIds),
       ),
     })
+  })
+
+  /**
+   * One portal's usage for a calendar month in its timezone (docs/USAGE-REPORTS.md), as JSON for
+   * the printable report or, with `format=csv`, as a CSV download. Counts come from the ask log,
+   * readers' ratings and the knowledge box; a day a record no longer covers is reported as not
+   * held, never as zero. Question text never leaves in it.
+   */
+  app.get(declaredRoute('GET', '/api/admin/t/:slug/insights/usage'), async (c) => {
+    const config = tenant(c.req.param('slug'))
+    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
+    c.header('Cache-Control', 'private, no-store')
+    const params = new URL(c.req.url).searchParams
+    const format = params.get('format') ?? 'json'
+    const now = opts.now?.() ?? Date.now()
+    const period = usagePeriod(params.get('month') ?? '', config.timezone, now)
+    if (
+      [...params.keys()].some((key) =>
+        !['month', 'format'].includes(key) || params.getAll(key).length !== 1
+      ) || !['json', 'csv'].includes(format) || !period
+    ) {
+      return c.json({
+        error: 'invalid_request',
+        message: 'Name a month as YYYY-MM, no later than this one, and a format of json or csv.',
+      }, 400)
+    }
+    const ratings = feedback.ratings(config.slug)
+    const asked = insights.questions(config.slug, ratings.map((rating) => rating.learningId))
+    let documents: { created: string[]; readBackTo: string | null } | null = null
+    if (management) {
+      try {
+        documents = await management.addedBetween(
+          config,
+          new Date(period.from).toISOString(),
+          new Date(period.to).toISOString(),
+        )
+      } catch {
+        // The report says the knowledge box could not be read rather than counting nothing.
+      }
+    }
+    const report = buildUsageReport(config.slug, period, {
+      asks: insights.asksBetween(config.slug, period.from, period.to),
+      ratings: { records: ratings, matched: new Set(Object.keys(asked)) },
+      documents,
+    }, now)
+    if (format === 'json') return c.json(report)
+    c.header('Content-Type', 'text/csv; charset=utf-8')
+    c.header(
+      'Content-Disposition',
+      `attachment; filename="usage-${config.slug}-${period.month}.csv"`,
+    )
+    return c.body(usageReportCsv(report))
   })
 
   app.post(declaredRoute('POST', '/api/admin/t/:slug/resources/:id/hidden'), async (c) => {

@@ -433,6 +433,7 @@ describe('independent admin route permission matrix', () => {
     ['GET', 'corpus-health', 'content.write'],
     ['POST', 'purge-failed', 'content.write', { dryRun: false }],
     ['GET', 'insights', 'content.write'],
+    ['GET', 'insights/usage', 'audit.export'],
     ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
     ['DELETE', 'resources/:id', 'content.write'],
     ['GET', 'sources', 'content.write'],
@@ -484,6 +485,7 @@ describe('independent admin route permission matrix', () => {
     'labelsets/:id': 'updateLabelset',
     reingest: 'deleteResource',
     'corpus-health': 'corpusHealth',
+    'insights/usage': 'addedBetween',
     'purge-failed': 'purgeFailedResources',
     'resources/:id/hidden': 'setResourceHidden',
     'DELETE resources/:id': 'deleteResource',
@@ -582,6 +584,7 @@ describe('independent admin route permission matrix', () => {
           counters: () => ({ resources: 1 }),
           resourceCount: () => 1,
           recentResources: () => [resourceOne],
+          addedBetween: () => ({ created: ['2026-09-11T23:00:00.000Z'], readBackTo: null }),
           createText: () => ({ id: 'created' }),
           createLink: () => ({ id: 'created' }),
           uploadFile: () => ({ id: 'created' }),
@@ -751,7 +754,9 @@ describe('independent admin route permission matrix', () => {
                   : suffix.includes('labelsets')
                   ? 'topic'
                   : 'res-1',
-              ) + (suffix === 'crawl' ? '?url=https://example.test/news' : '')
+              ) +
+            (suffix === 'crawl' ? '?url=https://example.test/news' : '') +
+            (suffix === 'insights/usage' ? '?month=2026-09' : '')
           const session = fixture.sessionFor(
             role === 'wrong-portal' ? 'portal-admin' : role as Role,
             role === 'wrong-portal' ? 'b' : 'a',
@@ -804,6 +809,13 @@ describe('independent admin route permission matrix', () => {
                 expect(JSON.parse(result)).toEqual({
                   ...fixture.stores.insights.summary('a'),
                   feedback: { helpful: 0, unhelpful: 0, flagged: [] },
+                })
+              } else if (suffix === 'insights/usage') {
+                expect(JSON.parse(result)).toMatchObject({
+                  slug: 'a',
+                  month: '2026-09',
+                  through: '2026-09-12',
+                  totals: { questions: 0, documentsAdded: 1 },
                 })
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
               else if (suffix === 'lifecycle') {

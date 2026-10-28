@@ -2,6 +2,7 @@ import { COMMON_JA } from './messages/common-ja.ts'
 import { MANAGE_JA } from './messages/manage-ja.ts'
 import { RESEARCH_JA } from './messages/research-ja.ts'
 import { PLATFORM_JA } from './messages/platform-ja.ts'
+import { USAGE_JA } from './messages/usage-ja.ts'
 
 export type MessageValues = Readonly<Record<string, string | number>>
 export type PortalLanguage = 'ja' | 'en'
@@ -33,6 +34,7 @@ export const JAPANESE_MESSAGES = combineJapaneseCatalogs(
   MANAGE_JA,
   RESEARCH_JA,
   PLATFORM_JA,
+  USAGE_JA,
 )
 
 /** Completeness audits must inspect missing keys instead of treating English fallback as translated. */

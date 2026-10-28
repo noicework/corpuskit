@@ -485,6 +485,9 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
   entry('http', 'GET', '/api/admin/t/:slug/corpus-health', 'content.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/purge-failed', 'content.write', 'portal'),
   entry('http', 'GET', '/api/admin/t/:slug/insights', 'content.write', 'portal'),
+  // The monthly usage report is an accountability record of the portal's use, exported like the
+  // audit log: portal administrators only.
+  entry('http', 'GET', '/api/admin/t/:slug/insights/usage', 'audit.export', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/resources/:id/hidden', 'content.write', 'portal', {
     subActions: [HIDDEN_RESOURCES_ENABLE],
   }),
