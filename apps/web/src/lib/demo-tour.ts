@@ -2,6 +2,7 @@ import {
   type DemoTourMode,
   type DemoTourScene,
   type DemoTourSceneId,
+  participatesInFederation,
   type TenantConfig,
 } from '@research-portal/core'
 import type { MessageValues } from './locale-messages.ts'
@@ -28,6 +29,8 @@ export type TourUi = (english: string, values?: MessageValues) => string
 /** What the script needs to know about the portal it introduces. */
 export type TourConfig = Pick<TenantConfig, 'copy' | 'entityTypes'> & {
   branding: Pick<TenantConfig['branding'], 'productName' | 'organisation'>
+  /** As readers are served it: whether the portal takes part, and its peers' names only. */
+  federation?: { participates?: boolean; peers?: readonly unknown[] }
 }
 
 type SceneTarget = { kind: 'ask'; question: string } | {
@@ -43,12 +46,12 @@ export function askHref(question: string): string {
 }
 
 /**
- * Whether this portal takes part in federated ask, so the welcome may say its collection is
- * joined by its research partners'. The setting is being built alongside the agent page; until
- * it reaches `main` no portal does, so the clause stays out everywhere.
+ * Whether this portal's answers draw on research partners too, so the welcome may say so: it
+ * takes part in federated ask (the default, unless its owner has opted out) and has at least
+ * one peer collection to draw on.
  */
-export function federatedAsk(_config: TourConfig): boolean {
-  return false
+export function federatedAsk(config: TourConfig): boolean {
+  return participatesInFederation(config) && (config.federation?.peers?.length ?? 0) > 0
 }
 
 /** "Topic", "Research Method" and "EEG" read mid-sentence as "topic", "research method", "EEG". */

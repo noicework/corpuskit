@@ -1,6 +1,7 @@
 import { expect } from '@std/expect'
 import {
   DEFAULT_SCENE_IDS,
+  federatedAsk,
   graphKinds,
   needsFirstPdf,
   resolveScenes,
@@ -109,4 +110,15 @@ Deno.test('only auto opens the tour by itself, once, and a link can force or for
   expect(startsOnArrival('auto', '', true)).toBe(false)
   expect(startsOnArrival('auto', '?tour=0', false)).toBe(false)
   expect(startsOnArrival('auto', '?q=x&tour=1', true)).toBe(true)
+})
+
+Deno.test('the welcome names research partners only where the portal takes part and has peers', () => {
+  const peer = { id: 'peer-1', label: 'Partner collection', kind: 'arag-kb' }
+  expect(federatedAsk(config)).toBe(false)
+  expect(federatedAsk({ ...config, federation: { peers: [] } })).toBe(false)
+  expect(federatedAsk({ ...config, federation: { peers: [peer] } })).toBe(true)
+  expect(federatedAsk({ ...config, federation: { participates: true, peers: [peer] } })).toBe(true)
+  expect(federatedAsk({ ...config, federation: { participates: false, peers: [peer] } })).toBe(
+    false,
+  )
 })

@@ -1294,7 +1294,9 @@ hero's suggestions take.
 
 Without further configuration the tour shows `federated`, `cited-page`, `graph` and `mcp`, in
 that order, in the portal's language, and every illustration is labelled as an example. The
-welcome names the portal and its organisation from the branding. `copy.demoTour`, set through the configuration import, replaces the
+welcome names the portal and its organisation from the branding, "and its research partners"
+where the portal takes part in federation and has at least one peer (see
+[Federation peers](AGENT-ASK.md#federation-peers)). `copy.demoTour`, set through the configuration import, replaces the
 heading and intro and says which scenes show, in what order and in what words:
 
 ```json
