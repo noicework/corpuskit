@@ -615,14 +615,22 @@ export class KnowledgeMapEngine {
   private view: View
   private distGoal: number
   private tween: ViewTween | null = null
-  private idleSpin: boolean
+  private idleSpin = false
   private reduced: boolean
   private reducedQuery: MediaQueryList | null = null
   private onContextLost: ((event: Event) => void) | null = null
 
   private onReducedChange = (event: MediaQueryListEvent) => {
     this.reduced = event.matches
-    if (event.matches) this.idleSpin = false
+    if (event.matches) {
+      this.setMotionPlaying(false)
+      this.tween = null
+      this.distGoal = this.view.dist
+      if (this.sim) this.sim.cool()
+      for (const visual of this.nodeVisuals.values()) visual.bornAt = 0
+      for (const hub of this.hubs.values()) hub.bornAt = 0
+      this.renderDirty = true
+    }
   }
   private viewOwnedFlag = false
   private focusOwnedFlag = false
@@ -665,6 +673,8 @@ export class KnowledgeMapEngine {
     onSelect: (id: string | null) => void,
     onContextLost?: () => void,
     ui: ResearchUi = englishResearchUi,
+    private onMotionChange: (playing: boolean) => void = () => {},
+    initiallyPlaying = true,
   ) {
     this.ui = ui
     this.canvas = canvas
@@ -685,7 +695,8 @@ export class KnowledgeMapEngine {
       ? globalThis.matchMedia('(prefers-reduced-motion: reduce)')
       : null
     this.reduced = this.reducedQuery?.matches ?? false
-    this.idleSpin = !this.reduced
+    this.idleSpin = initiallyPlaying && !this.reduced
+    this.onMotionChange(this.idleSpin)
     this.reducedQuery?.addEventListener('change', this.onReducedChange)
 
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
@@ -956,7 +967,23 @@ export class KnowledgeMapEngine {
     // background-tab rAF throttling. Live physics then only animates drags.
     this.sim.tick(300)
 
-    this.clearScene()
+    // Geometry can rebuild after a locale changes the surrounding chrome's
+    // height, or when an expansion refreshes the same nodes. Retain the DOM
+    // labels by identity, without detaching or reordering surviving elements.
+    const nodeLabels = new Map<string, HTMLDivElement>()
+    for (const node of data.nodes) {
+      const label = this.nodeVisuals.get(node.id)?.label
+      if (label) nodeLabels.set(node.id, label)
+    }
+    const captions = new Map<string, HTMLDivElement>()
+    if (data.layout === 'grouped' && ordered.size > 1) {
+      for (const territory of this.territories) {
+        if (ordered.has(territory.group) && data.groupStyles.has(territory.group)) {
+          captions.set(territory.group, territory.caption)
+        }
+      }
+    }
+    this.clearScene(new Set([...nodeLabels.values(), ...captions.values()]))
 
     data.nodes.forEach((node, index) => {
       const sim = this.sim?.byId(node.id)
@@ -988,11 +1015,11 @@ export class KnowledgeMapEngine {
       shell.scale.setScalar(hollow ? 1.22 : 1.14)
       this.nodeGroup.add(mesh)
 
-      const label = document.createElement('div')
+      const label = nodeLabels.get(node.id) ?? document.createElement('div')
       label.className = 'rp-map3d-label'
       label.textContent = shortLabel(node.label)
       label.style.display = 'none'
-      this.labelLayer.appendChild(label)
+      if (!label.parentNode) this.labelLayer.appendChild(label)
 
       const visual: NodeVisual = {
         node,
@@ -1091,14 +1118,14 @@ export class KnowledgeMapEngine {
         mesh.raycast = () => undefined
         mesh.renderOrder = -2
         this.territoryGroup.add(mesh)
-        const caption = document.createElement('div')
+        const caption = captions.get(group) ?? document.createElement('div')
         caption.className = 'rp-map3d-territory'
-        caption.style.color = `var(--rp-cat-${style.slot + 1}-ink)`
+        caption.style.color = 'var(--rp-ink)'
         const captionShort = graphGroupLabel(group, this.ui)
         const captionFull = `${captionShort} · ${count}`
         caption.textContent = captionFull
         caption.style.display = 'none'
-        this.labelLayer.appendChild(caption)
+        if (!caption.parentNode) this.labelLayer.appendChild(caption)
         const territory: TerritoryVisual = {
           group,
           style,
@@ -1369,11 +1396,11 @@ export class KnowledgeMapEngine {
     }
   }
 
-  private clearScene() {
+  private clearScene(retainedLabels?: ReadonlySet<HTMLElement>) {
     for (const visual of this.nodeVisuals.values()) {
       visual.material.dispose()
       visual.shellMaterial.dispose()
-      visual.label.remove()
+      if (!retainedLabels?.has(visual.label)) visual.label.remove()
     }
     for (const visual of [...this.edgeVisuals, ...this.flowVisuals]) {
       visual.material.dispose()
@@ -1382,7 +1409,7 @@ export class KnowledgeMapEngine {
     }
     for (const territory of this.territories) {
       territory.material.dispose()
-      territory.caption.remove()
+      if (!retainedLabels?.has(territory.caption)) territory.caption.remove()
       const hub = territory.hub
       if (hub) {
         hub.material.dispose()
@@ -1576,7 +1603,7 @@ export class KnowledgeMapEngine {
       this.popupName.textContent = copy.name
       dot.style.background = `var(--rp-cat-${hub.anchor.slot + 1})`
       category.textContent = copy.category
-      category.style.color = `var(--rp-cat-${hub.anchor.slot + 1}-ink)`
+      category.style.color = 'var(--rp-ink)'
       this.popupCounts.textContent = copy.counts
       this.popupHint.textContent = copy.hint
     } else if (visual) {
@@ -1595,7 +1622,7 @@ export class KnowledgeMapEngine {
         dot.style.background = `var(--rp-cat-${visual.slot + 1})`
       }
       category.textContent = copy.category
-      category.style.color = `var(--rp-cat-${visual.slot + 1}-ink)`
+      category.style.color = 'var(--rp-ink)'
       this.popupCounts.textContent = copy.counts
       this.popupHint.textContent = copy.hint
     }
@@ -1682,7 +1709,7 @@ export class KnowledgeMapEngine {
     this.tween = null
     this.viewOwnedFlag = true
     this.focusOwnedFlag = false
-    this.idleSpin = false
+    this.setMotionPlaying(false)
   }
 
   /**
@@ -2009,7 +2036,7 @@ export class KnowledgeMapEngine {
     )
     this.viewOwnedFlag = true
     this.focusOwnedFlag = true
-    this.idleSpin = false
+    this.setMotionPlaying(false)
     return dist
   }
 
@@ -2232,7 +2259,7 @@ export class KnowledgeMapEngine {
       // A drag plane fixed at pointerdown under a still-drifting camera makes
       // the held node crawl away from the pointer - the drift stops here,
       // without claiming the whole view the way a pan or zoom does.
-      this.idleSpin = false
+      this.setMotionPlaying(false)
       this.sim.reheat()
       return
     }
@@ -2284,6 +2311,12 @@ export class KnowledgeMapEngine {
       const hitPoint = new THREE.Vector3()
       if (this.raycaster.ray.intersectPlane(drag.plane, hitPoint)) {
         this.sim.pin(drag.id, hitPoint.x, hitPoint.y, hitPoint.z)
+        if (this.reduced) {
+          // Direct manipulation updates once per input, without spring motion afterwards.
+          this.sim.tick(1)
+          this.updateTerritories()
+          this.renderDirty = true
+        }
       }
       return
     }
@@ -2442,42 +2475,69 @@ export class KnowledgeMapEngine {
     }
   }
 
-  /** Keyboard access: arrows orbit, plus and minus zoom, Enter selects. */
+  /** Explicit playback of the automatic camera drift, always off under reduced motion. */
+  setMotionPlaying(playing: boolean) {
+    const next = playing && !this.reduced
+    this.idleSpin = next
+    if (next) {
+      this.idleAnchor = this.view.theta
+      this.idlePhase = 0
+    }
+    this.onMotionChange(next)
+  }
+
+  rotate(x: number, y: number) {
+    this.claimView()
+    this.view.theta += x
+    this.view.phi = Math.max(PHI_MIN, Math.min(PHI_MAX, this.view.phi + y))
+    this.renderDirty = true
+  }
+
+  pan(x: number, y: number) {
+    this.claimView()
+    this.panBy(x, y)
+    this.renderDirty = true
+  }
+
+  /** These keys belong only to the focused canvas, never to fields or the page. */
   private onKeyDown = (event: KeyboardEvent) => {
-    const step = 0.15
-    switch (event.key) {
-      case 'Enter':
-      case ' ': {
-        this.centremost()
-        if (this.pickedHub) this.diveInto(this.pickedHub.group)
-        else if (this.pickedNode) this.onSelect(this.pickedNode.node.id)
-        break
+    if (
+      event.target !== this.canvas || event.ctrlKey || event.altKey || event.metaKey ||
+      event.isComposing
+    ) return
+    const directions: Record<string, [number, number]> = {
+      ArrowLeft: [1, 0],
+      ArrowRight: [-1, 0],
+      ArrowUp: [0, -1],
+      ArrowDown: [0, 1],
+    }
+    const direction = directions[event.key]
+    if (direction) {
+      const [x, y] = direction
+      if (event.shiftKey) this.pan(x * 40, y * 40)
+      else this.rotate(x * 0.15, y * 0.15)
+    } else {
+      switch (event.key) {
+        case 'Enter':
+        case ' ': {
+          this.centremost()
+          if (this.pickedHub) this.diveInto(this.pickedHub.group)
+          else if (this.pickedNode) this.onSelect(this.pickedNode.node.id)
+          break
+        }
+        case '+':
+        case '=':
+          this.zoomBy(1.3)
+          break
+        case '-':
+          this.zoomBy(1 / 1.3)
+          break
+        case 'Home':
+          this.fit(true)
+          break
+        default:
+          return
       }
-      case 'ArrowLeft':
-        this.claimView()
-        this.view.theta += step
-        break
-      case 'ArrowRight':
-        this.claimView()
-        this.view.theta -= step
-        break
-      case 'ArrowUp':
-        this.claimView()
-        this.view.phi = Math.max(PHI_MIN, this.view.phi - step)
-        break
-      case 'ArrowDown':
-        this.claimView()
-        this.view.phi = Math.min(PHI_MAX, this.view.phi + step)
-        break
-      case '+':
-      case '=':
-        this.zoomBy(1.3)
-        break
-      case '-':
-        this.zoomBy(1 / 1.3)
-        break
-      default:
-        return
     }
     event.preventDefault()
     this.renderDirty = true
@@ -2549,7 +2609,8 @@ export class KnowledgeMapEngine {
     this.lastFrame = now
     this.frameCount += 1
 
-    const simWarm = this.sim !== null && (this.sim.alpha() > 0.02 || this.drag !== null)
+    const simWarm = !this.reduced && this.sim !== null &&
+      (this.sim.alpha() > 0.02 || this.drag !== null)
     if (simWarm) {
       this.sim?.tick(1)
       this.renderDirty = true
@@ -2940,7 +3001,7 @@ export class KnowledgeMapEngine {
     this.setLod(hub, 0, performance.now())
     this.viewOwnedFlag = true
     this.focusOwnedFlag = true
-    this.idleSpin = false
+    this.setMotionPlaying(false)
     this.setHoveredHub(null)
   }
 
@@ -3147,13 +3208,13 @@ export class KnowledgeMapEngine {
     const isEmphasised = (id: string) =>
       id === focus || id === this.hoveredId || id === pathFrom ||
       (this.pathNodeIds?.has(id) ?? false)
-    const show = (visual: NodeVisual, sx: number, y: number, opacity: number) => {
+    const show = (visual: NodeVisual, sx: number, y: number) => {
       const label = visual.label
       label.style.display = 'block'
       label.style.transform = `translate(-50%, -100%) translate(${sx.toFixed(1)}px, ${
         y.toFixed(1)
       }px)`
-      label.style.opacity = opacity.toFixed(2)
+      label.style.opacity = '1'
     }
 
     // 1. The emphasised few - the selection and its path are always named,
@@ -3183,7 +3244,7 @@ export class KnowledgeMapEngine {
         label.style.display = 'none'
         continue
       }
-      show(visual, this.capX, this.capBaseline - 2, 1)
+      show(visual, this.capX, this.capBaseline - 2)
       label.setAttribute('data-emphasised', '')
       if (id === selectedId) label.setAttribute('data-selected', '')
       else label.removeAttribute('data-selected')
@@ -3273,7 +3334,7 @@ export class KnowledgeMapEngine {
         label.style.display = 'none'
         continue
       }
-      const { sx, sy, camDist, screenR } = disc
+      const { sx, sy, screenR } = disc
       // The complete label box avoids every visible mark, including a
       // smaller or farther one. Checking just the anchor against nearer
       // spheres lets the ends of long names cover neighbouring centres.
@@ -3283,20 +3344,9 @@ export class KnowledgeMapEngine {
         label.style.display = 'none'
         continue
       }
-      let fadeIn = 1
-      if (!inNeighbourhood) {
-        fadeIn = Math.max(0, Math.min(1, budget - kept))
-        kept += 1
-      }
-      // Distance fade matches the scene fog, so a label never floats at full
-      // strength over a mark that has already melted into the paper.
-      const fogT = Math.max(
-        0,
-        Math.min(1, (camDist - this.fog.near) / Math.max(1, this.fog.far - this.fog.near)),
-      )
-      const opacity = Math.max(0.35, (1 - fogT * 0.5) * Math.min(1, visual.opacity.current + 0.1)) *
-        fadeIn * (1 - lod / 0.35)
-      show(visual, this.capX, this.capBaseline - 2, opacity)
+      if (!inNeighbourhood) kept += 1
+      // Labels stay opaque even when their marks recede into the scene fog.
+      show(visual, this.capX, this.capBaseline - 2)
     }
     this.positionPopup()
     this.projectEdgeLabels()
