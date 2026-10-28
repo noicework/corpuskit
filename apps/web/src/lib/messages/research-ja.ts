@@ -1122,6 +1122,9 @@ export const RESEARCH_JA: Readonly<Record<string, string>> = {
   '1 passage': '1件の抜粋',
   'No answer within the time limit': '制限時間内に回答がありませんでした',
   'Could not be searched': '検索できませんでした',
+  'This partner could not be reached': 'このパートナーに接続できませんでした',
+  'federated partner': '連携パートナー',
+  'partner over MCP': 'MCP経由のパートナー',
   'Collections not searched': '検索できなかったコレクション',
   'Collections': 'コレクション',
   'Save this answer trail as a Word document with references grouped by collection':

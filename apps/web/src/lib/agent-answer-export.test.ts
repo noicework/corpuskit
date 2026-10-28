@@ -179,6 +179,81 @@ const COMPOSED_EVENTS: AgentAskEvent[] = [
   { type: 'done', elapsedMs: 18_030 },
 ]
 
+/** A composed answer over the host and two federated partners, one of which refused its key. */
+const PEER_EVENTS: AgentAskEvent[] = [
+  {
+    type: 'agent-start',
+    mode: 'orchestrated',
+    sources: [
+      { id: 'marine', label: 'Southern Waters Research Portal', portal: 'marine', kind: 'hosted' },
+      { id: 'peer:partner-a', label: 'Partner A research', kind: 'peer', transport: 'kb' },
+      { id: 'peer:partner-b', label: 'Partner B research', kind: 'peer', transport: 'mcp' },
+    ],
+  },
+  {
+    type: 'agent-sources',
+    stepId: 'source/marine',
+    source: {
+      id: 'marine',
+      label: 'Southern Waters Research Portal',
+      portal: 'marine',
+      kind: 'hosted',
+    },
+    chunks: [
+      {
+        id: 'marine/res-fish-0412',
+        title: 'Summer mortality in farmed oysters: a ten-year review',
+        text: 'Mortality events clustered in the warmest fortnight.',
+        resourceId: 'res-fish-0412',
+      },
+    ],
+  },
+  {
+    type: 'agent-sources',
+    stepId: 'source/peer:partner-a',
+    source: { id: 'peer:partner-a', label: 'Partner A research', kind: 'peer', transport: 'kb' },
+    chunks: [
+      {
+        id: 'peer:partner-a/doc-7/0',
+        title: 'Heat stress in hatchery stock',
+        text: '  Larval survival fell  sharply\nabove 26 degrees in every trial year.  ',
+      },
+    ],
+  },
+  {
+    type: 'sources-failed',
+    sources: [
+      {
+        id: 'peer:partner-b',
+        label: 'Partner B research',
+        kind: 'peer',
+        transport: 'mcp',
+        reason: 'unauthorised',
+      },
+    ],
+  },
+  {
+    type: 'delta',
+    text:
+      'Oyster mortality follows the warmest fortnight.[1] Hatchery survival falls above 26 degrees.[2]',
+  },
+  {
+    type: 'citation',
+    marker: '1',
+    sourceId: 'marine',
+    chunkId: 'marine/res-fish-0412',
+    title: 'Summer mortality in farmed oysters: a ten-year review',
+  },
+  {
+    type: 'citation',
+    marker: '2',
+    sourceId: 'peer:partner-a',
+    chunkId: 'peer:partner-a/doc-7/0',
+    title: 'Heat stress in hatchery stock',
+  },
+  { type: 'done', elapsedMs: 9_000 },
+]
+
 const QUESTION = 'How is a warmer climate changing pest and disease pressure?'
 
 Deno.test('the events fold into one record: sources, passages, failures, text and citations', () => {
@@ -294,6 +369,9 @@ Deno.test('references group by collection in announcement order, linking to pass
     [1, 'https://example.org/fish/res-fish-0412.pdf', false],
     [2, undefined, false],
   ])
+  // A passage with nothing to open is quoted in the entry; a linked one is not.
+  expect(agent[0]!.entries[0]!.passage).toBeUndefined()
+  expect(agent[0]!.entries[1]!.passage).toBe('Feeding stopped above 24 degrees.')
   expect(agent[1]!.entries.map((entry) => entry.number)).toEqual([3])
 
   const composed = referenceGroups(collectAgentAnswer(QUESTION, COMPOSED_EVENTS), portalUrl)
@@ -344,10 +422,46 @@ Deno.test('the reference section names failed collections and says why', () => {
   expect(agentHtml).toContain(
     '<a href="https://example.org/fish/res-fish-0412.pdf">https://example.org/fish/res-fish-0412.pdf</a>.',
   )
-  expect(agentHtml).toContain('<p>[2] <em>Heat stress thresholds in cultured abalone</em>.</p>')
+  expect(agentHtml).toContain(
+    '<p>[2] <em>Heat stress thresholds in cultured abalone</em>.</p><blockquote>Feeding stopped above 24 degrees.</blockquote>',
+  )
   expect(agentHtml).not.toContain('Collections not searched')
 
   expect(agentReferencesHtml(emptyAgentAnswer(QUESTION), portalUrl)).toBe('')
+})
+
+Deno.test('a federated partner is named by its transport, its passage quoted with no link, and a refused key explained', () => {
+  const record = collectAgentAnswer(QUESTION, PEER_EVENTS)
+  expect(collectionsLine(record)).toBe(
+    'Southern Waters Research Portal (1 passage) \u00b7 Partner A research (federated partner, 1 passage) \u00b7 Partner B research (partner over MCP, This partner could not be reached)',
+  )
+  const html = agentReferencesHtml(record, portalUrl)
+  expect(html).toContain(
+    '<h4>Southern Waters Research Portal</h4><p>[1] <em>Summer mortality in farmed oysters: a ten-year review</em>. <a href="https://portal.test/t/marine/library/res-fish-0412">Open in the portal</a>.</p>',
+  )
+  expect(html).toContain(
+    '<h4>Partner A research (federated partner)</h4><p>[2] <em>Heat stress in hatchery stock</em>.</p><blockquote>Larval survival fell sharply above 26 degrees in every trial year.</blockquote>',
+  )
+  expect(html).toContain(
+    '<h4>Collections not searched</h4><ul><li>Partner B research (partner over MCP) - This partner could not be reached</li></ul>',
+  )
+  // The partner entry has no link at all.
+  const partner = html.slice(html.indexOf('<h4>Partner A'), html.indexOf('<h4>Collections'))
+  expect(partner).not.toContain('<a ')
+  // A partner that allows origin links gets the link and no quoted passage.
+  const linked = collectAgentAnswer(
+    QUESTION,
+    PEER_EVENTS.map((event) =>
+      event.type === 'citation' && event.marker === '2'
+        ? { ...event, url: 'https://partner-a.example/doc-7' }
+        : event
+    ),
+  )
+  const linkedHtml = agentReferencesHtml(linked, portalUrl)
+  expect(linkedHtml).toContain(
+    '<a href="https://partner-a.example/doc-7">https://partner-a.example/doc-7</a>.</p>',
+  )
+  expect(linkedHtml).not.toContain('<blockquote>')
 })
 
 Deno.test('the writer and collections lines say who answered and what each collection gave', () => {

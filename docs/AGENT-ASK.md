@@ -263,7 +263,10 @@ turn with text exports (`hasExportableAnswer`). Mount the control with the turns
 It renders nothing for a reader without `portal.export`, is disabled while an answer streams, and
 confirms the saved file with the same status line the Ask export uses. A reference links to the
 passage's own `url` when the stream gave one, else to `/t/<portal>/library/<resourceId>` when the
-collection is a portal of this deployment; a passage with neither keeps its title. Everything the
+collection is a portal of this deployment; a passage with neither (a federated partner's, with
+origin links off) is quoted under its title instead. A peer collection is headed "federated
+partner", or "partner over MCP" when its transport is `mcp`, and one that refused its key is
+listed as "this partner could not be reached". Everything the
 stream authored (labels, titles, answer text) is escaped; the brief's own copy goes through the
 portal locale.
 

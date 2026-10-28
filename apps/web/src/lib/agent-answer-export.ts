@@ -23,7 +23,8 @@ import { wordDocumentHtml } from './word-document.ts'
  * order of first appearance, then, under "References", one group per
  * collection in the order the stream announced them, each entry carrying its
  * number, title and a link (the passage's own address, or the portal resource
- * when the collection is a portal of this deployment), and last the
+ * when the collection is a portal of this deployment; a federated partner's
+ * passage with no link is quoted instead), and last the
  * collections that could not be searched (`sources-failed`), so a reader of
  * the saved file knows what the answer did not draw on.
  */
@@ -36,7 +37,7 @@ export interface AgentAnswerCitation {
   url?: string
 }
 
-export type AgentFailedSource = AgentSource & { reason: 'timeout' | 'error' }
+export type AgentFailedSource = AgentSource & { reason: 'timeout' | 'unauthorised' | 'error' }
 
 /** One agent ask turn: the question and everything the stream said about its answer. */
 export interface AgentAnswerRecord {
@@ -199,6 +200,8 @@ export interface ReferenceEntry extends NumberedCitation {
   href?: string
   /** The link is into a portal of this deployment rather than an outside address. */
   portalLink: boolean
+  /** The cited passage itself, carried when there is nothing to link to (a federated partner's). */
+  passage?: string
 }
 
 export interface ReferenceGroup {
@@ -218,7 +221,10 @@ function entryFor(
   if (source.portal && chunk?.resourceId) {
     return { ...citation, href: resourceUrl(source.portal, chunk.resourceId), portalLink: true }
   }
-  return { ...citation, portalLink: false }
+  // Nothing to open (a partner's passage with origin links off): the passage
+  // itself is what a reader of the saved file can check.
+  const passage = chunk?.text.replace(/\s+/g, ' ').trim()
+  return { ...citation, portalLink: false, ...(passage ? { passage } : {}) }
 }
 
 /**
@@ -253,7 +259,26 @@ export function referenceGroups(
 // ---------------------------------------------------------------------------
 
 function failureText(reason: AgentFailedSource['reason'], ui: ResearchUi): string {
-  return reason === 'timeout' ? ui('No answer within the time limit') : ui('Could not be searched')
+  switch (reason) {
+    case 'timeout':
+      return ui('No answer within the time limit')
+    case 'unauthorised':
+      return ui('This partner could not be reached')
+    default:
+      return ui('Could not be searched')
+  }
+}
+
+/** What a collection is when it is not this deployment's own: a federated partner, by transport. */
+export function sourceKindLabel(source: AgentSource, ui: ResearchUi = englishResearchUi): string {
+  if (source.kind !== 'peer') return ''
+  return source.transport === 'mcp' ? ui('partner over MCP') : ui('federated partner')
+}
+
+/** "Partner A research (federated partner)", or the label alone for a hosted collection. */
+function sourceHeading(source: AgentSource, ui: ResearchUi): string {
+  const kind = sourceKindLabel(source, ui)
+  return kind ? `${source.label} (${kind})` : source.label
 }
 
 /** "Composed by {product} across 3 collections" or "Answered by a retrieval agent from one collection". */
@@ -282,10 +307,14 @@ export function collectionsLine(
 ): string {
   return record.sources.map((source) => {
     const failure = record.failed.find((failed) => failed.id === source.id)
-    if (failure) return `${source.label} (${failureText(failure.reason, ui)})`
     const count = record.passages[source.id]?.length ?? 0
-    const passages = count === 1 ? ui('1 passage') : ui('{count} passages', { count })
-    return `${source.label} (${passages})`
+    const outcome = failure
+      ? failureText(failure.reason, ui)
+      : count === 1
+      ? ui('1 passage')
+      : ui('{count} passages', { count })
+    const kind = sourceKindLabel(source, ui)
+    return `${source.label} (${kind ? `${kind}, ` : ''}${outcome})`
   }).join(' · ')
 }
 
@@ -295,7 +324,8 @@ function referenceEntryHtml(entry: ReferenceEntry, ui: ResearchUi): string {
     const text = entry.portalLink ? ui('Open in the portal') : entry.href
     parts.push(`<a href="${escapeHtml(entry.href)}">${escapeHtml(text)}</a>.`)
   }
-  return `<p>${parts.join(' ')}</p>`
+  const passage = entry.passage ? `<blockquote>${escapeHtml(entry.passage)}</blockquote>` : ''
+  return `<p>${parts.join(' ')}</p>${passage}`
 }
 
 /**
@@ -311,14 +341,16 @@ export function agentReferencesHtml(
   const groups = referenceGroups(record, resourceUrl)
   if (groups.length === 0 && record.failed.length === 0) return ''
   const groupsHtml = groups.map((group) =>
-    `<h4>${escapeHtml(group.source.label)}</h4>${
+    `<h4>${escapeHtml(sourceHeading(group.source, ui))}</h4>${
       group.entries.map((entry) => referenceEntryHtml(entry, ui)).join('')
     }`
   ).join('')
   const failedHtml = record.failed.length > 0
     ? `<h4>${escapeHtml(ui('Collections not searched'))}</h4><ul>${
       record.failed.map((source) =>
-        `<li>${escapeHtml(source.label)} - ${escapeHtml(failureText(source.reason, ui))}</li>`
+        `<li>${escapeHtml(sourceHeading(source, ui))} - ${
+          escapeHtml(failureText(source.reason, ui))
+        }</li>`
       ).join('')
     }</ul>`
     : ''
