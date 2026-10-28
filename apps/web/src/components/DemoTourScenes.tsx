@@ -307,58 +307,104 @@ function CitedPageScene({ slug }: { slug: string }) {
   )
 }
 
-/** A few nodes and the links between them, drawn in the portal's own marks. */
+/**
+ * The knowledge map's own grammar, in miniature: a category territory per entity type in that
+ * category's hue, nodes sized by how connected they are, edges in the source's colour, captions
+ * on the best-connected node of each territory, and the legend the map's rail shows.
+ */
 function GraphScene({ kinds }: { kinds: string[] }) {
-  const labels = (kinds.length > 0 ? kinds : ['Topic', 'Organisation', 'Region', 'Author'])
-    .slice(0, 4)
-  const nodes = [
-    { x: 150, y: 70, r: 26 },
-    { x: 60, y: 160, r: 20 },
-    { x: 250, y: 150, r: 22 },
-    { x: 160, y: 230, r: 18 },
+  const { ui } = usePortalLocale()
+  const labels = (kinds.length > 0 ? kinds : ['Topic', 'Organisation', 'Document']).slice(0, 3)
+  // Three territories; each node is [x, y, r], the first of each territory the best connected.
+  const all: [number, number, number][][] = [
+    [[82, 84, 17], [40, 128, 10], [118, 134, 12], [56, 50, 8], [128, 44, 9]],
+    [[262, 70, 15], [304, 118, 11], [226, 122, 9], [296, 36, 8]],
+    [[188, 206, 13], [136, 226, 9], [236, 232, 10], [166, 174, 7]],
   ]
-  const edges: [number, number][] = [[0, 1], [0, 2], [0, 3], [1, 3], [2, 3]]
+  const territories = all.slice(0, labels.length)
+  const within: [number, number, number, number][] = []
+  territories.forEach((nodes, t) => {
+    for (let n = 1; n < nodes.length; n++) within.push([t, 0, t, n])
+  })
+  const links: [number, number, number, number][] = [[0, 0, 1, 0], [0, 2, 2, 0], [1, 2, 2, 0]]
+  const between = links.filter(([a, , b]) => a < territories.length && b < territories.length)
+  const colour = (t: number) => `var(--rp-cat-${t + 1})`
+  const ink = (t: number) => `var(--rp-cat-${t + 1}-ink)`
+  const at = (t: number, n: number) => territories[t]![n]!
   return (
     <div className='rp-card p-4'>
+      <ul className='flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-ink-2' aria-hidden='true'>
+        {labels.map((label, t) => (
+          <li key={label} className='flex items-center gap-1.5'>
+            <span
+              className='inline-block h-2.5 w-2.5 rounded-full'
+              style={{ background: colour(t) }}
+            />
+            {label}
+          </li>
+        ))}
+      </ul>
       <svg
-        viewBox='0 0 320 280'
-        className='mx-auto block h-auto w-full max-w-[22rem]'
+        viewBox='0 0 340 260'
+        className='mx-auto mt-2 block h-auto w-full max-w-[24rem]'
         aria-hidden='true'
       >
-        {edges.map(([a, b], index) => (
-          <g key={index} className='rp-tour-reveal' style={{ animationDelay: `${index * 90}ms` }}>
-            <line
-              x1={nodes[a]!.x}
-              y1={nodes[a]!.y}
-              x2={nodes[b]!.x}
-              y2={nodes[b]!.y}
-              stroke='var(--rp-line-2)'
-              strokeWidth={2}
-            />
-          </g>
-        ))}
-        {nodes.map((node, index) => (
-          <g key={index} className='rp-tour-reveal' style={{ animationDelay: `${index * 120}ms` }}>
-            <circle
-              cx={node.x}
-              cy={node.y}
-              r={node.r}
-              fill='var(--rp-wash)'
-              stroke={index === 0 ? 'var(--rp-accent-line)' : 'var(--rp-brand-fg)'}
-              strokeWidth={index === 0 ? 3 : 2}
-            />
-            <text
-              x={node.x}
-              y={node.y + node.r + 16}
-              textAnchor='middle'
-              fontSize='13'
-              fill='var(--rp-ink-2)'
+        {[...within, ...between].map(([ta, na, tb, nb], index) => {
+          const [x1, y1] = at(ta, na)
+          const [x2, y2] = at(tb, nb)
+          const cross = ta !== tb
+          return (
+            <g key={index} className='rp-tour-reveal' style={{ animationDelay: `${index * 40}ms` }}>
+              <line
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={colour(ta)}
+                strokeWidth={cross ? 1.4 : 2}
+                strokeOpacity={cross ? 0.3 : 0.42}
+                strokeLinecap='round'
+              />
+            </g>
+          )
+        })}
+        {territories.map((nodes, t) =>
+          nodes.map(([x, y, r], n) => (
+            <g
+              key={`${t}-${n}`}
+              className='rp-tour-reveal'
+              style={{ animationDelay: `${200 + t * 120 + n * 60}ms` }}
             >
-              {labels[index] ?? ''}
-            </text>
-          </g>
-        ))}
+              <circle
+                cx={x}
+                cy={y}
+                r={r}
+                fill={colour(t)}
+                stroke='var(--rp-surface)'
+                strokeWidth={1.5}
+              />
+              {n === 0
+                ? (
+                  <text
+                    x={x}
+                    y={y + r + 13}
+                    textAnchor='middle'
+                    fontSize='11'
+                    fontWeight={600}
+                    fill={ink(t)}
+                    stroke='var(--rp-surface)'
+                    strokeWidth={4}
+                    paintOrder='stroke'
+                  >
+                    {labels[t]}
+                  </text>
+                )
+                : null}
+            </g>
+          ))
+        )}
       </svg>
+      <p className='mt-1 text-xs text-ink-3'>{ui('Larger circles have more connections.')}</p>
     </div>
   )
 }

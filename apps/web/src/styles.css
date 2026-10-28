@@ -2466,37 +2466,42 @@ dialog.rp-card::backdrop {
  * portal's own components. The stage is the app ground so the surfaces on it read as the
  * page they stand for; every mark follows the palette, shape and density dials.
  * ------------------------------------------------------------------------- */
+/* Every slide is the same size, and that size is there before anything on it has animated in:
+ * the dialog takes a fixed height and the stage scrolls inside it if an illustration runs
+ * long, so nothing jumps as a question types itself in or an answer arrives. */
 .rp-tour-dialog {
   width: min(66rem, calc(100% - 2rem));
   max-width: 66rem;
+  height: min(42rem, calc(100dvh - 2rem));
+  display: flex;
+  flex-direction: column;
 }
 
 .rp-tour-body {
   display: grid;
+  flex: 1;
+  min-height: 0;
   gap: 1.5rem;
+  grid-template-rows: auto minmax(16rem, 1fr);
 }
 
 @media (min-width: 1024px) {
   .rp-tour-body {
     grid-template-columns: minmax(0, 21rem) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     gap: 2rem;
   }
 }
 
 .rp-tour-stage {
   min-width: 0;
-  min-height: 16rem;
+  min-height: 0;
   padding: calc(1.25rem * var(--rp-density, 1));
   border: 1px solid var(--rp-line);
   border-radius: var(--rp-radius);
   background: var(--rp-app);
-  overflow: hidden;
-}
-
-@media (min-width: 1024px) {
-  .rp-tour-stage {
-    min-height: 24rem;
-  }
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .rp-tour-reveal {

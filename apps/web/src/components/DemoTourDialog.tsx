@@ -176,9 +176,15 @@ export function DemoTourDialog({
           </h2>
           {step.kind !== 'finish'
             ? (
-              <p id={`${id}-body`} className='mt-3 text-base leading-relaxed text-ink-2'>
-                {step.kind === 'welcome' ? intro : step.scene.body}
-              </p>
+              <div
+                id={`${id}-body`}
+                className='mt-3 space-y-3 text-base leading-relaxed text-ink-2'
+              >
+                {(step.kind === 'welcome' ? intro : step.scene.body).split(/\n\s*\n/).map((
+                  paragraph,
+                  index,
+                ) => <p key={index}>{paragraph.trim()}</p>)}
+              </div>
             )
             : null}
           {step.kind === 'scene'

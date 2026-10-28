@@ -90,7 +90,7 @@ function builtIn(
       return {
         title: ui('Find answers and sources'),
         body: ui(
-          '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material. You can also use conventional search, or browse the collection through the Graph and the Library.',
+          '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material.\n\nYou can also use conventional search, or browse the collection through the Graph and the Library.',
           { portal },
         ),
         target: ask,

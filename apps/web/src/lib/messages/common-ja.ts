@@ -10,8 +10,8 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   'Get started with {portal}': '{portal}を始める',
   'Explore the Graph': 'グラフを見る',
   'Find answers and sources': '回答と出典を見つける',
-  '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material. You can also use conventional search, or browse the collection through the Graph and the Library.':
-    '{portal}は質問に回答し、主張には出典を付けて、該当する資料へ直接リンクします。通常の検索を使うことも、グラフやライブラリからコレクションを見て回ることもできます。',
+  '{portal} answers your questions and provides citations for any claims made, linking you directly to the relevant source material.\n\nYou can also use conventional search, or browse the collection through the Graph and the Library.':
+    '{portal}は質問に回答し、主張には出典を付けて、該当する資料へ直接リンクします。\n\n通常の検索を使うことも、グラフやライブラリからコレクションを見て回ることもできます。',
   'Follow the evidence': '根拠をたどる',
   'When an answer provides a citation, you can jump straight into the source document, view the passage, and ask further questions there.':
     '回答に出典が付いていれば、元の資料にすぐ移動して該当箇所を読み、そこでさらに質問できます。',
@@ -21,6 +21,7 @@ export const COMMON_JA: Readonly<Record<string, string>> = {
   '{most} and {last}': '{most}、{last}',
   'topics, entities and the documents that connect them': 'テーマ、項目、それらを結ぶ資料',
   'Open Graph': 'グラフを開く',
+  'Larger circles have more connections.': '円が大きいほど、つながりが多いことを示します。',
   'Bring your own tools': '自分のツールを使う',
   'You can connect your own AI agent to {portal} through its Model Context Protocol (MCP) connector for powerful, granular queries.':
     'Model Context Protocol（MCP）コネクタを通じて、自分のAIエージェントを{portal}に接続し、きめ細かな問い合わせができます。',
