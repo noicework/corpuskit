@@ -76,3 +76,14 @@ Deno.test('PDF menu keyboard focus wraps available actions and supports the ends
   expect(pdfMenuFocusIndex(0, 0, 'ArrowDown')).toBe(null)
   expect(pdfMenuFocusIndex(0, 5, 'Escape')).toBe(null)
 })
+
+Deno.test('the closed actions menu names no element it does not show, and the page shows its focus', () => {
+  const html = renderToStaticMarkup(
+    <PdfReader fileUrl='/report.pdf' title='Reef survey' initialPage={2} />,
+  )
+  const trigger = /<button[^>]*aria-haspopup="menu"[^>]*>/.exec(html)?.[0] ?? ''
+  expect(trigger).toContain('aria-expanded="false"')
+  expect(trigger).not.toContain('aria-controls')
+  // The focusable page carries the inward ring its scroll pane cannot clip (library.css).
+  expect(html).toMatch(/role="group"[^>]*tabindex="0"[^>]*class="[^"]*rp-library-pdf-stage/i)
+})
