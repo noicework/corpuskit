@@ -83,7 +83,7 @@ describe('agent ask page', () => {
           reasoning: document.querySelectorAll('[data-agent-reasoning] p').length,
           reasoningToggle: document.querySelector('[aria-controls="agent-reasoning"]')
             ?.getAttribute('aria-expanded'),
-          status: text('[role=status]'),
+          status: text('[data-agent-page] [role=status]'),
           failed: document.querySelector('[data-agent-failed-sources]') !== null,
           clock: document.querySelector('[data-agent-clock]')?.textContent?.trim(),
           query: new URLSearchParams(location.search).get('q'),
@@ -145,7 +145,7 @@ describe('agent ask page', () => {
         )
           .map((a) => a.getAttribute('href')),
         unlinkedChips: document.querySelectorAll('[data-agent-citations] span.rp-btn').length,
-        status: Array.from(document.querySelectorAll('[role=status]')).map((el) =>
+        status: Array.from(document.querySelectorAll('[data-agent-page] [role=status]')).map((el) =>
           el.textContent?.trim()
         ),
       }))
