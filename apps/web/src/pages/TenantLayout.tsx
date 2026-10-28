@@ -24,6 +24,7 @@ import {
 import { HelpItemIcon, HelpMenu } from '../components/HelpMenu.tsx'
 import { helpMenuItems } from '../components/help-menu-items.ts'
 import { pageTitle } from '../lib/page-title.ts'
+import { PageSubjectContext } from '../lib/page-subject.ts'
 import { portalNavigation } from '../lib/portal-nav.ts'
 import { KbSwitcher } from '../components/KbSwitcher.tsx'
 import { PortalFooter } from '../components/PortalFooter.tsx'
@@ -355,15 +356,17 @@ export function TenantLayout() {
   }, [config, navMounted])
 
   // Every surface names itself in the tab, so two open portal tabs are told
-  // apart by what they hold rather than by the product name alone (D6-14).
+  // apart by what they hold rather than by the product name alone (D6-14); a
+  // page that shows one thing (a document, a filtered library) names it too.
+  const [pageSubject, setPageSubject] = useState<string | null>(null)
   useEffect(() => {
     if (config) {
-      document.title = pageTitle(location.pathname, config.branding.productName, ui)
+      document.title = pageTitle(location.pathname, config.branding.productName, ui, pageSubject)
     }
     return () => {
       document.title = ui('Research Portal')
     }
-  }, [config, location.pathname, ui])
+  }, [config, location.pathname, ui, pageSubject])
 
   // Load the faces for the tenant's typography choice, apply its text scale,
   // and mirror the theme onto <body> so portaled overlays follow it too (all
@@ -515,7 +518,7 @@ export function TenantLayout() {
                         }}
                         aria-label={navOpen ? ui('Close menu') : ui('Open menu')}
                         aria-expanded={navOpen}
-                        aria-controls='mobile-nav-sheet'
+                        aria-controls={navMounted ? 'mobile-nav-sheet' : undefined}
                         className='rp-navtoggle rp-chrome-acmd-toggle rp-focus'
                       >
                         {ui('Explore ')}
@@ -702,7 +705,7 @@ export function TenantLayout() {
                           icon={MenuBars}
                           size='lg'
                           aria-expanded={navOpen}
-                          aria-controls='mobile-nav-sheet'
+                          aria-controls={navMounted ? 'mobile-nav-sheet' : undefined}
                           className='rp-navtoggle rp-chrome-header-control'
                         />
                       </span>
@@ -924,7 +927,11 @@ export function TenantLayout() {
         {/* Keyed on the path so each route change replays the entrance. */}
         <div key={location.pathname} className='rp-page-enter'>
           {routeAllowed
-            ? <Outlet context={{ config } satisfies TenantOutletContext} />
+            ? (
+              <PageSubjectContext.Provider value={setPageSubject}>
+                <Outlet context={{ config } satisfies TenantOutletContext} />
+              </PageSubjectContext.Provider>
+            )
             : (
               <main data-route-unavailable className='rp-shell py-12'>
                 <h1 className='rp-display text-2xl text-ink' tabIndex={-1}>

@@ -20,6 +20,7 @@ import { SlidersHorizontal, X } from '../components/icons.tsx'
 import { AddDocumentsLink } from '../components/AddDocumentsLink.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
 import { plainDashes, presentTitle } from '../lib/display-title.ts'
+import { usePageSubject } from '../lib/page-subject.ts'
 import type { TenantOutletContext } from './TenantLayout.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 
@@ -294,8 +295,11 @@ export function LibraryBrowser(
     view: viewProp,
     onViewChange,
     notice = '',
+    titled = false,
   }: {
     bare?: boolean
+    /** Name the search and filters in the tab title: the standalone Library route only. */
+    titled?: boolean
     /** Controlled sort and density, when the host renders the controls itself. */
     sort?: SortValue
     onSortChange?: (value: SortValue) => void
@@ -440,6 +444,21 @@ export function LibraryBrowser(
     const map = new Map(config.topics.map((topic) => [topic.id, topic.label]))
     return (id: string) => map.get(id)
   }, [config.topics])
+
+  // The tab says which view of the library this is (WCAG 2.4.2): the search, then the filters.
+  // The articles-first default is not a choice the reader made, so it is not named.
+  usePageSubject(
+    titled
+      ? [
+        debouncedQuery ? `“${debouncedQuery}”` : null,
+        ...selectedTopics.map((id) => topicLabel(id) ?? id),
+        ...selectedKinds.map(kindLabel),
+        ...(formatTouched
+          ? selectedFormats.map((id) => ui(FORMATS.find((f) => f.id === id)?.label ?? id))
+          : []),
+      ].filter(Boolean).join(', ')
+      : null,
+  )
 
   function toggleTopic(id: string) {
     setSelectedTopics((prev) =>
@@ -871,5 +890,5 @@ export function LibraryPage() {
     setNotice(sent)
     navigate(`${location.pathname}${location.search}`, { replace: true, state: null })
   }, [location.state])
-  return <LibraryBrowser notice={notice} />
+  return <LibraryBrowser notice={notice} titled />
 }
