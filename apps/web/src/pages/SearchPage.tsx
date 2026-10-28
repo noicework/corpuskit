@@ -1,3 +1,4 @@
+import { ResourceProvenanceLabel } from '../components/ResourceProvenanceLabel.tsx'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from '../components/AccessProvider.tsx'
@@ -188,6 +189,7 @@ function ResultCard(
         <div className='min-w-0 flex-1'>
           <div className='flex flex-wrap items-center justify-between gap-2'>
             <div className='flex flex-wrap items-center gap-1.5'>
+              <ResourceProvenanceLabel resourceId={resource.id} />
               <span className='rp-tag'>{typeLabel(resource.type, ui)}</span>
               {
                 /* The kind chip is dropped when it only restates the type badge

@@ -1,3 +1,4 @@
+import { ResourceProvenanceLabel } from './ResourceProvenanceLabel.tsx'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useAccess } from './AccessProvider.tsx'
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
@@ -736,6 +737,7 @@ function PermittedAnswerStream(
                       <span className='min-w-0 max-w-[16rem] truncate text-left'>
                         {citation.title}
                       </span>
+                      <ResourceProvenanceLabel resourceId={citation.resourceId} />
                     </Link>
                     {existingResultIds.has(citation.resourceId)
                       ? (
