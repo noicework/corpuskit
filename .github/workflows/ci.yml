@@ -121,7 +121,7 @@ jobs:
       matrix:
         # The only matrix dimension, so strategy.job-total is the shard count.
         # e2e/support/shard.ts balances the files over however many are listed.
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
       - uses: denoland/setup-deno@v2
