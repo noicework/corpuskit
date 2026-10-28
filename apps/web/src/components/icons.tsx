@@ -219,8 +219,6 @@ export const ZoomOut = /* @__PURE__ */ createIcon(
     <path d='m15.5 15.5 5 5M7 10.5h7' />
   </>,
 )
-export const Pause = /* @__PURE__ */ createIcon('Pause', <path d='M9 5.5v13M15 5.5v13' />)
-export const Play = /* @__PURE__ */ createIcon('Play', <path d='M8 5.25v13.5L18.5 12z' />)
 export const Maximize = /* @__PURE__ */ createIcon(
   'Maximize',
   <path d='M4 9V4h5m6 0h5v5M4 15v5h5m6 0h5v-5' />,

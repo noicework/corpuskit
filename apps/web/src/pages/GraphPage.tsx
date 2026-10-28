@@ -815,20 +815,7 @@ function NavigatorRail({
                       }}
                       aria-hidden='true'
                     />
-                    <span className='min-w-0 flex-1'>
-                      <span className='block truncate'>{node.label}</span>
-                      {
-                        /* The dot's colour names the category on the map; the name is written
-                          too, so colour is never the only way to tell (WCAG 1.4.1). */
-                      }
-                      {isEntity && groupStyles.size > 1
-                        ? (
-                          <span className='block truncate text-2xs text-ink-3'>
-                            {graphGroupLabel(node.group, ui)}
-                          </span>
-                        )
-                        : null}
-                    </span>
+                    <span className='min-w-0 flex-1 truncate'>{node.label}</span>
                     <span className='shrink-0 tabular-nums text-xs text-ink-3'>{measure}</span>
                   </button>
                 </li>

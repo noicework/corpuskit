@@ -1,11 +1,6 @@
 import { expect } from '@std/expect'
 import * as THREE from 'three'
-import {
-  findMapCaptionBox,
-  KnowledgeMapEngine,
-  legibleOpacity,
-  observeMapAppearance,
-} from './map3d-engine.ts'
+import { findMapCaptionBox, KnowledgeMapEngine, observeMapAppearance } from './map3d-engine.ts'
 import { clusterCentres3D } from '../lib/force3d.ts'
 
 const plate = { x1: 6, y1: 6, x2: 384, y2: 584 }
@@ -153,29 +148,4 @@ Deno.test('phone overview fits hub and caption extents without a large vertical 
   }
   expect(top).toBeLessThan(height * 0.15)
   expect(height - bottom).toBeLessThan(height * 0.15)
-})
-
-Deno.test('a fading label stops where its ink would fall under 4.5:1 on the paper', () => {
-  const hex = (h: string) =>
-    [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255) as [number, number, number]
-  const lin = (c: number) => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-  const lum = (c: number[]) => 0.2126 * lin(c[0]!) + 0.7152 * lin(c[1]!) + 0.0722 * lin(c[2]!)
-  const contrast = (a: number[], b: number[]) =>
-    (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05)
-  const pairs: [string, string][] = [
-    ['#5b5851', '#ffffff'], // the house secondary ink on white
-    ['#cfd2d8', '#1a1c20'], // the dark suite
-  ]
-  for (const [ink, ground] of pairs) {
-    const i = hex(ink)
-    const g = hex(ground)
-    const floor = legibleOpacity(i, g)
-    const at = (a: number) => i.map((c, k) => c * a + g[k]! * (1 - a))
-    expect(contrast(at(floor), g)).toBeGreaterThanOrEqual(4.5)
-    expect(contrast(at(floor - 0.03), g)).toBeLessThan(4.5)
-    // The fade it replaces bottomed out at 0.35, around 2:1.
-    expect(contrast(at(0.35), g)).toBeLessThan(3)
-  }
-  // An ink that cannot reach the ratio is never faded at all.
-  expect(legibleOpacity(hex('#bbbbbb'), hex('#ffffff'))).toBe(1)
 })

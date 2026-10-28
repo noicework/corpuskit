@@ -45,8 +45,6 @@ const requiredNames = [
   'Printer',
   'ZoomIn',
   'ZoomOut',
-  'Pause',
-  'Play',
   'Maximize',
   'FitWidth',
   'SlidersHorizontal',
@@ -90,7 +88,7 @@ function root(markup: string): string {
 
 Deno.test('the icon module provides every specified named component and no runtime registry', () => {
   expect(Object.keys(icons).sort()).toEqual([...requiredNames].sort())
-  expect(requiredNames.length).toBe(76)
+  expect(requiredNames.length).toBe(74)
 })
 
 for (const name of requiredNames) {
