@@ -299,6 +299,14 @@ Deno.test('done closes open steps as completed and error closes them as failed, 
   expect(done.text).toBe('Warmer water raises disease pressure [block-AA].')
   expect(done.citations).toHaveLength(1)
 
+  // The server's citation-checked text replaces the provisional deltas.
+  const checked = applyAgentAskEvent(streaming, {
+    type: 'done',
+    elapsedMs: 89_800,
+    text: 'Warmer water raises disease pressure.',
+  }, 9000)
+  expect(checked.text).toBe('Warmer water raises disease pressure.')
+
   const failed = applyAgentAskEvent(streaming, {
     type: 'error',
     code: 'upstream',
