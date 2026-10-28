@@ -37,6 +37,7 @@ export const AUDIT_ACTIONS = [
   'request.denied',
   'request.privileged',
   'estate.query',
+  'duplicate.review',
   'resource.delete',
   'resource.questions.generate',
   'resource.questions.cache',

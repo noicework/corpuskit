@@ -1462,5 +1462,6 @@ export * from './study-design.ts'
 export * from './rbac.ts'
 export * from './lifecycle.ts'
 export * from './layout.ts'
+export * from './duplicates.ts'
 
 export * from './answer-record.ts'

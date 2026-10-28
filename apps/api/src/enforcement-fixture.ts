@@ -893,6 +893,12 @@ const html = `<html><title>Research</title><main><p>${
 }</p><a href="https://example.test/article">Article</a></main></html>`
 // Independently authored expectations: do not derive these rows or allowed roles from the catalogue.
 export const ADMIN_MATRIX_ROWS: [string, string, Permission, unknown?][] = [
+  ['GET', 'duplicates', 'content.write'],
+  ['POST', 'duplicates/refresh', 'content.write'],
+  ['POST', 'duplicates/review', 'content.write', { pair: 'res-1/res-copy', decision: 'keep-both' }],
+  ['GET', '/api/admin/overlap', 'portal.create'],
+  ['POST', '/api/admin/overlap/refresh', 'portal.create'],
+  ['GET', '/api/admin/overlap/export', 'portal.create'],
   ['GET', 'answer-records/records/:id', 'content.write'],
   ['GET', 'answer-records/records/:id/export', 'content.write'],
   ['GET', 'answer-records/export', 'content.write'],
@@ -1151,6 +1157,7 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       },
     }) as AragProvider
     const fixture = createEnforcementFixture({
+      provider: suffix.startsWith('duplicates') ? DoubleProvider.withDuplicates() : undefined,
       management,
       operatorDeleteAfterDays: 30,
       domainProvisioner: {
@@ -1222,9 +1229,8 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
       }
       if (suffix.endsWith('/erase')) fixture.stores.tenants.remove('a')
       const snapshot = () =>
-        ['state', 'branding_assets', 'enrichment_records', 'routing_records'].map((table) =>
-          fixture.database.all(`SELECT * FROM ${table}`)
-        )
+        ['state', 'branding_assets', 'enrichment_records', 'routing_records', 'duplicate_reviews']
+          .map((table) => fixture.database.all(`SELECT * FROM ${table}`))
       const baseline = snapshot()
       globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
         calls.push('fetch')
@@ -1331,9 +1337,18 @@ export async function runAdminMatrixRow(row: typeof ADMIN_MATRIX_ROWS[number]): 
             })
           } else if (suffix === 'aliases') {
             expect(JSON.parse(result)).toEqual({ aliases: [], hostname: null })
+          } else if (suffix === 'duplicates') {
+            expect(JSON.parse(result).candidates.length).toBeGreaterThan(0)
+          } else if (suffix === '/api/admin/overlap') {
+            expect(JSON.parse(result).rows.length).toBeGreaterThan(0)
+          } else if (suffix === '/api/admin/overlap/export') {
+            expect(result).toContain('Shared title pairs')
           } else if (suffix === 'usage') {
             expect(JSON.parse(result)).toMatchObject({ status: 'active', asksToday: 0 })
           } else throw new Error(`Missing positive assertion for ${template}`)
+        } else if (suffix.endsWith('/refresh')) {
+          expect(result).toContain('generatedAt')
+          expect(fixture.providerCalls.some((call) => call.method === 'listResources')).toBe(true)
         } else {
           expect(snapshot(), `${template} must change protected state`).not.toEqual(baseline)
           if (suffix === 'disable' || suffix === 'enable') {

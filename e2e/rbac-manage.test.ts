@@ -31,6 +31,7 @@ const curatorTabs = [
   'overview',
   'insights',
   'content',
+  'duplicates',
   'enrichments',
   'taxonomy',
   'graph',

@@ -183,6 +183,13 @@ Deno.test('graph display aliases switch on the real graph and dossier at wide390
             await page.waitForFunction((text) => document.body.innerText.includes(text), {
               args: [ui('Open dossier')],
             })
+            // The dock's group line can render a frame after the button labels switch.
+            await page.waitForFunction(
+              (group) =>
+                document.querySelector('aside[tabindex="-1"]')?.textContent?.includes(group) ===
+                  true,
+              { args: [language === 'ja' ? '材料' : 'Material'] },
+            )
             const state = await page.evaluate(() => ({
               retained: (globalThis as unknown as { retainedGraphLabel: Element | null })
                 .retainedGraphLabel === document.querySelector('.rp-map3d-label'),

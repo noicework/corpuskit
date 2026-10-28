@@ -1,3 +1,5 @@
+import { DuplicateReviewStore } from './duplicate-store.ts'
+import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
 import { registerAnswerRecordRoutes } from './answer-record-routes.ts'
 import { type AnswerRecordStoreApi, transientAnswerRecordStore } from './answer-record-store.ts'
@@ -1032,6 +1034,7 @@ export interface PortalRequestContext {
 }
 
 export interface BuildAppOptions {
+  duplicates?: DuplicateReviewStore
   answerRecords?: AnswerRecordStoreApi
   lifecycle?: PortalLifecycleStore
   /** Internally supplied authoritative state, never sourced from a request. */
@@ -1196,6 +1199,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   // Hosting lifecycle (docs/HOSTING.md). Every management write passes the lifecycle guard,
   // which lets a write reach a suspended portal only while it runs for a request the route
   // guard admitted for a platform principal. Without a configured store the state is transient.
+  const duplicates = opts.duplicates ?? new DuplicateReviewStore()
   const lifecycle = opts.lifecycle ?? new PortalLifecycleStore(undefined, opts.now)
   const provisionalBytes = opts.linkProvisionalBytes ??
     linkProvisionalBytes(process.env.LINK_PROVISIONAL_BYTES)
@@ -2218,6 +2222,23 @@ export function buildApp(opts: BuildAppOptions): Hono {
       c.res.headers.delete('Content-Length')
     }
     c.res = response
+  })
+
+  registerDuplicateRoutes(app, {
+    provider: opts.provider,
+    tenants,
+    duplicates,
+    now: opts.now,
+    review: (c, slug, pair, decision) =>
+      subAction(
+        c,
+        '/api/admin/t/:slug/duplicates/review',
+        'duplicate.review',
+        () => rememberDuplicateDecision({ tenants, duplicates, lifecycle }, slug, pair, decision),
+        { decision },
+        { kind: 'portal', slug },
+        { kind: 'duplicate-pair', id: pair },
+      ),
   })
 
   registerLifecycleRoutes(app, {
@@ -4875,6 +4896,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     }
   }
   const erasureStores = {
+    duplicates,
     tenants,
     bindings,
     lifecycle,
