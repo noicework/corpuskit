@@ -22,6 +22,37 @@ async function click(page: Page, text: string) {
     button.click()
   }, { args: [text] })
 }
+async function copyEndpoint(page: Page, scope: string, expected: string, succeeds = true) {
+  expect(
+    await page.evaluate(
+      (scope) => document.querySelector(`${scope} [data-key-endpoint] code`)!.textContent,
+      { args: [scope] },
+    ),
+  ).toBe(expected)
+  await page.evaluate((scope, succeeds) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: (text: string) => {
+          if (!succeeds) return Promise.reject(new Error('Clipboard unavailable'))
+          document.documentElement.dataset.copiedUrl = text
+          return Promise.resolve()
+        },
+      },
+    })
+    document.querySelector<HTMLButtonElement>(`${scope} [data-key-endpoint] button`)!.focus()
+  }, { args: [scope, succeeds] })
+  await page.keyboard.press('Enter')
+  await page.waitForFunction(
+    (scope, succeeds) =>
+      document.querySelector(`${scope} [data-key-endpoint] [role=status]`)?.textContent ===
+        (succeeds ? 'Copied' : 'Could not copy the URL. Select it and copy it manually.'),
+    { args: [scope, succeeds] },
+  )
+  if (succeeds) {
+    expect(await page.evaluate(() => document.documentElement.dataset.copiedUrl)).toBe(expected)
+  }
+}
 async function capture(page: Page, name: string, width: number, scheme: string, textSize = 100) {
   await page.setViewportSize({ width, height: width === 390 ? 844 : 900 })
   await page.evaluate(async (name, textSize, width) => {
@@ -29,7 +60,9 @@ async function capture(page: Page, name: string, width: number, scheme: string, 
     await document.fonts.ready
     const anchor = name === 'keys-coverage'
       ? '[data-estate-review-row]'
-      : width === 390 || textSize === 200
+      : textSize === 200
+      ? '[data-key-form] [data-key-endpoint]'
+      : width === 390
       ? '[data-key-form] fieldset fieldset legend'
       : '#access-keys'
     const top = document.querySelector(anchor)!.getBoundingClientRect().top + scrollY
@@ -55,6 +88,8 @@ Deno.test('Manage issues an estate key, an external agent uses federated tools, 
     await page.waitForSelector('[data-key-portal="grains"]')
     await assertCurrentBuild(page)
     expect(await page.$$('[data-key-portal]')).toHaveLength(1)
+    await copyEndpoint(page, '[data-key-form]', `${server.url}/api/t/marine/mcp`, false)
+    await copyEndpoint(page, '[data-key-form]', `${server.url}/api/t/marine/mcp`)
     // The third stub portal is public, but this administrator cannot manage it.
     expect(await page.$(`[data-key-portal="${server.portals[2]!.slug}"]`)).toBeNull()
     await page.evaluate(() =>
@@ -64,6 +99,7 @@ Deno.test('Manage issues an estate key, an external agent uses federated tools, 
     await page.waitForFunction(() =>
       document.querySelector<HTMLInputElement>('[data-key-portal="grains"]')!.checked
     )
+    await copyEndpoint(page, '[data-key-form]', `${server.url}/api/estate/mcp`)
     expect(await page.evaluate(() => getComputedStyle(document.activeElement!).outlineStyle)).not
       .toBe('none')
     for (const scheme of ['light', 'dark']) {
@@ -76,6 +112,7 @@ Deno.test('Manage issues an estate key, an external agent uses federated tools, 
       await page.evaluate((scheme) => localStorage.setItem('rp-scheme', scheme), { args: [scheme] })
       await page.goto(`${server.url}/t/marine/manage?tab=access&review=form-${scheme}#access-keys`)
       await page.waitForSelector('[data-key-portal="grains"]')
+      for (const width of [1440, 390]) await capture(page, 'keys-single', width, scheme)
       await page.evaluate(() =>
         document.querySelector<HTMLInputElement>('[data-key-portal="grains"]')!.click()
       )
@@ -130,7 +167,15 @@ Deno.test('Manage issues an estate key, an external agent uses federated tools, 
       await page.evaluate(() =>
         document.querySelector('[data-estate-review-row] [data-key-coverage]')!.textContent
       ),
-    ).toContain('marine, grains')
+    ).toBe(
+      `Portals covered: ${
+        ['marine', 'grains'].map((slug) => server.tenants.get(slug)!.branding.productName).join(
+          ', ',
+        )
+      }`,
+    )
+    await copyEndpoint(page, '[data-estate-review-row]', `${server.url}/api/estate/mcp`)
+    await copyEndpoint(page, '[data-key-form]', `${server.url}/api/t/marine/mcp`)
     expect(
       await page.evaluate((key) =>
         !JSON.stringify([localStorage, sessionStorage]).includes(key) &&
@@ -210,7 +255,9 @@ Deno.test('Manage issues an estate key, an external agent uses federated tools, 
       for (const width of [1440, 390]) await capture(page, 'keys-coverage', width, scheme)
     }
     await page.evaluate(
-      (id) => document.querySelector<HTMLButtonElement>(`[data-key-id="${id}"] button`)!.click(),
+      (id) =>
+        document.querySelector<HTMLButtonElement>(`[data-key-id="${id}"] [data-key-revoke]`)!
+          .click(),
       { args: [id] },
     )
     await page.waitForSelector('dialog')
@@ -238,6 +285,16 @@ Deno.test('Manage issues an estate key, an external agent uses federated tools, 
     await page.waitForSelector('[data-key-portal="grains"]')
     expect(await page.evaluate(() => document.querySelector('[data-key-form] legend')!.textContent))
       .toBe('対象ポータル')
+    expect(
+      await page.evaluate(() =>
+        document.querySelector('[data-key-form] [data-key-endpoint]')!.textContent
+      ),
+    ).toContain('このポータルの MCP エンドポイントを使用してください:')
+    expect(
+      await page.evaluate(() =>
+        document.querySelector('[data-key-form] [data-key-endpoint] button')!.textContent?.trim()
+      ),
+    ).toBe('コピー')
   } finally {
     await page.close()
     await browser.close()

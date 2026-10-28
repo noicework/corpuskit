@@ -229,7 +229,7 @@ Deno.test('signed Access keys create once, show safe status, revoke and contain 
     expect(text).toContain('The creator must sign in again')
     expect(text).toContain('creator no longer has access')
     expect(text).toContain('Effective role: Analyst')
-    expect(await page.$('[data-key-id="fixture-key-2"] button')).toBeNull()
+    expect(await page.$('[data-key-id="fixture-key-2"] [data-key-revoke]')).toBeNull()
     expect(
       await page.evaluate(() =>
         document.querySelector<HTMLSelectElement>('[data-key-role]')!.value
@@ -308,7 +308,9 @@ Deno.test('signed Access keys create once, show safe status, revoke and contain 
       await click(page, 'Refresh key list')
       await page.waitForFunction(() => !document.querySelector('[data-one-time-key]'))
       await page.evaluate(() =>
-        document.querySelector<HTMLButtonElement>('[data-key-id="fixture-key-0"] button')!.click()
+        document.querySelector<HTMLButtonElement>(
+          '[data-key-id="fixture-key-0"] [data-key-revoke]',
+        )!.click()
       )
       await page.waitForSelector('dialog')
       expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('Keep key')
@@ -322,12 +324,13 @@ Deno.test('signed Access keys create once, show safe status, revoke and contain 
       await page.keyboard.press('Escape')
     }
     await page.evaluate(() =>
-      document.querySelector<HTMLButtonElement>('[data-key-id="fixture-key-0"] button')!.click()
+      document.querySelector<HTMLButtonElement>('[data-key-id="fixture-key-0"] [data-key-revoke]')!
+        .click()
     )
     await click(page, 'Revoke key', 'dialog button')
     await page.waitForFunction(() =>
       document.body.textContent?.includes('Key revoked.') &&
-      !document.querySelector('[data-key-id="fixture-key-0"] button')
+      !document.querySelector('[data-key-id="fixture-key-0"] [data-key-revoke]')
     )
     await page.waitForFunction(() => document.activeElement !== document.body)
     expect(server.requests.filter((r) => r.path.includes('/mcp/keys') && r.method === 'POST'))

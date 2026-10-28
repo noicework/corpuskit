@@ -280,10 +280,10 @@ function KeyManager({ slug }: { slug: string }) {
                   {ui('Could not load available portals. Refresh the key list to try again.')}
                 </p>
               )
-              : portals.data && portals.data.length > 0
+              : portals.data?.some((portal) => portal.slug !== slug)
               ? (
                 <div className='mt-2 grid min-w-0 gap-2 sm:grid-cols-2'>
-                  {portals.data.map((portal) => (
+                  {portals.data.filter((portal) => portal.slug !== slug).map((portal) => (
                     <label
                       key={portal.slug}
                       className='rp-focus flex min-h-11 min-w-0 flex-wrap cursor-pointer items-center gap-3 rounded-[var(--rp-radius-input)] border border-[var(--rp-field)] p-3 text-sm [overflow-wrap:anywhere] focus-within:ring-2 focus-within:ring-[var(--rp-focus)]'
@@ -309,12 +309,11 @@ function KeyManager({ slug }: { slug: string }) {
                 </div>
               )
               : null}
-            {estate.length > 0 && (
-              <p role='status' className='mt-2 text-sm text-ink-2'>
-                {ui('Use the estate MCP endpoint:')}{' '}
-                <code className='[overflow-wrap:anywhere]'>/api/estate/mcp</code>
-              </p>
-            )}
+            <KeyEndpoint
+              key={estate.length > 0 ? 'estate' : slug}
+              slug={slug}
+              estate={estate.length > 0}
+            />
           </fieldset>
           <Button
             type='submit'
@@ -381,9 +380,13 @@ function KeyManager({ slug }: { slug: string }) {
                     {row.revokedAt
                       ? ui('Portal access revoked')
                       : ui('Portals covered: {portals}', {
-                        portals: [slug, ...(row.estate ?? [])].join(', '),
+                        portals: [slug, ...(row.estate ?? [])].map((covered) =>
+                          portals.data?.find((portal) => portal.slug === covered)?.title ??
+                            ui('Portal name unavailable')
+                        ).join(', '),
                       })}
                   </p>
+                  {!row.revokedAt && <KeyEndpoint slug={slug} estate={!!row.estate?.length} />}
                   {row.effectiveRole && row.effectiveRole !== row.role && (
                     <p className='mt-2'>{ui("The creator's current access limits this key.")}</p>
                   )}
@@ -415,6 +418,7 @@ function KeyManager({ slug }: { slug: string }) {
                 </div>
                 {!row.revokedAt && (
                   <Button
+                    data-key-revoke
                     variant='danger'
                     size='sm'
                     leadingIcon={Trash}
@@ -456,6 +460,43 @@ function KeyManager({ slug }: { slug: string }) {
         />
       )}
     </section>
+  )
+}
+function KeyEndpoint({ slug, estate }: { slug: string; estate: boolean }) {
+  const { ui } = usePortalLocale()
+  const url = `${globalThis.location?.origin ?? ''}${
+    estate ? '/api/estate/mcp' : `/api/t/${encodeURIComponent(slug)}/mcp`
+  }`
+  const [status, setStatus] = useState('')
+  const alive = useRef(false)
+  useLayoutEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+  async function copy() {
+    setStatus('')
+    try {
+      await navigator.clipboard.writeText(url)
+      if (alive.current) setStatus('Copied')
+    } catch {
+      if (alive.current) setStatus('Could not copy the URL. Select it and copy it manually.')
+    }
+  }
+  return (
+    <div data-key-endpoint className='mt-2 min-w-0 text-sm text-ink-2'>
+      <p>
+        {ui(estate ? 'Use the estate MCP endpoint:' : 'Use the portal MCP endpoint:')}{' '}
+        <code className='[overflow-wrap:anywhere]'>{url}</code>
+      </p>
+      <div className='mt-2 flex flex-wrap items-center gap-2'>
+        <Button variant='outline' size='sm' leadingIcon={Copy} onClick={() => void copy()}>
+          {ui('Copy')}
+        </Button>
+        <span role='status'>{ui(status)}</span>
+      </div>
+    </div>
   )
 }
 function keyExplanation(row: KeySummary) {

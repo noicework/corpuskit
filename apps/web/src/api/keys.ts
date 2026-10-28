@@ -185,7 +185,7 @@ export async function listKeyPortals(slug: string, options: RequestContext = {})
       }).strict(),
     ).parse(await response.json())
     assertResponseCurrent(response)
-    return portals.filter((portal) => portal.slug !== slug)
+    return portals
   } finally {
     finishResponse(response)
   }
