@@ -1,7 +1,7 @@
 /** Shared search interface copy. Source names and passages remain as authored. */
 export const FEDERATED_SEARCH_JA: Readonly<Record<string, string>> = {
   'Include partner collections': 'パートナーのコレクションを含める',
-  'Source': '情報源',
+  'Source': '出典',
   'All collections': 'すべてのコレクション',
   'One result from each collection in turn, keeping each collection’s ranking.':
     '各コレクション内の順位を保ち、コレクションごとに1件ずつ交互に表示します。',
