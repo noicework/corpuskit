@@ -434,6 +434,7 @@ describe('independent admin route permission matrix', () => {
     ['POST', 'purge-failed', 'content.write', { dryRun: false }],
     ['GET', 'insights', 'content.write'],
     ['GET', 'insights/usage', 'audit.export'],
+    ['GET', 'site-feedback', 'content.write'],
     ['POST', 'resources/:id/hidden', 'content.write', { hidden: true }],
     ['DELETE', 'resources/:id', 'content.write'],
     ['GET', 'sources', 'content.write'],
@@ -816,6 +817,10 @@ describe('independent admin route permission matrix', () => {
                   month: '2026-09',
                   through: '2026-09-12',
                   totals: { questions: 0, documentsAdded: 1 },
+                })
+              } else if (suffix === 'site-feedback') {
+                expect(JSON.parse(result)).toEqual({
+                  feedback: fixture.stores.siteFeedback.recent('a', 50),
                 })
               } else if (suffix === 'routing') expect(JSON.parse(result)).toHaveProperty('recent')
               else if (suffix === 'lifecycle') {

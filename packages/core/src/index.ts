@@ -438,6 +438,13 @@ export const TenantConfigSchema = z.object({
    */
   regionalDiscovery: z.boolean().optional(),
   /**
+   * Whether readers can send the portal team feedback from the header. Opt-in: only true turns
+   * it on, through `PATCH /api/admin/tenants/:slug`. The control shows, and the route answers,
+   * only where the deployment also has somewhere to deliver it (`siteFeedbackNotifier`); readers
+   * get `true` here only then.
+   */
+  siteFeedback: z.boolean().optional(),
+  /**
    * Labels excluded from the research search and ask configurations (on top
    * of the always-excluded in-app documentation). A journal corpus keeps its
    * supplements and videos browsable in the library but grounds answers in
@@ -543,6 +550,11 @@ export function portalConfigurationExport(config: TenantConfig): PortalConfigura
 /** Whether Explore shows the regional discovery band: only when the portal opts in. */
 export function showsRegionalDiscovery(config: Pick<TenantConfig, 'regionalDiscovery'>): boolean {
   return config.regionalDiscovery === true
+}
+
+/** Whether the portal has opted in to reader feedback: only when it says so. */
+export function acceptsSiteFeedback(config: Pick<TenantConfig, 'siteFeedback'>): boolean {
+  return config.siteFeedback === true
 }
 
 // ---------------------------------------------------------------------------
