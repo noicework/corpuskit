@@ -81,11 +81,11 @@ export function AgentSteps(
           </p>
         )
         : runs.map((run, runIndex) => (
-          <div key={`${run.phase}-${runIndex}`} className={runIndex === 0 ? 'mt-3' : 'mt-1'}>
+          <div key={`${run.phase}-${runIndex}`} className={runIndex === 0 ? 'mt-5' : 'mt-4'}>
             <h3 className='rp-agent-phase text-2xs font-semibold uppercase tracking-wider text-ink-3'>
               {ui(PHASE_LABELS[run.phase])}
             </h3>
-            <ol className='mt-1.5'>
+            <ol className='mt-3'>
               {run.steps.map((step, stepIndex) => {
                 const order = index++
                 const last = stepIndex === run.steps.length - 1
