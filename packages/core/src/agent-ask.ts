@@ -114,6 +114,8 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
     url: HttpUrlSchema.optional(),
   }),
   z.object({ type: z.literal('done'), elapsedMs: z.number().int().nonnegative() }),
+  /** Persisted on the host portal before the terminal event. */
+  z.object({ type: z.literal('answer-record'), answerId: z.string().uuid() }),
   /** The stream's last event when it ends without an answer. */
   z.object({
     type: z.literal('error'),

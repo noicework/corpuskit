@@ -1,6 +1,7 @@
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
+import { recordAgentAnswer } from './agent-answer-record-stream.ts'
 import { registerAnswerRecordRoutes } from './answer-record-routes.ts'
 import { type AnswerRecordStoreApi, transientAnswerRecordStore } from './answer-record-store.ts'
 import { registerPortalEvaluations } from './evaluation-integration.ts'
@@ -167,7 +168,7 @@ import {
   type SourceContext,
 } from '@research-portal/retrieval'
 import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
-import { agentAnswer, type ComposeSource } from './agent-compose.ts'
+import { type ComposeSource } from './agent-compose.ts'
 import {
   type NewTenantInput,
   type TenantPatch,
@@ -8525,7 +8526,10 @@ export function buildApp(opts: BuildAppOptions): Hono {
       try {
         if (cancelled()) return
         for await (
-          const event of agentAnswer({
+          const event of recordAgentAnswer({
+            store: answerRecords,
+            buildId: opts.buildSha,
+            now: opts.now,
             provider,
             host,
             portals,

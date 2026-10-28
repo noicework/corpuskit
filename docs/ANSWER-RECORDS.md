@@ -7,6 +7,34 @@ A failed save publishes an error instead of successful completion. Existing save
 not backfilled. The Help assistant and other structured generation surfaces are not automatically
 instrumented; their routes can use the server-only recorder below.
 
+Agent ask (`POST /api/t/:slug/ask-agent` and `POST /api/ask-agent`) also records every run,
+using `recordAgentAnswer` in `apps/api/src/agent-answer-record-stream.ts`. One record belongs
+to the host portal, including when other hosted portals or federation peers supply passages.
+An `answer-record` event with the saved id precedes the terminal `done` or `error` event.
+The agent ask page can consume this event to link to the curator record; its UI is separate.
+
+The optional `agent` field distinguishes `agent` and `orchestrated` modes and retains the
+sources announced by `agent-start`, their kind and transport, hosted portal or peer id,
+non-secret store identifiers and configured peer endpoints. It includes every step's final
+status, duration and reported reason, the question put to each source, failures with their
+reason, and citation decisions before and after composition's citation check. Passages and
+citations carry source and chunk ids, a resource id when supplied, titles, excerpts and URLs
+when supplied. Every URL has credentials, query strings and fragments removed.
+
+The composer reports kept and dropped original citation markers per sentence, including their
+source and chunk when known, the zero-based `sentenceIndex`, and the final marker after
+renumbering. A marker kept on one sentence and dropped on another retains both decisions.
+The curator view shows these
+decisions and a Source/Kind/Transport table. CSV adds `mode`, `sources`, `steps`,
+`sourceQuestions`, `citationDecisions`, `failedSources` and `truncatedFields` columns, with
+structured values encoded as JSON cells. JSON preserves the complete record structure.
+An agent provider that emits only final citations cannot report its rejected candidates:
+its citation check remains `not_reported`. Missing source topology and model identifiers
+are explicitly unknown, rather than inferred. Configuration identifiers name the local
+agent/composition and citation-binding paths; `portal-search` identifies composed retrieval.
+The model is the answer model reported by the provider, not an inferred vendor default.
+Reasoning text and previous conversation turns are not retained.
+
 A record includes its random answer id, UTC creation time, portal, question, retrieval queries,
 retrieved passages, final cited passages, verification outcomes, reported quality/token/timing
 metrics, model/configuration identifiers and source calls with status and duration. Resource
@@ -113,6 +141,14 @@ Records are bounded to 384 KiB, 160 retrieved/cited passages, 2,000 characters p
 to the store is rejected. Retained excerpts are evidence of the retrieval used, not a complete
 copy of the source documents. Verification includes removal counts and figures reported by the
 trust layer; it does not reconstruct the text of sentences the trust layer did not emit.
+
+Agent evidence additionally bounds sources, steps, source questions, source failures and citation
+decisions to 200 items each, with the same text bounds. `truncatedFields` names the shortened or
+omitted fields (`text` denotes shortened field values). To meet the total byte limit, the
+existing order removes retrieved passages, cited passages, retrieval queries and calls first;
+then agent citation decisions, source questions, steps, failures and sources. The view and
+both export formats disclose truncation. The same `answerRecords` retention, audited storage
+adapters and erasure inventory apply without another erased record kind or setting.
 
 Retention is per portal: **90 days by default**, configurable from **1 to 365 whole days**.
 Expired records disappear from reads and exports at the cutoff. Reducing retention immediately

@@ -89,7 +89,10 @@ Deno.test('the stub replays at the recorded pace, scaled, and #fast skips the wa
     expect(paced.at(-1)!.at).toBeLessThan(8000)
     const fast = await timedEvents(await askAgent(server.url, 'Why? #fast'))
     expect(fast.at(-1)!.at).toBeLessThan(1500)
-    expect(fast.map(({ event }) => event)).toEqual(paced.map(({ event }) => event))
+    const withoutRecord = (events: { event: AgentAskEvent }[]) =>
+      events.map(({ event }) => event)
+        .filter((event) => event.type !== 'answer-record')
+    expect(withoutRecord(fast)).toEqual(withoutRecord(paced))
   } finally {
     await server.close()
   }

@@ -14,6 +14,56 @@ export const AnswerRecordPassageSchema = z.object({
   score: z.number().finite().nullable(),
   scoreScope: z.enum(['resource', 'passage', 'unknown']),
   citationIndex: z.number().int().positive().optional(),
+  sourceId: z.string().optional(),
+  chunkId: z.string().optional(),
+  peerId: z.string().optional(),
+  url: z.string().optional(),
+  marker: z.string().optional(),
+})
+
+export const AnswerRecordSourceSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  portal: z.string().optional(),
+  peerId: z.string().optional(),
+  // Older agent drivers may not report either field. Do not invent their topology.
+  kind: z.enum(['hosted', 'peer']).nullable(),
+  transport: z.enum(['kb', 'mcp']).nullable(),
+  storeId: z.string().nullable().optional(),
+  endpoint: z.string().optional(),
+})
+
+export const AnswerRecordCitationDecisionSchema = z.object({
+  marker: z.string(),
+  sourceId: z.string().optional(),
+  chunkId: z.string().optional(),
+  finalMarker: z.string().optional(),
+  sentenceIndex: z.number().int().nonnegative().optional(),
+  outcome: z.enum(['kept', 'dropped']),
+})
+
+export const AnswerRecordAgentSchema = z.object({
+  mode: z.enum(['agent', 'orchestrated']).nullable(),
+  sources: AnswerRecordSourceSchema.array(),
+  steps: z.object({
+    id: z.string(),
+    module: z.string(),
+    title: z.string(),
+    status: z.enum(['started', 'completed', 'failed']),
+    durationMs: z.number().nonnegative().nullable(),
+    reason: z.string().optional(),
+  }).array(),
+  lookups: z.object({
+    stepId: z.string(),
+    sourceId: z.string(),
+    question: z.string(),
+  }).array(),
+  failedSources: z.object({
+    sourceId: z.string(),
+    reason: z.enum(['timeout', 'unauthorised', 'error']),
+  }).array(),
+  citationCheck: z.enum(['checked', 'not_reported']),
+  citationDecisions: AnswerRecordCitationDecisionSchema.array(),
 })
 
 export const AnswerRecordCallSchema = z.object({
@@ -71,6 +121,9 @@ export const AnswerRecordSchema = z.object({
     outputTokens: z.number().nonnegative().nullable(),
   }),
   calls: AnswerRecordCallSchema.array(),
+  agent: AnswerRecordAgentSchema.optional(),
+  /** Fields shortened or omitted by recorder bounds. Older records only have truncated. */
+  truncatedFields: z.string().array().optional(),
   /** True if the bounded recorder could not retain every item or complete text. */
   truncated: z.boolean(),
 })

@@ -31,10 +31,30 @@ const columns = [
   'timing',
   'calls',
   'truncated',
+  'mode',
+  'sources',
+  'steps',
+  'sourceQuestions',
+  'citationDecisions',
+  'failedSources',
+  'truncatedFields',
 ] as const
-const csvLine = (r: AnswerRecord) =>
-  columns.map((key) => auditCsvCell(typeof r[key] === 'object' ? JSON.stringify(r[key]) : r[key]))
+const csvLine = (r: AnswerRecord) => {
+  const row = {
+    ...r,
+    mode: r.agent?.mode ?? '',
+    sources: r.agent?.sources ?? [],
+    steps: r.agent?.steps ?? [],
+    sourceQuestions: r.agent?.lookups ?? [],
+    citationDecisions: r.agent?.citationDecisions ?? [],
+    failedSources: r.agent?.failedSources ?? [],
+    truncatedFields: r.truncatedFields ?? [],
+  }
+  return columns.map((key) =>
+    auditCsvCell(typeof row[key] === 'object' ? JSON.stringify(row[key]) : row[key])
+  )
     .join(',') + '\r\n'
+}
 
 export function registerAnswerRecordRoutes(app: Hono, services: {
   store: AnswerRecordStoreApi
