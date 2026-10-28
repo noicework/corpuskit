@@ -1,6 +1,23 @@
 import { expect } from '@std/expect'
 import { TenantConfigSchema } from '@research-portal/core'
-import { localisePortalConfig } from './portal-locale.tsx'
+import { createPortalLocale, localisePortalConfig } from './portal-locale.tsx'
+
+Deno.test('interface wording stays within the configured portal and language', () => {
+  const copy = {
+    interfaceMessages: {
+      en: { Graph: 'Knowledge map', 'Open {name}': 'Read {name}' },
+      ja: { Graph: 'ナレッジマップ' },
+    },
+  }
+  const english = createPortalLocale('en', undefined, copy)
+  const japanese = createPortalLocale('ja', undefined, copy)
+  expect(english.ui('Graph')).toBe('Knowledge map')
+  expect(japanese.ui('Graph')).toBe('ナレッジマップ')
+  expect(english.ui('Open {name}', { name: 'Source {count}' })).toBe('Read Source {count}')
+  expect(japanese.ui('Save')).toBe('保存')
+  expect(createPortalLocale('en').ui('Graph')).toBe('Graph')
+  expect(english.ui('Authored evidence')).toBe('Authored evidence')
+})
 
 Deno.test('portal translations change visible copy without translating identity, routes or policy', () => {
   const config = TenantConfigSchema.parse({
@@ -25,6 +42,10 @@ Deno.test('portal translations change visible copy without translating identity,
     searchPlaceholder: '研究',
     topics: [{ id: 'original', label: '研究', description: '研究' }],
     suggestedQuestions: [{ id: 'original', text: '研究' }],
+    copy: {
+      defaultResourceLabel: '研究',
+      interfaceMessages: { ja: { Graph: '研究' } },
+    },
     entityTypes: [{ id: 'original', label: 'original', colour: '#123456' }],
     relationTypes: ['original'],
     languagePolicy: {
@@ -68,5 +89,7 @@ Deno.test('portal translations change visible copy without translating identity,
     resourceIds: ['original'],
   })
   expect(translated.languagePolicy).toEqual(config.languagePolicy)
+  expect(translated.copy?.defaultResourceLabel).toBe('Research')
+  expect(translated.copy?.interfaceMessages).toEqual(config.copy?.interfaceMessages)
   expect(localisePortalConfig(config, 'ja')).toBe(config)
 })

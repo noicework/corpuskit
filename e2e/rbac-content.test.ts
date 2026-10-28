@@ -700,6 +700,66 @@ Deno.test('a file chosen through the native picker uploads while an ordinary ret
   }
 })
 
+Deno.test('a return gives focus back to the same control, and the gate heading only an outcome', async () => {
+  const browser = await launch()
+  const server = startTestServer({ identity: { role: 'analyst' } })
+  server.setAccessMode('marine', 'restricted')
+  const page = await browser.newPage(`${server.url}/t/marine/library`)
+  const link = 'main a[href="/t/marine/library/res-2"]'
+  const focusLog = () =>
+    page.evaluate(() => document.documentElement.getAttribute('data-focus-log')?.split('|'))
+  let delay: ReturnType<typeof server.delayResponse> | undefined
+  try {
+    await assertCurrentBuild(page)
+    await page.waitForSelector(link)
+    await page.evaluate((link: string) => {
+      const control = document.querySelector<HTMLElement>(link)!
+      control.setAttribute('data-before-return', '')
+      control.focus()
+      document.addEventListener('focusin', (event) => {
+        const root = document.documentElement
+        const entry = (event.target as HTMLElement).tagName
+        const log = root.getAttribute('data-focus-log')
+        root.setAttribute('data-focus-log', log ? `${log}|${entry}` : entry)
+      })
+    }, { args: [link] })
+    // The person comes back: access is withdrawn while the session is read again.
+    delay = server.delayResponse('/auth/me?portal=marine')
+    await page.evaluate(() => {
+      dispatchEvent(new Event('blur'))
+      dispatchEvent(new Event('focus'))
+    })
+    await delay.entered
+    await page.waitForSelector('[data-access-state=loading]')
+    delay.release()
+    // The check confirms the same authority, so the remounted page's copy of the control has
+    // focus again. The gate's "Checking access..." heading never took it.
+    await page.waitForFunction((link: string) => {
+      const focused = document.activeElement
+      return focused?.matches(link) && !focused.hasAttribute('data-before-return')
+    }, { args: [link] })
+    expect(await focusLog()).toEqual(['A'])
+
+    // A return that ends without access focuses the gate's heading, never the old place.
+    server.setAssignment({ kind: 'portal', slug: 'marine' }, 'e2e-analyst', null)
+    await page.evaluate((link: string) => {
+      document.querySelector<HTMLElement>(link)!.focus()
+      dispatchEvent(new Event('blur'))
+      dispatchEvent(new Event('focus'))
+    }, { args: [link] })
+    await page.waitForSelector('[data-access-state=denied]')
+    await page.waitForFunction(() => document.activeElement?.tagName === 'H1')
+  } catch (error) {
+    console.error(server.requests.slice(-12), await page.evaluate(() => document.body.innerText))
+    throw error
+  } finally {
+    delay?.release()
+    await page.close()
+    await server.close()
+    await browser.close()
+  }
+})
+
 Deno.test('an upload running when the person comes back finishes once and survives the check', async () => {
   const browser = await launch()
   const { management, calls } = contentManagement()
