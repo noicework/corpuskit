@@ -103,7 +103,9 @@ jobs:
           SHARDS: ${{ strategy.job-total }}
         # The whole of `deno task test`, ignoring the files the other shards
         # run, the same way as the E2E shards. Each shard runs its files one
-        # after another in one process, as the single job did.
+        # after another in one process, as the single job did. The task takes
+        # its directories from deno.json's test.include: Deno applies --ignore
+        # only under the first of several directories named as arguments.
         run: |
           ignore=$(deno run --allow-read=packages,apps e2e/support/shard.ts ignore "$SHARD" "$SHARDS" packages apps)
           deno task test "--ignore=$ignore"

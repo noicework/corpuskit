@@ -31,8 +31,19 @@ Deno.test('pull requests run the same shards that gate a deploy', () => {
 })
 
 Deno.test('the gate jobs together run the whole of deno task check', () => {
-  const tasks = JSON.parse(Deno.readTextFileSync(new URL('deno.json', root))).tasks
+  const config = JSON.parse(Deno.readTextFileSync(new URL('deno.json', root)))
+  const tasks = config.tasks
   expect(tasks.check).toBe('deno task check:static && deno task test')
+  // The unit test roots live in deno.json's test.include, not on the command line: Deno 2.9
+  // applies --ignore only under the first of several directories given as arguments, so a shard
+  // given `packages/ apps/` ran nearly every file under apps/.
+  expect(tasks.test).toBe('deno test --allow-env --allow-read --allow-write')
+  expect(config.test.include).toEqual(['packages/', 'apps/'])
+  for (const workflow of [read('ci.yml'), read('deploy.yml')]) {
+    expect(shardRun(workflow, 'unit').join('\n')).toContain(
+      ' ignore "$SHARD" "$SHARDS" packages apps)',
+    )
+  }
   for (const workflow of [read('ci.yml'), read('deploy.yml')]) {
     expect(job(workflow, 'gate')).toContain('\n        run: deno task check:static\n')
     expect(shardRun(workflow, 'unit')).toContain('          deno task test "--ignore=$ignore"')
