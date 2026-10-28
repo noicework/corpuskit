@@ -203,7 +203,7 @@ export function AgentAskPage() {
                 <div className='space-y-6 py-4'>
                   {/* The question is the page's heading once asked, as on Ask. */}
                   <h1
-                    className='rp-answer-question rp-display rp-answer-question-clamped text-xl text-ink lg:text-3xl'
+                    className='rp-answer-question rp-display text-xl text-ink lg:text-3xl'
                     title={agent.question ?? undefined}
                   >
                     {agent.question}
