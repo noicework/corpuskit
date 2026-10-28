@@ -39,6 +39,15 @@ search configurations are all configurable objects ON the KB, viewable in the ad
   `/ask` call - the backend answers 500 or 503.** For provenance in schema mode read
   `retrieval_results.resources` (populated even with `citations:false`) or fire a second
   citations-only `/ask`.
+- **A citation's page comes from retrieval, not from the citation.** Every paragraph in the
+  `/ask` `retrieval` item (the same shape as `/find`) carries `position.page_number`,
+  **zero-based**, plus `page_with_visual`; text and link fields report page 0 for every paragraph,
+  so only a file (`/f/`) paragraph has a meaningful page. `footnote_citations` and `citations`
+  name only paragraph ids (`<rid>/f/<field>/<start>-<end>`), so the provider joins the cited id
+  to its retrieved paragraph (`cited-pages.ts`). A whole-field reference
+  (`<rid>/t/native_source`, from `full_resource`) has no paragraph to join: the citation falls
+  back to its source's matched passage and page, and with no page at all the PDF reader finds the
+  passage in the file's text layer.
 - **REMi (answer-quality score):** `POST {kb}/predict/remi` with the **KB service-account token**
   (NOT the NUA key). Score against the **FULL retrieved context** (all paragraphs `/ask` grounded
   on), not just the citation excerpts - thin context makes groundedness swing wildly (0/5 then 5/5

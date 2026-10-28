@@ -339,7 +339,9 @@ including owners, portal data keys and break-glass cannot import a configuration
 
 The required fields are `slug`, `branding`, `searchPlaceholder`, `topics`, `suggestedQuestions`,
 `entityTypes` and `relationTypes`. Optional fields are `languagePolicy`, `assessmentHeading`,
-`regionalDiscovery`, `timezone` and `copy`. `slug` must exactly match the existing portal.
+`regionalDiscovery`, `timezone`, `copy` and `accessibility` (see
+[Accessibility statement](#accessibility-statement)). `slug` must exactly match the existing
+portal.
 `branding` replaces its complete presentation document, including its optional layout; omitted
 optional top-level fields retain their current values. The resulting configuration is validated
 before one audited store write. Success returns `{"ok":true,"slug":"<slug>"}`.
@@ -1153,6 +1155,45 @@ reaches, so it counts once per portal against the first two limits and against e
 anonymous limit, and it is admitted on all of them or on none. A request over any limit is
 answered `429 {"error":"rate_limited"}` with a `Retry-After` header, and an ask it had counted
 toward `asksPerDay` is given back.
+
+## Accessibility statement
+
+Every portal has an accessibility statement at `/t/<slug>/accessibility`, linked as
+"Accessibility" from its footer. The default statement says what is tested (WCAG 2.2 at level AA,
+across the reader-facing pages, in both colour schemes, at phone and desktop widths and with
+raised text size and spacing) and how (automated checks, then manual checks with the keyboard, a
+screen reader, zoom and reduced motion), and where the portal depends on the documents it holds.
+It claims no conformance, names no test date and no tool, and has no contact section: those belong
+to the people who run the portal.
+
+A portal supplies them through the `accessibility` field of its configuration, imported with
+`PUT /api/admin/t/<slug>/configuration` or written in its seed:
+
+```json
+{
+  "accessibility": {
+    "contact": {
+      "name": "the Example Research Alliance's digital team",
+      "email": "access@example.org",
+      "phone": "1800 000 000",
+      "url": "https://example.org/accessibility",
+      "note": "We aim to reply within five working days."
+    },
+    "sections": [
+      { "heading": "What has been tested", "paragraphs": ["...", "..."] }
+    ]
+  }
+}
+```
+
+`contact` adds a "Tell us about an access problem" section after the statement, with whichever
+of `email`, `phone` and `url` are set as links (`url` must be `https://`); `name` is who the
+reader is told to contact and `note` a sentence after the details. Without `contact` the page has
+no contact section at all. `sections` replaces the default statement with the portal's own, each
+section a heading and one or more paragraphs; every word renders as plain text, never markup.
+On a portal that offers [reader feedback](#reader-feedback), the contact section also points
+readers at the Send feedback control. A bilingual portal translates the statement's headings,
+paragraphs, contact name and note through `languagePolicy.translations` like its other copy.
 
 ## Reader feedback
 
@@ -2129,6 +2170,10 @@ line; call it again to finish.
 Nothing else about the portal is kept. Audit events of other portals, and platform events that do
 not target this one, are untouched. All audit records, erasure lines included, still age out under
 `AUDIT_RETENTION_DAYS` (see [RBAC](RBAC.md)).
+
+The [portal export bundle](PORTAL-EXPORT.md) creates no stored export copy. Its audit
+events and query snapshots use the existing audit inventory above; downloaded bundles are
+outside deployment erasure and must follow the recipient's retention policy.
 
 ### What erasure cannot reach
 

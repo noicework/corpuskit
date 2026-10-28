@@ -1,3 +1,4 @@
+import { ResourceProvenanceLabel } from './ResourceProvenanceLabel.tsx'
 import { englishResearchUi, type ResearchUi } from '../lib/research-copy.ts'
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { useEffect, useId, useRef, useState } from 'react'
@@ -264,6 +265,7 @@ function EvidenceRow({
           </Link>
         </div>
         <div className='flex shrink-0 flex-wrap items-center gap-1.5'>
+          <ResourceProvenanceLabel resourceId={source.id} />
           {scorePct !== null
             ? <span className='text-xs tabular-nums text-ink-3'>{scorePct}%</span>
             : null}
@@ -388,6 +390,7 @@ function EvidenceRow({
           compact
           evidence={{
             passage: passage || source.title,
+            ...(passage && !summaryMatch && source.matchedPage ? { page: source.matchedPage } : {}),
             resourceId: source.id,
             resourceTitle: source.title,
             score: source.score ?? undefined,
