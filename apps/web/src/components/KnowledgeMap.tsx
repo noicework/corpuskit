@@ -1,7 +1,6 @@
 import { usePortalLocale } from '../lib/portal-locale.tsx'
 import { graphGroupLabel, graphRelationLabel } from '../lib/graph-display-copy.ts'
-import { Maximize, ZoomIn, ZoomOut } from './icons.tsx'
-import { IconButton } from './ui.tsx'
+import { MapCameraControls } from './MapCameraControls.tsx'
 import {
   Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -1434,6 +1433,11 @@ export function KnowledgeMap({
     })
   }
 
+  const panBy = (x: number, y: number) => {
+    claimView()
+    setTransform((t) => ({ ...t, x: t.x + x, y: t.y + y }))
+  }
+
   const focusStyle = focus ? groupStyles.get(positions.get(focus)?.group ?? '') : undefined
 
   return (
@@ -1444,10 +1448,29 @@ export function KnowledgeMap({
         preserveAspectRatio='xMidYMid meet'
         role='application'
         aria-label={ui(
-          'Knowledge map - drag to pan, pinch or scroll to zoom, select a node to explore it',
+          'Knowledge map. Focus here: arrows pan, plus and minus zoom, Home fits. Tab reaches each item and leaves the map. Map controls provide camera buttons; List provides all topics and relationships.',
         )}
         tabIndex={0}
         className='rp-focus rp-map block h-full w-full cursor-grab touch-none select-none active:cursor-grabbing'
+        onKeyDown={(event) => {
+          if (
+            event.target !== event.currentTarget || event.ctrlKey || event.altKey ||
+            event.metaKey || event.nativeEvent.isComposing
+          ) return
+          const directions: Record<string, [number, number]> = {
+            ArrowLeft: [40, 0],
+            ArrowRight: [-40, 0],
+            ArrowUp: [0, -40],
+            ArrowDown: [0, 40],
+          }
+          const direction = directions[event.key]
+          if (direction) panBy(...direction)
+          else if (event.key === '+' || event.key === '=') zoomBy(1.3)
+          else if (event.key === '-') zoomBy(1 / 1.3)
+          else if (event.key === 'Home') fitView()
+          else return
+          event.preventDefault()
+        }}
         onWheel={onWheel}
         onPointerDown={onPointerDownBackground}
         onPointerMove={onPointerMove}
@@ -1587,7 +1610,7 @@ export function KnowledgeMap({
                     y={caption.y}
                     textAnchor='middle'
                     className='rp-map-territory'
-                    fill={visibleStyles.get(caption.id)?.ink}
+                    fill='var(--rp-ink)'
                     stroke='var(--rp-surface)'
                     strokeWidth={5}
                     paintOrder='stroke'
@@ -1632,7 +1655,6 @@ export function KnowledgeMap({
                   )}
                   aria-pressed={isSelected}
                   className='rp-map-node rp-map-fade cursor-pointer'
-                  opacity={dimmed ? 0.16 : unlinked && !emphasised ? 0.62 : 1}
                   onPointerDown={(event) => startNodeDrag(event, node.id)}
                   onPointerEnter={() => setHoveredId(node.id)}
                   onPointerLeave={() => setHoveredId((h) => (h === node.id ? null : h))}
@@ -1693,6 +1715,7 @@ export function KnowledgeMap({
                     cx={sim.x}
                     cy={sim.y}
                     r={unlinked ? Math.max(3.5, r - 1.5) : r}
+                    opacity={dimmed ? 0.16 : unlinked && !emphasised ? 0.62 : 1}
                     fill={style?.hollow ? 'var(--rp-surface)' : colour}
                     stroke={style?.hollow
                       ? colour
@@ -1709,7 +1732,7 @@ export function KnowledgeMap({
                         y={caption.y}
                         textAnchor='middle'
                         fontWeight={emphasised ? 650 : 500}
-                        fill={style?.ink ?? 'var(--rp-ink-2)'}
+                        fill='var(--rp-ink)'
                         stroke='var(--rp-surface)'
                         strokeWidth={4}
                         paintOrder='stroke'
@@ -1730,40 +1753,7 @@ export function KnowledgeMap({
         {hint}
       </p>
 
-      {
-        /* Zoom controls. A panel that covers the bottom of the canvas would
-          bury them, so they ride above it - and lie down into a row while they
-          are there, because a 116px column would take half of the strip of map
-          the sheet leaves visible. */
-      }
-      <div
-        className={`absolute right-4 flex gap-1 ${
-          insets.bottom > 0 ? 'flex-row-reverse' : 'flex-col'
-        }`}
-        style={{ bottom: insets.bottom + 16 }}
-      >
-        <IconButton
-          label={ui('Zoom in')}
-          icon={ZoomIn}
-          variant='outline'
-          onClick={() => zoomBy(1.3)}
-          className='rp-shadow-sm'
-        />
-        <IconButton
-          label={ui('Zoom out')}
-          icon={ZoomOut}
-          variant='outline'
-          onClick={() => zoomBy(1 / 1.3)}
-          className='rp-shadow-sm'
-        />
-        <IconButton
-          label={ui('Fit the whole map to view')}
-          icon={Maximize}
-          variant='outline'
-          onClick={fitView}
-          className='rp-shadow-sm'
-        />
-      </div>
+      <MapCameraControls zoom={zoomBy} fit={fitView} pan={panBy} />
     </div>
   )
 }
