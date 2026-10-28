@@ -173,8 +173,9 @@ function createEstateMcpServer(opts: EstateMcpOptions, call: EstateCall) {
           opts.beforePortal(tool, config, call.authority)
           return query(config, signal)
         })
-        call.signal.throwIfAborted()
+        // Recorded even when the caller has gone: its portals were queried all the same.
         audit(tool, outcomes)
+        call.signal.throwIfAborted()
         const answered = outcomes.flatMap((outcome) =>
           outcome.failure ? [] : [{ config: outcome.config, value: outcome.value }]
         )
@@ -220,7 +221,7 @@ function createEstateMcpServer(opts: EstateMcpOptions, call: EstateCall) {
           query,
           // One ranked list: by relevance where a portal gives one, then in each portal's order.
           results: returned.flatMap(({ config, value }) =>
-            value.map((resource) => ({ ...portalTag(config), ...resource }))
+            value.map((resource) => ({ ...resource, ...portalTag(config) }))
           ).map((resource, order) => ({ resource, order })).sort((a, b) =>
             (b.resource.relevance ?? -1) - (a.resource.relevance ?? -1) || a.order - b.order
           ).map(({ resource }) => resource),

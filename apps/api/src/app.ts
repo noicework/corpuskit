@@ -1105,11 +1105,11 @@ export interface BuildAppOptions {
   /** Requests/min per address for POST /api/ask-estate, which fans one request across every
    *  tenant. Defaults to env RATE_LIMIT_ESTATE_PER_MIN, or 6. 0 disables. */
   rateLimitEstatePerMin?: number
-  /** Authentication attempts/min/IP at the MCP endpoints. Defaults to 60. 0 disables. */
-  rateLimitMcpAuthPerMin?: number
   /** How long one portal may take in an estate MCP call before it is named as a failed source.
    *  Defaults to env ESTATE_SOURCE_TIMEOUT_MS, or 25 seconds. */
   estateSourceTimeoutMs?: number
+  /** Authentication attempts/min/IP at the MCP endpoint. Defaults to 60. 0 disables. */
+  rateLimitMcpAuthPerMin?: number
 }
 
 interface RequestAuthorisation {

@@ -333,8 +333,8 @@ export async function runPortalMatrixRow(row: MatrixRow): Promise<void> {
       '/t/*',
       '/api/tenants',
       '/api/ask-estate',
-      '/api/estate/mcp',
       '/api/t/:slug/config',
+      '/api/estate/mcp',
     ].includes(template)
     if (!special) {
       for (
