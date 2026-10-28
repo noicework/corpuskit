@@ -1,5 +1,6 @@
 import { AGENT_JA } from './messages/agent-ja.ts'
 import { ANSWER_RECORD_JA } from './messages/answer-record-ja.ts'
+import { ANSWER_POLICY_JA } from './messages/answer-policy-ja.ts'
 import { EVALUATIONS_JA } from './messages/evaluations-ja.ts'
 import { LINK_HEALTH_JA } from './messages/link-health-ja.ts'
 import { COMMON_JA } from './messages/common-ja.ts'
@@ -9,6 +10,7 @@ import { PLATFORM_JA } from './messages/platform-ja.ts'
 import { DUPLICATES_JA } from './messages/duplicates-ja.ts'
 import { GRAPH_JA } from './messages/graph-ja.ts'
 import { USAGE_JA } from './messages/usage-ja.ts'
+import { FEDERATED_SEARCH_JA } from './messages/federated-search-ja.ts'
 
 export type MessageValues = Readonly<Record<string, string | number>>
 export type PortalLanguage = 'ja' | 'en'
@@ -36,6 +38,7 @@ export function combineJapaneseCatalogs(
 }
 
 export const JAPANESE_MESSAGES = combineJapaneseCatalogs(
+  ANSWER_POLICY_JA,
   ANSWER_RECORD_JA,
   COMMON_JA,
   EVALUATIONS_JA,
@@ -47,6 +50,7 @@ export const JAPANESE_MESSAGES = combineJapaneseCatalogs(
   GRAPH_JA,
   USAGE_JA,
   AGENT_JA,
+  FEDERATED_SEARCH_JA,
 )
 
 /** Completeness audits must inspect missing keys instead of treating English fallback as translated. */

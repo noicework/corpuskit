@@ -534,7 +534,13 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
     operator: true,
   }),
   entry('http', 'GET', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal'),
-  entry('http', 'PUT', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal'),
+  entry('http', 'PUT', '/api/admin/t/:slug/prompts', 'behaviour.write', 'portal', {
+    subActions: [{
+      action: 'tenant.behaviour.update',
+      permission: 'behaviour.write',
+      scope: 'portal',
+    }],
+  }),
   entry('http', 'GET', '/api/admin/t/:slug/search-configs', 'behaviour.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/search-configs/ensure', 'behaviour.write', 'portal'),
   entry('http', 'POST', '/api/admin/t/:slug/docs/ingest', 'content.write', 'portal'),

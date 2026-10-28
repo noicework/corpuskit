@@ -1,6 +1,14 @@
+import {
+  guardAgentAnswer,
+  portalAnswerPolicy,
+  withPortalAnswerPolicy,
+} from './answer-guardrails.ts'
+import { registerPromptRoutes } from './prompt-routes.ts'
+import { withPortalInstructions } from './portal-instructions.ts'
 import { DuplicateReviewStore } from './duplicate-store.ts'
 import { registerDuplicateRoutes, rememberDuplicateDecision } from './duplicate-routes.ts'
 import { recordComposedSource, recordSSE } from './answer-record-stream.ts'
+import { recordAgentAnswer } from './agent-answer-record-stream.ts'
 import { registerAnswerRecordRoutes } from './answer-record-routes.ts'
 import { type AnswerRecordStoreApi, transientAnswerRecordStore } from './answer-record-store.ts'
 import { registerPortalEvaluations } from './evaluation-integration.ts'
@@ -168,9 +176,14 @@ import {
   type SourceContext,
 } from '@research-portal/retrieval'
 import { publicAgentSseEvent, publicErrorMessage, publicSseEvent } from './public-error.ts'
-import { agentAnswer, type ComposeSource } from './agent-compose.ts'
+import { type ComposeSource } from './agent-compose.ts'
 import { federatedMcpTools } from './federated-mcp.ts'
 import { measureAgentAnswer } from './agent-timing.ts'
+import {
+  federatedCollections,
+  offersFederatedSearch,
+  searchCollections,
+} from './federated-search.ts'
 import {
   type NewTenantInput,
   type TenantPatch,
@@ -932,11 +945,6 @@ const newTenantSchema = z.object({
   organisation: z.string().max(120).optional(),
   tagline: z.string().max(160).optional(),
 }).strict()
-const promptsSchema = z.object({
-  ask: z.string().max(4000).optional(),
-  images: z.boolean().optional(),
-  uncitedAnswers: z.enum(['show', 'refuse']).optional(),
-})
 const labelDefinitionSchema = z.object({
   title: z.string().trim().min(1).max(60),
   text: z.string().trim().max(600).optional(),
@@ -1269,12 +1277,17 @@ export function buildApp(opts: BuildAppOptions): Hono {
       }
       : {}),
   }
-  const { provider } = opts
   const bindings = opts.bindings ?? new BindingStore({})
   const platformDomain = getPlatformDomain(opts.platformDomain ?? process.env.PLATFORM_DOMAIN)
   const tenants = opts.tenants ?? new TenantStore({ PLATFORM_DOMAIN: platformDomain })
+  opts = {
+    ...opts,
+    provider: withPortalInstructions(opts.provider, (slug) => tenants.promptsFor(slug)),
+  }
+  const { provider } = opts
   const answerRecords = opts.answerRecords ?? transientAnswerRecordStore(opts.now)
   const insights = opts.insights ?? new InsightsStore()
+  const answerPolicy = portalAnswerPolicy(tenants, insights)
   const feedback = opts.feedback ?? new FeedbackStore()
   const siteFeedback = opts.siteFeedback ?? new SiteFeedbackStore()
   const routing = opts.routing ?? new RoutingLog()
@@ -2489,7 +2502,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const toolGuard = lifecycleToolGuard(lifecycle, () => opts.now?.() ?? Date.now())
   registerMcpRoutes(app, {
     localMutations: opts.localMutations,
-    provider,
+    provider: withPortalAnswerPolicy(provider, answerPolicy),
     tenant,
     keys: mcpKeys,
     audit: opts.audit,
@@ -2537,7 +2550,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
   const estateTimeoutMs = opts.estateSourceTimeoutMs ??
     Number(process.env.ESTATE_SOURCE_TIMEOUT_MS ?? DEFAULT_ESTATE_SOURCE_TIMEOUT_MS)
   registerEstateMcpRoutes(app, {
-    provider,
+    provider: withPortalAnswerPolicy(provider, answerPolicy),
     audit: opts.audit,
     requestContext,
     authorise: authoriseDeclared,
@@ -2888,6 +2901,26 @@ export function buildApp(opts: BuildAppOptions): Hono {
     if (!config) return c.json({ error: 'unknown_tenant' }, 404)
     const parsed = searchQuerySchema.safeParse({ q: c.req.query('q') })
     if (!parsed.success) return c.json({ error: 'missing_query' }, 400)
+    if (c.req.query('federated') === '1') {
+      if (!offersFederatedSearch(config)) return c.json({ error: 'not_found' }, 404)
+      const collections = federatedCollections({
+        config,
+        query: parsed.data.q,
+        provider,
+        bindings,
+        peerFetch: opts.peerFetch,
+        merchandise: (results) => merchandiseSearchResults(enrichments, config.slug, results),
+      })
+      // Retrieval consumes the caller's buckets once per source, without spending daily asks.
+      const admitted = admitAll(askEntries(c, collections.length, []))
+      if (!admitted.allowed) return rateLimited(c, admitted.retryAfterSec)
+      return c.json(
+        await searchCollections(parsed.data.q, collections, {
+          timeoutMs: opts.agentSourceTimeoutMs,
+          signal: c.req.raw.signal,
+        }),
+      )
+    }
     const modeRaw = c.req.query('mode')
     const mode = modeRaw === 'semantic' || modeRaw === 'keyword' ? modeRaw : 'hybrid'
     const topicIds = (c.req.query('topics') ?? '').split(',').filter(Boolean)
@@ -4275,13 +4308,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
         const record = { citations: 0, groundedness: null as number | null, failed: false }
         try {
           for await (
-            const event of recordComposedSource({
-              store: answerRecords,
-              config,
-              question: parsed.data.query,
-              buildId: opts.buildSha,
-              now: opts.now,
-            }, provider)
+            const event of recordComposedSource(
+              {
+                store: answerRecords,
+                config,
+                question: parsed.data.query,
+                buildId: opts.buildSha,
+                now: opts.now,
+              },
+              withPortalAnswerPolicy(provider, (portal, question) =>
+                answerPolicy(
+                  portal,
+                  question,
+                  requestContext(c.req.raw).requestId,
+                  true,
+                )),
+            )
           ) {
             if (stream.aborted || c.req.raw.signal.aborted) return
             const current = tenant(config.slug)
@@ -4309,6 +4351,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
           insights.record(config.slug, {
             ts: new Date().toISOString(),
             question: parsed.data.query.slice(0, 500),
+            policyRequestId: requestContext(c.req.raw).requestId,
             answered: !record.failed && record.citations > 0,
             citations: record.citations,
             durationSec: null,
@@ -6137,27 +6180,15 @@ export function buildApp(opts: BuildAppOptions): Hono {
     return removed ? c.json({ ok: true }) : c.json({ error: 'not_found' }, 404)
   })
 
-  app.get(declaredRoute('GET', '/api/admin/t/:slug/prompts'), (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    return c.json(tenants.promptsFor(config.slug))
-  })
-
-  app.put(declaredRoute('PUT', '/api/admin/t/:slug/prompts'), async (c) => {
-    const config = tenant(c.req.param('slug'))
-    if (!config) return c.json({ error: 'unknown_tenant' }, 404)
-    const parsed = promptsSchema.safeParse(await c.req.json().catch(() => null))
-    if (!parsed.success) return c.json({ error: 'invalid_request' }, 400)
-    // An absent uncited-answers choice keeps the portal's current one.
-    const uncitedAnswers = parsed.data.uncitedAnswers ??
-      tenants.promptsFor(config.slug).uncitedAnswers
-    tenants.patch(config.slug, {
-      prompts: {
-        ask: parsed.data.ask?.trim() || undefined,
-        ...(uncitedAnswers ? { uncitedAnswers } : {}),
-      },
-    })
-    return c.json({ ok: true })
+  registerPromptRoutes(app, {
+    tenants,
+    tenant,
+    localMutations: opts.localMutations,
+    context: (c) => ({
+      requestId: requestContext(c.req.raw).requestId,
+      actor: requestContext(c.req.raw).actor!,
+    }),
+    signal: (c) => operationSignals.get(c.req.raw) ?? c.req.raw.signal,
   })
 
   app.get(declaredRoute('GET', '/api/admin/t/:slug/search-configs'), async (c) => {
@@ -6872,6 +6903,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       store: answerRecords,
       config,
       question: parsed.data.query,
+      policy: answerPolicy(config, parsed.data.query, requestContext(c.req.raw).requestId),
       resourceId: parsed.data.resourceId,
       buildId: opts.buildSha,
       now: opts.now,
@@ -6915,7 +6947,9 @@ export function buildApp(opts: BuildAppOptions): Hono {
           learningId = learning.id
         }
         if (
-          firstWordsAt === undefined && (learning?.type === 'delta' || learning?.type === 'done') &&
+          firstWordsAt === undefined &&
+          (!evidence.policy.holdsAnswer || learning?.type === 'done') &&
+          (learning?.type === 'delta' || learning?.type === 'done') &&
           typeof learning.text === 'string' && learning.text.trim()
         ) firstWordsAt = performance.now()
         return write(publicSseEvent(event, 'ask'))
@@ -8132,7 +8166,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                   resourceId: group.resourceId,
                   promptAddendum: clauseAddendum(group),
                   noRefusalRetry: true,
-                  ...(settings.ask ? { systemPrompt: settings.ask } : {}),
+                  ...(settings.ask ? { answerInstructions: settings.ask } : {}),
                 })
               ) {
                 if (event.type === 'delta') {
@@ -8285,7 +8319,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
                 ? { priorResourceIds: priorIds }
                 : {}),
               ...(pinnedQueries.length > 0 ? { pinnedQueries } : {}),
-              ...(settings.ask ? { systemPrompt: settings.ask } : {}),
+              ...(settings.ask ? { answerInstructions: settings.ask } : {}),
               ...(settings.images ? { images: true } : {}),
               ...(attemptContext ? { sourceContext: attemptContext } : {}),
               ...(attemptAddendum ? { promptAddendum: attemptAddendum } : {}),
@@ -8443,6 +8477,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
         insights.record(config.slug, {
           ts: new Date().toISOString(),
           question: query.slice(0, 500),
+          policyRequestId: requestContext(c.req.raw).requestId,
           answered: !record.failed && !record.refused && record.citations > 0,
           citations: record.citations,
           durationSec: record.durationSec,
@@ -8556,33 +8591,47 @@ export function buildApp(opts: BuildAppOptions): Hono {
         if (cancelled()) return
         for await (
           const event of measureAgentAnswer(
-            agentAnswer({
-              provider,
-              host,
-              portals,
-              peers,
-              stillParticipates: (slug) => {
-                const current = tenant(slug)
-                return current !== undefined && participatesInFederation(current)
-              },
-              question: request.query,
-              ...(request.context ? { context: request.context } : {}),
-              signal: upstream.signal,
-              ...(opts.agentSourceTimeoutMs ? { sourceTimeoutMs: opts.agentSourceTimeoutMs } : {}),
-              ...(opts.agentComposeTimeoutMs
-                ? { composeTimeoutMs: opts.agentComposeTimeoutMs }
-                : {}),
-            }),
+            guardAgentAnswer(
+              answerPolicy(host, request.query, undefined, true),
+              request.query,
+              () =>
+                recordAgentAnswer({
+                  store: answerRecords,
+                  buildId: opts.buildSha,
+                  now: opts.now,
+                  provider,
+                  host,
+                  portals,
+                  peers,
+                  stillParticipates: (slug) => {
+                    const current = tenant(slug)
+                    return current !== undefined && participatesInFederation(current)
+                  },
+                  question: request.query,
+                  ...(request.context ? { context: request.context } : {}),
+                  signal: upstream.signal,
+                  ...(opts.agentSourceTimeoutMs
+                    ? { sourceTimeoutMs: opts.agentSourceTimeoutMs }
+                    : {}),
+                  ...(opts.agentComposeTimeoutMs
+                    ? { composeTimeoutMs: opts.agentComposeTimeoutMs }
+                    : {}),
+                }),
+            ),
             host.slug,
             request.query,
             insights,
           )
         ) {
-          if (cancelled()) return
+          if (cancelled()) {
+            return
+          }
           await send(event)
         }
       } catch (err) {
-        if (cancelled()) return
+        if (cancelled()) {
+          return
+        }
         await send(
           err instanceof AgentAskError
             ? { type: 'error', code: err.code, message: err.message, retryable: err.retryable }

@@ -1,3 +1,4 @@
+import { PortalPromptsSchema } from '@research-portal/core'
 import {
   AccessModeSchema,
   isSafeLifecycleNote,
@@ -183,6 +184,17 @@ const id: Validator = (value): value is string =>
 const declaredFields = DECLARATIONS.flatMap((item) =>
   item.subActions?.flatMap((action) => action.fields ?? []) ?? []
 )
+const promptSnapshot = (value: unknown): value is string => {
+  if (typeof value !== 'string' || value.length > 100000) return false
+  try {
+    return PortalPromptsSchema.extend({
+      ask: PortalPromptsSchema.shape.ask.unwrap().max(4000).optional(),
+    })
+      .safeParse(JSON.parse(value)).success
+  } catch {
+    return false
+  }
+}
 const fields = {
   externalReason: member([
     'configuration',
@@ -210,6 +222,9 @@ const fields = {
   asksPerDay: count,
   agentsEnabled: flag,
   note: isSafeLifecycleNote,
+  // Explicit configuration history only, never a request body or generated answer.
+  previousPrompts: promptSnapshot,
+  prompts: promptSnapshot,
   previousAccessMode: member(AccessModeSchema.options),
   accessMode: member(AccessModeSchema.options),
   keyRole: member(PORTAL_ROLES),
@@ -398,6 +413,8 @@ const actionFields = {
   ],
   'tenant.configuration.update': ['code', 'permission', 'changedFields'],
   'tenant.behaviour.update': [
+    'previousPrompts',
+    'prompts',
     'code',
     'permission',
     'changedFields',
@@ -552,7 +569,8 @@ export function validateAuditEvent(event: AuditEvent): void {
       throw new AuditWriteError()
     }
     if (
-      event.detail_json.length > 4096 ||
+      // Full before/after policy snapshots are explicitly schema-bounded, unlike ordinary detail.
+      event.detail_json.length > (event.action === 'tenant.behaviour.update' ? 256_000 : 4096) ||
       JSON.stringify(redactAuditDetail(event.action, JSON.parse(event.detail_json))) !==
         event.detail_json
     ) {

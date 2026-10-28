@@ -121,6 +121,8 @@ export const AgentAskEventSchema = z.discriminatedUnion('type', [
     /** Authoritative citation-checked text, replacing provisional generation deltas. */
     text: z.string().optional(),
   }),
+  /** Persisted on the host portal before the terminal event. */
+  z.object({ type: z.literal('answer-record'), answerId: z.string().uuid() }),
   /** The stream's last event when it ends without an answer. */
   z.object({
     type: z.literal('error'),

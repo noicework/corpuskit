@@ -1,6 +1,22 @@
 /** Remove credentials and network/session identifiers while retaining the research question. */
 export function redactAnswerRecordText(value: string): string {
   return value
+    .replace(
+      /\b(?:authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token)\s*:\s*[^\r\n]+/gi,
+      '[redacted header]',
+    )
+    .replace(/https?:\/\/[^\s"<>]+/gi, (url) => {
+      try {
+        const parsed = new URL(url)
+        parsed.username = ''
+        parsed.password = ''
+        parsed.search = ''
+        parsed.hash = ''
+        return parsed.toString()
+      } catch {
+        return '[redacted URL]'
+      }
+    })
     .replace(/\b(?:Bearer|Operator)\s+[A-Za-z0-9_.+/=-]+/gi, '[redacted credential]')
     .replace(/\bck_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/g, '[redacted credential]')
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted credential]')
@@ -15,18 +31,6 @@ export function redactAnswerRecordText(value: string): string {
         return '[redacted address]'
       } catch {
         return candidate
-      }
-    })
-    .replace(/https?:\/\/[^\s"<>]+/gi, (url) => {
-      try {
-        const parsed = new URL(url)
-        parsed.username = ''
-        parsed.password = ''
-        parsed.search = ''
-        parsed.hash = ''
-        return parsed.toString()
-      } catch {
-        return '[redacted URL]'
       }
     })
 }

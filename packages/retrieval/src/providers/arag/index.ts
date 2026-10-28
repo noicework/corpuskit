@@ -49,7 +49,7 @@ import {
   extractPageSummary,
   findPageSummaryFieldId,
 } from '../../merchandise.ts'
-import { variantPreamble } from '../../prompts.ts'
+import { appendAnswerInstructions, variantPreamble } from '../../prompts.ts'
 import { COMPOSE_MAX_PASSAGES, COMPOSE_PASSAGE_CHARS, COMPOSE_PROMPT_CHARS } from '../../compose.ts'
 import { StructuredRefusals } from './structured-refusals.ts'
 import { AragApiError, type KbBinding, KbClient, ndjson } from './client.ts'
@@ -4210,7 +4210,7 @@ export class AragProvider implements RetrievalProvider {
     tenant: TenantConfig,
     question: string,
     passages: readonly ComposePassage[],
-    opts: Pick<AgentAskOptions, 'context' | 'signal'> = {},
+    opts: Pick<AgentAskOptions, 'context' | 'signal'> & { answerInstructions?: string } = {},
   ): Promise<string> {
     let answer = ''
     for await (const delta of this.composeStream(tenant, question, passages, opts)) answer += delta
@@ -4225,7 +4225,7 @@ export class AragProvider implements RetrievalProvider {
     tenant: TenantConfig,
     question: string,
     passages: readonly ComposePassage[],
-    opts: Pick<AgentAskOptions, 'context' | 'signal'> = {},
+    opts: Pick<AgentAskOptions, 'context' | 'signal'> & { answerInstructions?: string } = {},
   ): AsyncIterable<string> {
     if (passages.length > COMPOSE_MAX_PASSAGES) throw new Error('Too many composition passages')
     const earlier = (opts.context ?? []).slice(-4).map((turn) =>
@@ -4233,18 +4233,22 @@ export class AragProvider implements RetrievalProvider {
         turn.text.slice(0, 600)
       }`
     )
+    const numbered = passages.map((passage, index) =>
+      `[${index + 1}] ${passage.source.slice(0, 120)} | ${passage.title.slice(0, 160)}\n${
+        passage.text.slice(0, COMPOSE_PASSAGE_CHARS)
+      }`
+    )
     const prompt = [
       `Question: ${question.slice(0, 2000)}`,
       ...(earlier.length > 0 ? ['', ...earlier] : []),
       '',
-      ...passages.map((passage, index) =>
-        `[${index + 1}] ${passage.source.slice(0, 120)} | ${passage.title.slice(0, 160)}\n${
-          passage.text.slice(0, COMPOSE_PASSAGE_CHARS)
-        }`
-      ),
+      ...numbered,
     ].join('\n')
-    const instructions = COMPOSE_INSTRUCTIONS.replace('in `answer` ', '') +
-      (tenant.languagePolicy ? '' : ' Use Australian English.')
+    const instructions = appendAnswerInstructions(
+      COMPOSE_INSTRUCTIONS.replace('in `answer` ', '') +
+        (tenant.languagePolicy ? '' : ' Use Australian English.'),
+      opts.answerInstructions,
+    )
     if (prompt.length + instructions.length > COMPOSE_PROMPT_CHARS) {
       throw new Error('Composition prompt is too large')
     }
@@ -4255,6 +4259,10 @@ export class AragProvider implements RetrievalProvider {
         query: prompt,
         features: ['keyword', 'semantic'],
         prompt: { system: instructions },
+        // The passages also ride extra_context: when the box's own one-paragraph retrieval finds
+        // nothing, the platform answers "Not enough data" without calling the model unless the
+        // context is supplied here.
+        extra_context: numbered,
         top_k: 1,
         max_tokens: 4096,
       },
@@ -4338,40 +4346,43 @@ export class AragProvider implements RetrievalProvider {
       // Nuclia's default RAG prompt answers "Not enough data to answer this."
       // as a guardrail even when relevant sources were retrieved - override it.
       prompt: {
-        system: variantPreamble(intent?.answer.promptVariant) + (opts.systemPrompt?.trim() ||
-          (opts.docScope
-            ? `You are the help assistant for the ${tenant.branding.productName} research ` +
-              'portal. Answer the user\'s "how do I..." question about using the portal, using ' +
-              'ONLY the provided help documentation as your source. Be clear, concise and ' +
-              'practical, in Australian English, and write well-structured Markdown. ' +
-              (footnotes
-                ? 'Support the steps and facts with citations to the documentation. '
-                : 'Cite the documentation at claim level after each step or fact. ') +
-              'If the ' +
-              'documentation does not cover the question, say so plainly and suggest where in the ' +
-              'portal to look; never invent a feature that is not described in the documentation. ' +
-              'Call the material "the documentation" or "the Help pages", never "the context" ' +
-              'or "the provided context" - a reader never sees a context. Never write "Not ' +
-              'enough data to answer this": when the documentation does not describe something, ' +
-              'say that in plain words and name the nearest feature it does describe.'
-            : `You are a research analyst for ${tenant.branding.organisation}. Always answer the ` +
-              'question using the provided context. Synthesise across sources even when the ' +
-              'context is partial - surface what IS known and be specific. Never reply that there ' +
-              'is not enough data, and never refuse, when any relevant context is present. For any ' +
-              "part of the question the context does not address, say plainly that the portal's " +
-              'sources do not cover it rather than answering that part from general knowledge. Write ' +
-              'clear, well-structured prose with Markdown. ' +
-              (tenant.languagePolicy ? '' : 'Use Australian English. ') +
-              (footnotes
-                ? 'Support factual claims with citations to the evidence. '
-                : 'Cite evidence at claim level after each factual claim. ') +
-              'If a statement is your inference rather than something ' +
-              'the context states, mark it (inference). When the context ' +
-              'contains conflicting, negative or nuanced findings (adverse observations, ' +
-              'non-detections, disagreements between studies), state them explicitly with their ' +
-              'specifics - a researcher needs the tension, never a smoothed summary. Refer to the ' +
-              'material as "the cited sources", never as "the context"; a reader never sees the ' +
-              'context, only the sources. Never write "Not enough data to answer this".')) +
+        system: appendAnswerInstructions(
+          variantPreamble(intent?.answer.promptVariant) +
+            (opts.docScope
+              ? `You are the help assistant for the ${tenant.branding.productName} research ` +
+                'portal. Answer the user\'s "how do I..." question about using the portal, using ' +
+                'ONLY the provided help documentation as your source. Be clear, concise and ' +
+                'practical, in Australian English, and write well-structured Markdown. ' +
+                (footnotes
+                  ? 'Support the steps and facts with citations to the documentation. '
+                  : 'Cite the documentation at claim level after each step or fact. ') +
+                'If the ' +
+                'documentation does not cover the question, say so plainly and suggest where in the ' +
+                'portal to look; never invent a feature that is not described in the documentation. ' +
+                'Call the material "the documentation" or "the Help pages", never "the context" ' +
+                'or "the provided context" - a reader never sees a context. Never write "Not ' +
+                'enough data to answer this": when the documentation does not describe something, ' +
+                'say that in plain words and name the nearest feature it does describe.'
+              : `You are a research analyst for ${tenant.branding.organisation}. Always answer the ` +
+                'question using the provided context. Synthesise across sources even when the ' +
+                'context is partial - surface what IS known and be specific. Never reply that there ' +
+                'is not enough data, and never refuse, when any relevant context is present. For any ' +
+                "part of the question the context does not address, say plainly that the portal's " +
+                'sources do not cover it rather than answering that part from general knowledge. Write ' +
+                'clear, well-structured prose with Markdown. ' +
+                (tenant.languagePolicy ? '' : 'Use Australian English. ') +
+                (footnotes
+                  ? 'Support factual claims with citations to the evidence. '
+                  : 'Cite evidence at claim level after each factual claim. ') +
+                'If a statement is your inference rather than something ' +
+                'the context states, mark it (inference). When the context ' +
+                'contains conflicting, negative or nuanced findings (adverse observations, ' +
+                'non-detections, disagreements between studies), state them explicitly with their ' +
+                'specifics - a researcher needs the tension, never a smoothed summary. Refer to the ' +
+                'material as "the cited sources", never as "the context"; a reader never sees the ' +
+                'context, only the sources. Never write "Not enough data to answer this".'),
+          opts.answerInstructions ?? opts.systemPrompt,
+        ) +
           (opts.promptAddendum?.trim() ? `\n\n${opts.promptAddendum.trim()}` : '') +
           (tenant.languagePolicy
             ? '\n\nPortal language policy, including help answers and custom prompt wording: ' +

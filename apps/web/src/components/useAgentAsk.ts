@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import type { AgentAskEvent } from '@research-portal/core'
 import { ApiError, streamAgentAsk, streamAgentAskAcross } from '../api/client.ts'
 import {
@@ -19,6 +19,15 @@ import {
  * session runs one to two minutes, so five is a hang, not a slow answer.
  */
 export const AGENT_ASK_TIME_LIMIT_MS = 300_000
+
+/**
+ * How long a run outlives the last page watching it. The access layer withdraws authority on
+ * every return to the window and re-reads the session, which swaps the portal for the access
+ * gate for a moment and remounts the page; a run that died with the page would reset a
+ * two-minute answer every time the reader switched tabs. The page re-attaches well inside
+ * this; a reader who has left for another page is not kept waiting on.
+ */
+const RUN_GRACE_MS = 5000
 
 /** The least time between two step announcements to assistive technology. */
 const ANNOUNCE_EVERY_MS = 2500
@@ -43,36 +52,115 @@ export interface UseAgentAsk {
   stop: () => void
 }
 
+interface RunSnapshot {
+  state: AgentAskState
+  record: AgentAnswerRecord | null
+  question: string | null
+  startedAt: number | null
+  /** Who was signed in when the question was sent; a different identity ends the run. */
+  identity: string | null
+}
+
 /**
- * Runs one agent ask at a time and folds its events into the view state. Asking again ends the
- * previous stream. The reader stopping, the page's own time limit and a broken connection each
- * end the state with what had arrived kept.
+ * One portal's run, held outside React so it survives the page being remounted (see
+ * `RUN_GRACE_MS`). The page reads it through `useSyncExternalStore`.
+ */
+interface RunEntry {
+  snapshot: RunSnapshot
+  listeners: Set<() => void>
+  controller: AbortController | null
+  limit: ReturnType<typeof setTimeout> | null
+  release: ReturnType<typeof setTimeout> | null
+}
+
+const runs = new Map<string, RunEntry>()
+
+const IDLE: RunSnapshot = {
+  state: initialAgentAskState(),
+  record: null,
+  question: null,
+  startedAt: null,
+  identity: null,
+}
+
+function entryFor(slug: string): RunEntry {
+  let entry = runs.get(slug)
+  if (!entry) {
+    entry = { snapshot: IDLE, listeners: new Set(), controller: null, limit: null, release: null }
+    runs.set(slug, entry)
+  }
+  return entry
+}
+
+function update(entry: RunEntry, patch: (snapshot: RunSnapshot) => RunSnapshot): void {
+  entry.snapshot = patch(entry.snapshot)
+  for (const listener of entry.listeners) listener()
+}
+
+function clearLimit(entry: RunEntry): void {
+  if (entry.limit !== null) clearTimeout(entry.limit)
+  entry.limit = null
+}
+
+/** Ends the run on the reader's side, keeping what arrived. */
+function endRun(
+  entry: RunEntry,
+  controller: AbortController,
+  ending: Parameters<typeof endAgentAsk>[1],
+): void {
+  if (entry.controller !== controller || controller.signal.aborted) return
+  controller.abort()
+  clearLimit(entry)
+  update(entry, (snapshot) => ({
+    ...snapshot,
+    state: endAgentAsk(snapshot.state, ending, Date.now()),
+  }))
+}
+
+/**
+ * Runs one agent ask at a time for a portal and folds its events into the view state. Asking
+ * again ends the previous stream. The reader stopping, the page's own time limit and a broken
+ * connection each end the state with what had arrived kept. The run lives outside the page, so
+ * the page being remounted (the access layer does that on every return to the window) does not
+ * lose it: the new page picks the run up where it is.
  */
 export function useAgentAsk(options: {
   slug: string
-  /** Whether the reader may still ask: checked before every event is applied. */
+  /** Whether the reader may ask, checked when the ask is sent. */
   canAsk: () => boolean
+  /**
+   * The signed-in identity, null while access is being re-read. The run is read outside the
+   * access generation (see `AgentAskStreamOptions.durable`), so this is what ends it when the
+   * person at the keyboard changes.
+   */
+  identityKey: string | null
   messages: { timeout: string; unavailable: string; dropped: string; notOffered: string }
 }): UseAgentAsk {
-  const { slug, canAsk, messages } = options
-  const [state, setState] = useState<AgentAskState>(initialAgentAskState)
-  const [record, setRecord] = useState<AgentAnswerRecord | null>(null)
-  const [question, setQuestion] = useState<string | null>(null)
-  const [startedAt, setStartedAt] = useState<number | null>(null)
+  const { slug, canAsk, identityKey, messages } = options
+  const subscribe = useCallback((listener: () => void) => {
+    const current = entryFor(slug)
+    if (current.release !== null) clearTimeout(current.release)
+    current.release = null
+    current.listeners.add(listener)
+    return () => {
+      current.listeners.delete(listener)
+      if (current.listeners.size > 0 || current.controller === null) return
+      // Nobody is watching: give a remount its moment, then stop the stream and keep the rest.
+      current.release = setTimeout(() => {
+        current.release = null
+        if (current.listeners.size > 0 || current.controller === null) return
+        endRun(current, current.controller, { code: 'cancelled' })
+        current.controller = null
+      }, RUN_GRACE_MS)
+    }
+  }, [slug])
+  const snapshot = useSyncExternalStore(
+    subscribe,
+    () => entryFor(slug).snapshot,
+    () => entryFor(slug).snapshot,
+  )
+  const streaming = snapshot.state.status === 'streaming'
   const [now, setNow] = useState(() => Date.now())
-  const abortRef = useRef<AbortController | null>(null)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const streaming = state.status === 'streaming'
-
-  const clearTimer = () => {
-    if (timerRef.current !== null) clearTimeout(timerRef.current)
-    timerRef.current = null
-  }
-
-  useEffect(() => () => {
-    abortRef.current?.abort()
-    clearTimer()
-  }, [])
 
   // One tick a second while the stream runs: the elapsed clock and the open steps' counters
   // are what keeps a long wait visibly alive.
@@ -84,59 +172,71 @@ export function useAgentAsk(options: {
   }, [streaming])
 
   const stop = useCallback(() => {
-    const controller = abortRef.current
+    const current = entryFor(slug)
+    const controller = current.controller
     if (!controller) return
-    controller.abort()
-    clearTimer()
-    setState((prev) => endAgentAsk(prev, { code: 'cancelled' }, Date.now()))
+    endRun(current, controller, { code: 'cancelled' })
+    current.controller = null
     setNow(Date.now())
-  }, [])
+  }, [slug])
+
+  // A different signed-in identity than the one that asked ends the run: the stream is not
+  // tied to the access generation, so this is where that guarantee is kept.
+  useEffect(() => {
+    if (identityKey === null || !streaming) return
+    if (snapshot.identity !== null && snapshot.identity !== identityKey) stop()
+  }, [identityKey, streaming, snapshot.identity, stop])
 
   const ask = useCallback((run: AgentAskRun) => {
-    abortRef.current?.abort()
-    clearTimer()
+    const current = entryFor(slug)
+    if (current.controller) {
+      endRun(current, current.controller, { code: 'cancelled' })
+      current.controller = null
+    }
     if (!canAsk()) return
     const controller = new AbortController()
-    abortRef.current = controller
+    current.controller = controller
     const sentAt = Date.now()
-    setQuestion(run.query)
-    setStartedAt(sentAt)
     setNow(sentAt)
-    setState({ ...initialAgentAskState(), status: 'streaming' })
-    setRecord(emptyAgentAnswer(run.query))
-
-    const current = () => abortRef.current === controller && !controller.signal.aborted
-    const end = (
-      ending:
-        | { code: 'cancelled' }
-        | { code: 'timeout' | 'upstream' | 'not_configured'; message: string },
-    ) => {
-      if (!current()) return
-      controller.abort()
-      clearTimer()
-      setState((prev) => endAgentAsk(prev, ending, Date.now()))
-      setNow(Date.now())
+    update(current, () => ({
+      state: { ...initialAgentAskState(), status: 'streaming' },
+      record: emptyAgentAnswer(run.query),
+      question: run.query,
+      startedAt: sentAt,
+      identity: identityKey,
+    }))
+    const live = () => current.controller === controller && !controller.signal.aborted
+    const end = (ending: Parameters<typeof endAgentAsk>[1]) => {
+      endRun(current, controller, ending)
+      if (current.controller === controller) current.controller = null
     }
-    timerRef.current = setTimeout(
+    current.limit = setTimeout(
       () => end({ code: 'timeout', message: messages.timeout }),
       AGENT_ASK_TIME_LIMIT_MS,
     )
 
     const onEvent = (event: AgentAskEvent) => {
-      if (!current() || !canAsk()) return
-      setState((prev) => applyAgentAskEvent(prev, event, Date.now()))
-      setRecord((prev) => prev ? applyAgentEvent(prev, event) : prev)
-      if (event.type === 'done' || event.type === 'error') clearTimer()
+      if (!live()) return
+      update(current, (snapshot) => ({
+        ...snapshot,
+        state: applyAgentAskEvent(snapshot.state, event, Date.now()),
+        record: snapshot.record ? applyAgentEvent(snapshot.record, event) : snapshot.record,
+      }))
+      if (event.type === 'done' || event.type === 'error') {
+        clearLimit(current)
+        if (current.controller === controller) current.controller = null
+      }
     }
     const body = { query: run.query }
+    const durable = { durable: true }
     const stream = run.slugs.length > 1
-      ? streamAgentAskAcross({ ...body, slugs: run.slugs }, onEvent, controller.signal)
-      : streamAgentAsk(run.slugs[0] ?? slug, body, onEvent, controller.signal)
+      ? streamAgentAskAcross({ ...body, slugs: run.slugs }, onEvent, controller.signal, durable)
+      : streamAgentAsk(run.slugs[0] ?? slug, body, onEvent, controller.signal, durable)
     stream.then(() => {
       // The stream closed without its last event: the connection went, not the agent.
       end({ code: 'upstream', message: messages.dropped })
     }).catch((err: unknown) => {
-      if (!current()) return
+      if (!live()) return
       // The portal's own words, never the browser's or an upstream one. The detail stays in
       // the console, where a developer can read it.
       console.error('agent ask stream failed', err)
@@ -149,10 +249,26 @@ export function useAgentAsk(options: {
         : messages.unavailable
       end({ code: 'upstream', message })
     })
-  }, [slug, canAsk, messages.timeout, messages.unavailable, messages.dropped, messages.notOffered])
+  }, [
+    slug,
+    canAsk,
+    identityKey,
+    messages.timeout,
+    messages.unavailable,
+    messages.dropped,
+    messages.notOffered,
+  ])
 
-  const elapsedMs = startedAt === null ? 0 : Math.max(0, now - startedAt)
-  return { state, record, question, elapsedMs, streaming, ask, stop }
+  const elapsedMs = snapshot.startedAt === null ? 0 : Math.max(0, now - snapshot.startedAt)
+  return {
+    state: snapshot.state,
+    record: snapshot.record,
+    question: snapshot.question,
+    elapsedMs,
+    streaming,
+    ask,
+    stop,
+  }
 }
 
 /**
