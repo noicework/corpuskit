@@ -21,11 +21,11 @@ import {
 export const AGENT_ASK_TIME_LIMIT_MS = 300_000
 
 /**
- * How long a run outlives the last page watching it. The access layer withdraws authority on
- * every return to the window and re-reads the session, which swaps the portal for the access
- * gate for a moment and remounts the page; a run that died with the page would reset a
- * two-minute answer every time the reader switched tabs. The page re-attaches well inside
- * this; a reader who has left for another page is not kept waiting on.
+ * How long a run outlives the last page watching it. When a fresh read of the session finds
+ * the reader's access changed (a new role, say), the access layer swaps the portal for the
+ * access gate for a moment and remounts the page; a run that died with the page would reset a
+ * two-minute answer. The page re-attaches well inside this; a reader who has left for another
+ * page is not kept waiting on.
  */
 const RUN_GRACE_MS = 5000
 
@@ -121,8 +121,8 @@ function endRun(
  * Runs one agent ask at a time for a portal and folds its events into the view state. Asking
  * again ends the previous stream. The reader stopping, the page's own time limit and a broken
  * connection each end the state with what had arrived kept. The run lives outside the page, so
- * the page being remounted (the access layer does that on every return to the window) does not
- * lose it: the new page picks the run up where it is.
+ * the page being remounted (the access layer does that when the reader's access changes) does
+ * not lose it: the new page picks the run up where it is.
  */
 export function useAgentAsk(options: {
   slug: string

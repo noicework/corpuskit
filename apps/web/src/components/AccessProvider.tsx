@@ -12,14 +12,8 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useLocation } from 'react-router-dom'
 import type { Permission, Scope } from '@research-portal/core'
-import {
-  AuthorityController,
-  FilePickerFocus,
-  registerAuthorityController,
-  sameAuthority,
-} from '../api/access-lifecycle.ts'
+import { AuthorityController, registerAuthorityController } from '../api/access-lifecycle.ts'
 import type { AuthSession } from '../api/auth.ts'
-import { focusAnchor, restoreFocus } from './return-focus.ts'
 
 interface AccessValue {
   state: { status: 'loading' | 'ready' | 'unavailable'; session: AuthSession | null }
@@ -57,6 +51,8 @@ export function AccessProvider(
   const snapshot = useCallback(() => controller.context, [controller])
   const context = useSyncExternalStore(subscribe, snapshot)
   const refresh = useCallback(() => controller.refresh(slug ?? undefined), [controller, slug])
+  /** The mounted generation's query client, fetched again after a return that keeps authority. */
+  const [generationClients] = useState(() => new Set<QueryClient>())
 
   useLayoutEffect(() => registerAuthorityController(controller), [controller])
   useLayoutEffect(() => {
@@ -75,48 +71,21 @@ export function AccessProvider(
     return () => controller.invalidate('page scope changed', 'loading')
   }, [controller, refresh])
   useEffect(() => {
-    // An observed return withdraws authority until the session is read again. The focus a
-    // native file picker hands back just before its change event is not a return: withdrawing
-    // then would drop the chosen file, so that one is re-checked without withdrawal.
-    const picker = new FilePickerFocus()
-    const activated = (event: Event) => {
-      if (event.target instanceof HTMLInputElement && event.target.type === 'file') {
-        picker.activated(Date.now())
-      }
-    }
-    const blurred = () => picker.blurred(Date.now())
-    let restoring: (() => void) | undefined
+    // A return to the window reads the session again without withdrawing authority first. The
+    // same authority keeps the page, its requests and the person's place, and the page's data is
+    // fetched again behind what is on screen; any change, or a read that fails, withdraws
+    // authority as a new session does. Nothing is handed to the page while the read is out
+    // (`AuthorityRequest.hold`).
     const revalidate = () => {
-      if (picker.focused() === 'picker') {
-        void controller.revalidate(slug ?? undefined).catch(() => {})
-        return
-      }
-      // The withdrawal remounts the page. A check that confirms the same authority gives the
-      // person their place back; any other outcome leaves focus to the access gate.
-      restoring?.()
-      const before = controller.status === 'ready' ? controller.session : null
-      const anchor = before ? focusAnchor(document) : null
-      void refresh().then(() => {
-        const after = controller.session
-        if (!anchor || !before || !after || !sameAuthority(before, after)) return
-        const context = controller.context
-        restoring = restoreFocus(
-          document,
-          anchor,
-          () => controller.status === 'ready' && controller.context === context,
-        )
+      const before = controller.context
+      void controller.revalidate(slug ?? undefined).then(() => {
+        if (controller.context !== before) return
+        for (const client of generationClients) void client.invalidateQueries()
       }, () => {})
     }
-    document.addEventListener('click', activated, true)
-    globalThis.addEventListener('blur', blurred)
     globalThis.addEventListener('focus', revalidate)
-    return () => {
-      restoring?.()
-      document.removeEventListener('click', activated, true)
-      globalThis.removeEventListener('blur', blurred)
-      globalThis.removeEventListener('focus', revalidate)
-    }
-  }, [controller, refresh, slug])
+    return () => globalThis.removeEventListener('focus', revalidate)
+  }, [controller, generationClients, slug])
 
   const matches = context.slug === slug
   const status = controller.status === 'ready' && !matches ? 'loading' : controller.status
@@ -133,7 +102,11 @@ export function AccessProvider(
   }
   return (
     <AccessContext.Provider value={value}>
-      <GenerationQueries key={`${slug}:${context.generation}`} controller={controller}>
+      <GenerationQueries
+        key={`${slug}:${context.generation}`}
+        controller={controller}
+        clients={generationClients}
+      >
         {children}
       </GenerationQueries>
     </AccessContext.Provider>
@@ -142,7 +115,11 @@ export function AccessProvider(
 
 /** Every unchanged legacy query key is isolated by this owned client. */
 function GenerationQueries(
-  { controller, children }: { controller: AuthorityController; children: ReactNode },
+  { controller, clients, children }: {
+    controller: AuthorityController
+    clients: Set<QueryClient>
+    children: ReactNode
+  },
 ) {
   const [client] = useState(() =>
     new QueryClient({
@@ -158,11 +135,13 @@ function GenerationQueries(
       client.clear()
     }
     const unregister = controller.registerCleanup(clear)
+    clients.add(client)
     return () => {
+      clients.delete(client)
       unregister()
       clear()
     }
-  }, [client, controller])
+  }, [client, clients, controller])
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>
 }
 

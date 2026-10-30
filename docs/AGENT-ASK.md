@@ -374,11 +374,11 @@ of the scrolling column, and the steps sit in a right rail from `xl` up.
 - Assistive technology hears one polite status line: the step the portal is on (at most one
   every few seconds), the failed-source notice once, and the answer's completion; never the
   answer text as it streams. Errors are an alert in the card.
-- A run outlives the page. The access layer withdraws authority on every return to the window
-  and re-reads the session, which remounts the page for a moment; the run is held outside the
-  page (`useAgentAsk`) and its stream is read outside the access generation (`durable` on
-  `streamAgentAsk`), so the page re-attaches to it. A different signed-in identity ends the run,
-  and a page nobody returns to within a few seconds stops it, keeping what arrived.
+- A run outlives the page. When the access layer reads the session again (on every return to
+  the window) and finds the reader's access changed, it remounts the page for a moment; the run
+  is held outside the page (`useAgentAsk`) and its stream is read outside the access generation
+  (`durable` on `streamAgentAsk`), so the page re-attaches to it. A different signed-in identity
+  ends the run, and a page nobody returns to within a few seconds stops it, keeping what arrived.
 
 ## Saving an answer as an evidence brief
 

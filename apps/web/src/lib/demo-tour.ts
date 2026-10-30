@@ -224,9 +224,10 @@ export function needsFirstPdf(config: Pick<TenantConfig, 'copy'>): boolean {
 
 // ---- Open across a remount --------------------------------------------------------------
 //
-// The page remounts whenever the window regains focus (the access layer re-reads the session),
-// which would close the tour on every alt-tab. So while the tour is open, the step it is on is
-// kept for the tab; a remount opens it again at that step, and closing it forgets.
+// The page remounts when a fresh read of the session finds the person's access changed (the
+// access layer starts a new generation), which would close the tour. So while the tour is open,
+// the step it is on is kept for the tab; a remount opens it again at that step, and closing it
+// forgets.
 
 const OPEN_KEY = 'rp_demo_tour_open'
 

@@ -5,6 +5,7 @@ import {
   assertCurrentBuild,
   buildComponentFixture,
   captureBoundary,
+  returnAfterAccessChange,
   sourcePath,
 } from './support/rbac-fixture.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
@@ -441,8 +442,8 @@ Deno.test('Access has independent section permissions and no forbidden member re
           ) => p === 'portal.read' || p === 'portal.ask' || p === permission)
           return Response.json(snapshot)
         }
-        dispatchEvent(new Event('focus'))
       }, { args: [permission] })
+      await returnAfterAccessChange(page)
       await page.waitForSelector('[data-access-panel]')
       expect(await page.$('[data-manage-tab=access]')).not.toBeNull()
       if (permission === 'members.manage') await page.waitForSelector('[data-assignment-editor]')

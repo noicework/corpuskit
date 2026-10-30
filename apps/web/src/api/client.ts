@@ -543,9 +543,9 @@ export function streamAgentAskAcross(
 }
 
 /**
- * `durable`: the stream is read outside the access generation, so a return to the window (which
- * withdraws authority, re-reads the session and starts a new generation) does not cut a
- * two-minute answer short. The caller takes on what the generation would have done: it must end
+ * `durable`: the stream is read outside the access generation, so a change of access that starts
+ * a new generation (a new role found when the session is read again) does not cut a two-minute
+ * answer short. The caller takes on what the generation would have done: it must end
  * the stream itself if the signed-in identity changes. The server authorises every event as it
  * is sent regardless.
  */

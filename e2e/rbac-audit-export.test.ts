@@ -1,7 +1,11 @@
 import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
 import { startTestServer } from './support/test-server.ts'
-import { assertCurrentBuild, captureBoundary } from './support/rbac-fixture.ts'
+import {
+  assertCurrentBuild,
+  captureBoundary,
+  returnAfterAccessChange,
+} from './support/rbac-fixture.ts'
 import { openLocalRbac } from '../apps/api/src/rbac-local.ts'
 import { createAuditEvent } from '../apps/api/src/audit.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
@@ -131,15 +135,15 @@ Deno.test('audit exports use independent grants, truthful pages and no unauthori
         return Response.json(value)
       }
     })
-    await page.evaluate(() => dispatchEvent(new Event('focus')))
+    await returnAfterAccessChange(page)
     await page.waitForSelector('[data-audit-results]')
     expect(await page.$('[data-audit-export]')).toBeNull()
     expect(server.requests.some((r) => r.path.includes('/audit/export'))).toBe(false)
     const reads = server.requests.filter((r) => r.path.includes('/audit?')).length
     await page.evaluate(() => {
       Object.assign(globalThis, { removedAuditPermission: 'audit.read' })
-      dispatchEvent(new Event('focus'))
     })
+    await returnAfterAccessChange(page)
     await page.waitForSelector('[data-audit-export-only]')
     await page.waitForSelector('[data-audit-export]')
     expect(await page.$('[data-audit-reader]')).toBeNull()

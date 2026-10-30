@@ -120,7 +120,7 @@ Deno.test('another person signing in closes the queue at once, and nothing uploa
   await tick()
   expect(calls.map((call) => call.name)).toEqual(['a.pdf'])
   // This tab's check finds someone else, signed in from another tab. They never open the panel.
-  authority.invalidate('observed return', 'loading')
+  authority.invalidate('access check', 'loading')
   detach()
   authority.setSession(curator('two'), 'marine')
   // Closed there and then: no row is left uploading or waiting, and no file is kept to retry.
@@ -138,7 +138,7 @@ Deno.test('another person signing in closes the queue at once, and nothing uploa
     UPLOAD_INTERRUPTED,
   ])
   // The first person comes back: a fresh queue, and the waiting file is not sent for them.
-  authority.invalidate('observed return', 'loading')
+  authority.invalidate('access check', 'loading')
   authority.setSession(curator(), 'marine')
   const again = uploadQueueFor(authority, 'marine', upload)!
   expect(again).not.toBe(queue)
@@ -161,7 +161,7 @@ Deno.test('signing out elsewhere closes the queue, and waiting files are not kep
   queue.attach(allowed)
   queue.add([file('a.pdf'), file('b.pdf')])
   await tick()
-  authority.invalidate('observed return', 'loading')
+  authority.invalidate('access check', 'loading')
   authority.setSession(sessionFixture('marine', null), 'marine')
   expect(queue.snapshot().map((row) => row.status)).toEqual(['failed', 'failed'])
   expect(queue.closed).toBe(true)
