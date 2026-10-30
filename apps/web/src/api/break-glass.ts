@@ -48,6 +48,7 @@ function guardResponse(response: Response, lifecycle: ResponseLifecycle): Respon
                   try {
                     lifecycle.assertCurrent()
                     const chunk = await target.read()
+                    await lifecycle.hold?.()
                     lifecycle.assertCurrent()
                     if (chunk.done) finish()
                     return chunk

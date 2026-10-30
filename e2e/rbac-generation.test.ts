@@ -81,8 +81,11 @@ for (const removed of ['portal.export', 'portal.investigate']) {
             )
             return Response.json(value)
           }
+          document.querySelector('#generate-query')!.setAttribute('data-before-return', '')
           dispatchEvent(new Event('focus'))
         }, { args: [removed] })
+        // The check finds narrower access, so the page starts again under it.
+        await page.waitForFunction(() => !document.querySelector('[data-before-return]'))
       }
       await reduce()
       await generate(page)

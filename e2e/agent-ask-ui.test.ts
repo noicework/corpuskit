@@ -266,17 +266,33 @@ describe('agent ask page', () => {
         steps: document.querySelectorAll('[data-agent-steps] li[data-step-status]').length,
       }))
       expect(before.status).toBe('streaming')
-      // A return to the window: the access layer withdraws authority, re-reads the session and
-      // remounts the page. The run must still be there when the page comes back.
+      // A return to the window reads the session again and leaves the page as it was.
       await page.evaluate(() => {
+        document.querySelector('[data-agent-answer]')!.setAttribute('data-before-return', '')
         globalThis.dispatchEvent(new Event('blur'))
         globalThis.dispatchEvent(new Event('focus'))
       })
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(await page.$('[data-agent-answer][data-before-return]')).not.toBe(null)
+      // A check that fails takes the page away behind the access gate, and the next return
+      // brings it back. The run must still be there when the page comes back.
+      await page.evaluate(() => {
+        const original = globalThis.fetch
+        globalThis.fetch = (input, init) => {
+          if (!String(input).startsWith('/auth/me')) return original(input, init)
+          globalThis.fetch = original
+          return Promise.resolve(new Response('unavailable', { status: 503 }))
+        }
+        globalThis.dispatchEvent(new Event('focus'))
+      })
+      await settle(page, () => document.querySelector('[data-access-state]') !== null, 'the gate')
+      await page.evaluate(() => globalThis.dispatchEvent(new Event('focus')))
       await settle(
         page,
         () =>
           document.querySelector('[data-access-state]') === null &&
-          document.querySelector('[data-agent-answer]') !== null,
+          document.querySelector('[data-agent-answer]') !== null &&
+          !document.querySelector('[data-before-return]'),
         'the page to come back',
       )
       const after = await page.evaluate(() => ({

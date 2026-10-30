@@ -115,10 +115,10 @@ for (
       )
 
       const denial = transition === '401' || transition === '403'
-      if (!denial && transition !== 'scope') {
-        const auth = server.delayResponse('/auth/me?portal=marine')
-        releaseAuth = auth.release
-      }
+      const auth = !denial && transition !== 'scope'
+        ? server.delayResponse('/auth/me?portal=marine')
+        : undefined
+      if (auth) releaseAuth = auth.release
       await page.evaluate(
         (event) =>
           dispatchEvent(
@@ -130,12 +130,25 @@ for (
           args: [denial ? 'server-denial' : transition === 'scope' ? 'move-scope' : 'focus'],
         },
       )
+      if (auth) {
+        // A return checks access in place: while the check is out, the page, its caches and the
+        // pending search stay as they were...
+        await auth.entered
+        expect(await page.$('[data-access-state]')).toBeNull()
+        const kept = await inspect()
+        expect(kept.caches).toContain('Protected marine cache marker')
+        expect(kept.aborted.at(-1)).toBe(false)
+        // ...and the search answer that lands meanwhile waits for the check's answer.
+        delayed.release()
+        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)))
+        expect(await page.evaluate(() => document.querySelector('[data-result]')?.textContent))
+          .toBe('')
+        releaseAuth()
+      }
       await page.waitForSelector(
-        denial
+        denial || transition === 'auth-failure'
           ? '[data-access-state=failed]'
-          : transition === 'scope'
-          ? '[data-access-state=denied]'
-          : '[data-access-state=loading]',
+          : '[data-access-state=denied]',
       )
       const retired = await inspect()
       expect(retired.caches).not.toContain('Protected marine cache marker')
@@ -145,12 +158,6 @@ for (
         'Protected marine cache marker',
       )
       expect(await page.$('[data-result]')).toBeNull()
-      releaseAuth()
-      await page.waitForSelector(
-        denial || transition === 'auth-failure'
-          ? '[data-access-state=failed]'
-          : '[data-access-state=denied]',
-      )
       delayed.release()
       await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)))
       expect((await inspect()).caches).not.toContain('Protected marine cache marker')

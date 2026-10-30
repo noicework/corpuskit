@@ -5,6 +5,7 @@ import {
   assertCurrentBuild,
   buildComponentFixture,
   captureBoundary,
+  returnAfterAccessChange,
   sourcePath,
 } from './support/rbac-fixture.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
@@ -53,7 +54,7 @@ Deno.test('Ask legacy anonymous history never enters signed identities, portal s
     await page.waitForFunction(() => document.body.textContent?.includes('Legacy anonymous answer'))
     await assertCurrentBuild(page)
     server.setIdentity(fixtureSession({ oid: 'fixture-analyst' }))
-    await page.evaluate(() => dispatchEvent(new Event('focus')))
+    await returnAfterAccessChange(page)
     await page.waitForSelector('textarea')
     await page.waitForFunction(() => !document.body.textContent?.includes('Legacy anonymous trail'))
     expect(await page.evaluate(() => document.body.textContent)).not.toContain(
@@ -76,7 +77,7 @@ Deno.test('Ask legacy anonymous history never enters signed identities, portal s
     await page.evaluate(() => dispatchEvent(new Event('focus')))
     await delayed.entered
     server.setIdentity(fixtureSession({ oid: 'fixture-analyst' }))
-    await page.evaluate(() => dispatchEvent(new Event('focus')))
+    await returnAfterAccessChange(page)
     delayed.release()
     await page.waitForSelector('textarea')
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 1600)))

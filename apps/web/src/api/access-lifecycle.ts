@@ -13,10 +13,12 @@ export interface AuthorityRequest {
   assertCurrent(): void
   finish(): void
   /**
-   * For a mutation, wait out an access check in progress before its result is judged. Absent on
-   * reads, which never outlive a withdrawal.
+   * Wait out an access check in progress before a result is judged, so nothing is handed to the
+   * page under authority that is still being confirmed. A read waits only for a check made in
+   * place (`revalidate`): a withdrawal has already ended it. A mutation also waits through a
+   * withdrawal's check.
    */
-  hold?(): Promise<void>
+  hold(): Promise<void>
 }
 
 /** What a held mutation was sent under: its result publishes only to the same authority. */
@@ -55,42 +57,6 @@ function identityOf(session: AuthSession, browserId: () => string): string | nul
 export function sameAuthority(a: AuthSession, b: AuthSession): boolean {
   return JSON.stringify({ ...a, claimAgeSeconds: null }) ===
     JSON.stringify({ ...b, claimAgeSeconds: null })
-}
-
-/** How long after a file input is activated its native picker may take the window's focus. */
-export const FILE_PICKER_BLUR_MS = 1000
-
-/**
- * Tells the focus a native file picker gives back apart from a person returning to the page.
- * The picker belongs to the page: activating a file input blurs the window, and choosing (or
- * cancelling) returns focus to it just before the input's change event. Treating that return
- * as an observed return would withdraw authority between the choice and its upload, unmount the
- * form and drop the file. Only the one focus that answers a picker's own blur counts; any other
- * focus, including one after an unrelated later blur, is an ordinary return.
- */
-export class FilePickerFocus {
-  #activatedAt: number | null = null
-  #pickerHasFocus = false
-
-  /** A file input was activated (clicked directly, through its label, or by keyboard). */
-  activated(now: number): void {
-    this.#activatedAt = now
-  }
-
-  /** The window lost focus. */
-  blurred(now: number): void {
-    this.#pickerHasFocus = this.#activatedAt !== null &&
-      now - this.#activatedAt <= FILE_PICKER_BLUR_MS
-    this.#activatedAt = null
-  }
-
-  /** The window regained focus: `picker` when it comes back from a file picker, once. */
-  focused(): 'picker' | 'return' {
-    const picker = this.#pickerHasFocus
-    this.#pickerHasFocus = false
-    this.#activatedAt = null
-    return picker ? 'picker' : 'return'
-  }
 }
 
 /** A generation owns every protected cache, request and transient UI value. */
@@ -201,12 +167,12 @@ export class AuthorityController {
   }
 
   /**
-   * Check the session again without first withdrawing the current authority, for a focus that
-   * is not an observed return (see `FilePickerFocus`). A read that confirms the same identity
-   * and authority keeps the generation, its requests and everything mounted under it, so the
-   * upload of a file just chosen goes ahead. Any difference replaces the session exactly as
-   * `setSession` does, and a failed read withdraws authority as `refresh` does. Without a ready
-   * session for this page scope there is nothing to keep, so this is `refresh`.
+   * Check the session again without first withdrawing the current authority, as a return to the
+   * window does. A read that confirms the same identity and authority keeps the generation, its
+   * requests and everything mounted under it, so the page stays as the person left it. Results
+   * that arrive while the read is out wait for it (`hold`). Any difference replaces the session
+   * exactly as `setSession` does, and a failed read withdraws authority as `refresh` does.
+   * Without a ready session for this page scope there is nothing to keep, so this is `refresh`.
    */
   revalidate(slug?: string): Promise<void> {
     const context = this.#context
@@ -252,8 +218,14 @@ export class AuthorityController {
     if (this.#status !== 'ready' || context !== this.#context) throw new StaleAuthorityError()
   }
 
+  /** Resolves once a check made in place (`revalidate`) is no longer in progress. */
+  #revalidated(): Promise<void> {
+    return this.#revalidation?.promise.then(() => {}, () => {}) ?? Promise.resolve()
+  }
+
   /** Resolves once no access check is in progress. */
   settled(): Promise<void> {
+    if (this.#revalidation) return this.#revalidated().then(() => this.settled())
     if (this.#status !== 'loading') return Promise.resolve()
     return new Promise((resolve) => {
       const stop = this.subscribe(() => {
@@ -303,6 +275,7 @@ export class AuthorityController {
         abort.signal.throwIfAborted()
         this.assertCurrent(context)
       },
+      hold: () => this.#revalidated(),
       finish: () => {
         this.#requests.delete(abort)
         signal?.removeEventListener('abort', cancel)
