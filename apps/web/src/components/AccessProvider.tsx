@@ -21,6 +21,8 @@ interface AccessValue {
   identityKey: string | null
   slug: string | null
   generation: number
+  /** Returns to the window that kept the same authority; leaf scope reads run again on each. */
+  returns: number
   refresh(): Promise<void>
   controller: AuthorityController
   safeClient: QueryClient
@@ -53,6 +55,7 @@ export function AccessProvider(
   const refresh = useCallback(() => controller.refresh(slug ?? undefined), [controller, slug])
   /** The mounted generation's query client, fetched again after a return that keeps authority. */
   const [generationClients] = useState(() => new Set<QueryClient>())
+  const [returns, setReturns] = useState(0)
 
   useLayoutEffect(() => registerAuthorityController(controller), [controller])
   useLayoutEffect(() => {
@@ -75,17 +78,36 @@ export function AccessProvider(
     // same authority keeps the page, its requests and the person's place, and the page's data is
     // fetched again behind what is on screen; any change, or a read that fails, withdraws
     // authority as a new session does. Nothing is handed to the page while the read is out
-    // (`AuthorityRequest.hold`).
+    // (`AuthorityRequest.hold`). A return while a check is out reads again once it ends, so
+    // every return is answered by a read made after it.
+    let active = true
+    let checking = false
+    let again = false
     const revalidate = () => {
+      if (checking) {
+        again = true
+        return
+      }
+      checking = true
       const before = controller.context
       void controller.revalidate(slug ?? undefined).then(() => {
         if (controller.context !== before) return
-        for (const client of generationClients) void client.invalidateQueries()
-      }, () => {})
+        for (const client of [safeClient, ...generationClients]) void client.invalidateQueries()
+        setReturns((count) => count + 1)
+      }, () => {}).finally(() => {
+        checking = false
+        // Only for this page scope: a scope change has its own read.
+        if (!active || !again) return
+        again = false
+        revalidate()
+      })
     }
     globalThis.addEventListener('focus', revalidate)
-    return () => globalThis.removeEventListener('focus', revalidate)
-  }, [controller, generationClients, slug])
+    return () => {
+      active = false
+      globalThis.removeEventListener('focus', revalidate)
+    }
+  }, [controller, generationClients, safeClient, slug])
 
   const matches = context.slug === slug
   const status = controller.status === 'ready' && !matches ? 'loading' : controller.status
@@ -96,6 +118,7 @@ export function AccessProvider(
     identityKey: matches ? context.identityKey : null,
     slug,
     generation: context.generation,
+    returns,
     refresh,
     controller,
     safeClient,
@@ -148,7 +171,7 @@ function GenerationQueries(
 /** Shared leaf reads are cached by the parent and cannot replace its selected scope. */
 export function useScopeAccess(slug: string | null) {
   const parent = useAccess()
-  const { controller, generation } = parent
+  const { controller, generation, returns } = parent
   const [result, setResult] = useState<
     { slug: string; generation: number; session: AuthSession | null } | null
   >(null)
@@ -175,7 +198,7 @@ export function useScopeAccess(slug: string | null) {
         controller.cancelScopeSnapshot(slug)
       }
     }
-  }, [controller, generation, slug, parent.state.status])
+  }, [controller, generation, returns, slug, parent.state.status])
   const current =
     result?.generation === generation && result.slug === slug && parent.state.status === 'ready'
       ? result
