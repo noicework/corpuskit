@@ -5,6 +5,7 @@
     "@research-portal/retrieval": "./packages/retrieval/src/index.ts",
     "@modelcontextprotocol/server": "npm:@modelcontextprotocol/server@2.0.0-alpha.2",
     "@cfworker/json-schema": "npm:@cfworker/json-schema@4.1.1",
+    "https://esm.sh/cookie@1.1.1/denonext/cookie.mjs": "./vendor/esm.sh/cookie@1.1.1/cookie.mjs",
     "zod": "https://esm.sh/zod@3.25.76",
     "zod/v4": "npm:zod@4.5.4/v4",
     "d3-force": "https://esm.sh/d3-force@3.0.0",
@@ -42,6 +43,7 @@
     "lineWidth": 100,
     "semiColons": false,
     "exclude": [
+      "vendor/esm.sh/",
       "content/",
       "docs/",
       "README.md",
@@ -58,7 +60,13 @@
     "include": ["packages/", "apps/"]
   },
   "lint": {
-    "exclude": ["apps/web/dist/", "worker-configuration.d.ts", ".claude/", ".planning/"],
+    "exclude": [
+      "vendor/esm.sh/",
+      "apps/web/dist/",
+      "worker-configuration.d.ts",
+      ".claude/",
+      ".planning/"
+    ],
     "rules": {
       "exclude": ["require-await"]
     }
