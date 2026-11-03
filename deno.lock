@@ -166,7 +166,7 @@
     "https://esm.sh/@tanstack/query-core@5.62.9/denonext/query-core.mjs": "d8640d0acf0b6e8b5d33e6cbf73c079244a224be72c497fdcfaa6f692f569f70",
     "https://esm.sh/@tanstack/react-query@5.62.11/X-ZHJlYWN0QDE4LjMuMQ/denonext/react-query.mjs": "76d130278cc0fc919a11dd61b8eb98ecf5ddd4188047e9b490aff33cc6fe1108",
     "https://esm.sh/@tanstack/react-query@5.62.11?deps=react@18.3.1": "efef7d4c0279e8c61d9b2506bafa45206c3d2dedf4b9795dc41a8ca01fc296b1",
-    "https://esm.sh/cookie@1.1.1/denonext/cookie.mjs": "fd8c42c831272a2886b6eafccb78032f5930f22c9ad2867342af4f4e918cd5b1",
+    "https://esm.sh/cookie@1.1.1/denonext/cookie.mjs": "f63d01be25fb3287d58e7035b5092138fa2843e2236f3b57d5818378c7c73b27",
     "https://esm.sh/cookie@1.1.1?target=denonext": "09ad342936417a23bbf3621590540b4acc9c0e1b1dd76375809850297c3a0eda",
     "https://esm.sh/d3-dispatch@3.0.1/denonext/d3-dispatch.mjs": "b36be2eed6f07b517775df12bde28cb0e778b9a7df04974ce9cb99f7b322a2d6",
     "https://esm.sh/d3-dispatch@3.0.1?target=denonext": "75f32f2a0e7cdddbe15573f1a802fb6bdc46247d038a4b1a2ebde2ad86848c56",
