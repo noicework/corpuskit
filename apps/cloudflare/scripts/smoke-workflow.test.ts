@@ -15,7 +15,8 @@ function assertDemoOnlyDeployment(workflow: string) {
   expect(production).not.toContain('persona-smoke.ts')
   expect(production).not.toContain('PERSONA_SMOKE_TENANTS')
   expect(workflow).not.toContain('vars.PERSONA_SMOKE_TENANTS')
-  expect(workflow).not.toContain("'opax'")
+  expect([...workflow.matchAll(/PERSONA_SMOKE_TENANTS: (.+)/g)].map((match) => match[1]))
+    .toEqual(['demo', 'demo'])
 
   const smokeSteps = demo.split(/\n(?= {6}- )/).filter((step) => step.includes('persona-smoke.ts'))
   expect(smokeSteps).toHaveLength(2)
@@ -42,7 +43,7 @@ Deno.test('release functional smoke, including recovery, is demo-only and gates 
     const broken of [
       workflow.replace('needs: [gate, deploy-demo]', 'needs: gate'),
       workflow.replace('BASE_URL: https://demo.corpuskit.org', 'BASE_URL: https://corpuskit.org'),
-      workflow.replace('PERSONA_SMOKE_TENANTS: demo', 'PERSONA_SMOKE_TENANTS: opax'),
+      workflow.replace('PERSONA_SMOKE_TENANTS: demo', 'PERSONA_SMOKE_TENANTS: sample'),
       workflow.replace(
         'PERSONA_SMOKE_TENANTS: demo',
         'PERSONA_SMOKE_TENANTS: ${{ vars.PERSONA_SMOKE_TENANTS }}',
@@ -60,7 +61,8 @@ Deno.test('scheduled and manually dispatched acceptance cannot use old productio
   expect(workflow).not.toContain('inputs:')
   expect(workflow).not.toContain('inputs.')
   expect(workflow).not.toContain('vars.ACCEPTANCE_')
-  expect(workflow).not.toContain('opax')
+  expect([...workflow.matchAll(/ACCEPTANCE_TENANTS: (.+)/g)].map((match) => match[1]))
+    .toEqual(['demo'])
   expect(workflow).toContain('apps/api/scripts/live-acceptance.ts')
 })
 

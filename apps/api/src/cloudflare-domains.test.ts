@@ -1,4 +1,5 @@
 import { expect } from '@std/expect'
+import { parse as parseJsonc } from '@std/jsonc'
 import {
   CloudflareDomainApiError,
   CloudflareDomainProvisioner,
@@ -251,7 +252,7 @@ Deno.test('Cloudflare failures never include the API token in their message', as
 
 Deno.test('every Worker configuration attaches portal hostnames to its own script', async () => {
   for (const file of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
-    const config = JSON.parse(
+    const config = parseJsonc(
       await Deno.readTextFile(new URL(`../../../${file}`, import.meta.url)),
     ) as { name: string; vars: { WORKER_NAME?: string } }
     expect(config.vars.WORKER_NAME).toBe(config.name)

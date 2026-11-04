@@ -590,7 +590,7 @@ Deno.test('public docs stay on the apex, preserve www canonicalisation and do no
       ['', '/', '.html', '.html/'].map((suffix) => `/docs/${id}${suffix}`)
     ),
   ]
-  for (const host of ['demo.corpuskit.org', 'research.example.org', 'corpuskit.noice.net.au']) {
+  for (const host of ['demo.corpuskit.org', 'research.example.org']) {
     for (const path of paths) {
       const harness = workerHarness()
       expect((await worker.fetch(new Request(`https://${host}${path}`), harness.env)).status).toBe(
@@ -1017,7 +1017,7 @@ async function realHarness(
     ENTRA_TENANT_ID: 'entra-tenant-id',
     ENTRA_CLIENT_SECRET: 'fixture',
     ADMIN_PASSCODE: 'fixture',
-    // The harness is a showcase deployment, as corpuskit.org is.
+    // The harness enables both local sample portals.
     SHOWCASE_PORTALS: 'marine,grains',
     ...extraEnv,
   })
@@ -1206,6 +1206,16 @@ Deno.test('Worker break-glass uses trusted peer lockout and production policy wi
     } finally {
       h.database.close()
     }
+  }
+})
+
+Deno.test('a demo Worker starts with only the documentation portal', async () => {
+  const h = await realHarness({ ENVIRONMENT: 'demo', SHOWCASE_PORTALS: undefined })
+  try {
+    const stores = (h.object as unknown as { stores: DurableStores }).stores
+    expect(stores.tenants.list().map((tenant) => tenant.slug)).toEqual(['demo'])
+  } finally {
+    h.database.close()
   }
 })
 

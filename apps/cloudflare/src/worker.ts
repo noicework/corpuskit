@@ -28,7 +28,6 @@ import {
 } from '../../api/src/search-files.ts'
 import { bindingKeyState } from '../../api/src/binding-crypto.ts'
 import { initialiseDemo } from './demo.ts'
-import { initialiseAcmdDemo } from './acmd-demo.ts'
 import { buildApp, type PortalRequestContext } from '../../api/src/app.ts'
 import {
   PRINCIPAL_HEADER,
@@ -179,16 +178,7 @@ export class PortalDurableObject extends DurableObject<Env> {
         .bootstrapAdminEmails(bindings.ENTRA_ADMIN_EMAILS ?? '')
     }
     initialiseDemo(this.stores.tenants, bindings.ENVIRONMENT)
-    ctx.blockConcurrencyWhile(async () => {
-      // A rejection here would reset the object on every request. Binding start-up withholds
-      // records it cannot open instead of failing, so only the optional demo seed can throw.
-      await this.stores.bindings.initialize()
-      try {
-        await initialiseAcmdDemo(this.stores.tenants, this.stores.bindings, bindings.ENVIRONMENT)
-      } catch {
-        console.error('Demo portal seeding failed')
-      }
-    })
+    ctx.blockConcurrencyWhile(() => this.stores.bindings.initialize())
     try {
       for (const warning of aliasStartupWarnings(bindings, this.stores.tenants.aliasHostnames())) {
         console.warn(warning)
@@ -1076,11 +1066,7 @@ function authConfig(
     clientSecret: entra ? values.ENTRA_CLIENT_SECRET : undefined,
     tenantId: entra ? values.ENTRA_TENANT_ID : undefined,
     sessionSecret: values.SESSION_SECRET,
-    redirectUri: onPlatformDomain
-      ? values.ENTRA_REDIRECT_URI
-      : hostname === 'corpuskit.noice.net.au'
-      ? `https://${hostname}/auth/callback`
-      : values.ENTRA_REDIRECT_URI,
+    redirectUri: values.ENTRA_REDIRECT_URI,
     adminEmails: values.ENTRA_ADMIN_EMAILS,
     externalLogin: externalLoginConfig(values),
     cookieDomain: onPlatformDomain ? platformDomain : undefined,
