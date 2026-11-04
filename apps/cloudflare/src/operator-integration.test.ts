@@ -1263,6 +1263,92 @@ Deno.test('Durable Object warns once without the value when a present operator k
   }
 })
 
+Deno.test('Worker operator exports and restores portal state through signed ingress without provider writes', async () => {
+  const f = await fixture()
+  try {
+    f.stores.tenants.patch('marine', { portalRestore: true })
+    const owner = { kind: 'anonymous' as const, clientId: 'restore-reader' }
+    f.stores.tenants.patchBranding('marine', { organisation: 'Fisheries research' })
+    for (let i = 0; i < 100; i++) {
+      f.stores.sessions.put('marine', owner, {
+        id: `session-${i}`,
+        title: `Research trail ${i}`,
+        updatedAt: new Date().toISOString(),
+        messages: [],
+      })
+      f.stores.investigations.create('marine', owner, { name: `Evidence review ${i}` })
+    }
+    for (let i = 0; i < 1000; i++) {
+      f.stores.enrichments.put('marine', `resource-${i}`, {
+        schemaId: 'suggested-questions',
+        generatedAt: new Date().toISOString(),
+        data: { questions: ['What does the research show?'] },
+      })
+    }
+    for (let i = 0; i < 500; i++) {
+      f.stores.insights.record('marine', {
+        ts: new Date().toISOString(),
+        question: `Evidence question ${i}?`,
+        answered: true,
+        citations: 2,
+        durationSec: 1,
+        answerRelevance: 5,
+        groundedness: 5,
+        contextRelevance: 5,
+      })
+    }
+    const before = f.stores.sessions.list('marine', owner)
+    const response = await f.invoke('/api/admin/t/marine/export')
+    expect(response.status).toBe(200)
+    const bytes = new Uint8Array(await response.arrayBuffer())
+    f.stores.sessions.erase('marine')
+    f.stores.investigations.erase('marine')
+    f.stores.enrichments.erase('marine')
+    f.stores.insights.erase('marine')
+    f.stores.tenants.patchBranding('marine', { organisation: 'Empty portal' })
+    const started = performance.now()
+    const restored = await f.invoke('/api/admin/t/marine/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/zip' },
+      body: bytes,
+    })
+    expect(restored.status, await restored.clone().text()).toBe(200)
+    const result = await restored.json()
+    const restoreMilliseconds = Math.round(performance.now() - started)
+    expect(result).toMatchObject({
+      alreadyImported: false,
+      knowledgeBoxRestored: false,
+      counts: { sessions: 100, investigations: 100, enrichments: 1000, insights: 500 },
+    })
+    expect(f.stores.sessions.list('marine', owner)).toEqual(before)
+    expect(f.stores.tenants.get('marine')!.branding.organisation).toBe('Fisheries research')
+    expect(f.stores.enrichments.count('marine', 'suggested-questions')).toBe(1000)
+    expect(f.stores.insights.summary('marine').totalAsks).toBe(500)
+    const repeated = await f.invoke('/api/admin/t/marine/import', {
+      method: 'POST',
+      headers: { 'content-type': 'application/zip' },
+      body: bytes,
+    })
+    expect(await repeated.json()).toMatchObject({ alreadyImported: true })
+    const audit = f.stores.rbac.audit.read({
+      scope: { kind: 'portal', slug: 'marine' },
+      action: 'portal.export.bundle',
+      limit: 100,
+    })
+    expect(audit.some((e) => e.actor_kind === 'operator' && e.outcome === 'success')).toBe(true)
+    console.log(
+      JSON.stringify({
+        fixture: 'portal-restore',
+        runtime: 'durable',
+        bytes: bytes.length,
+        restoreMilliseconds,
+      }),
+    )
+  } finally {
+    f.close()
+  }
+})
+
 /** Platform base class and provider/domain I/O are doubled; signed ingress and SQLite are real. */
 async function loadWorker(): Promise<WorkerModule> {
   const workerUrl = new URL('./worker.ts', import.meta.url)

@@ -1,3 +1,5 @@
+import { registerPortalImport } from './portal-import.ts'
+import type { PortalBackupStore } from './portal-backup.ts'
 import {
   guardAgentAnswer,
   portalAnswerPolicy,
@@ -912,6 +914,7 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  portalRestore: z.boolean().optional(),
   /** Whether the portal offers agent ask (opt-in; see TenantConfigSchema). */
   agentAsk: z.boolean().optional(),
   /** Federation peers and participation, merged over the portal's current settings. */
@@ -932,6 +935,7 @@ const renameTenantSchema = z.object({
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
+  'portalRestore',
   'agentAsk',
   'siteFeedback',
   'analyticsEnabled',
@@ -1158,6 +1162,7 @@ export interface BuildAppOptions {
    * Makes a portal erasure one atomic unit where the runtime can (the Durable Object's SQLite
    * transaction). Without it, file stores are erased first and the audit log last.
    */
+  portalBackup?: PortalBackupStore
   erasureTransaction?: ErasureTransaction
   /**
    * Days a portal must stay suspended before a platform administrator or the operator credential
@@ -2434,7 +2439,22 @@ export function buildApp(opts: BuildAppOptions): Hono {
     },
   })
 
+  registerPortalImport(app, {
+    store: opts.portalBackup,
+    tenants,
+    state: () => {
+      if (!opts.rbac) throw new AuthorisationError(403)
+      return opts.rbac
+    },
+    context: (c) => {
+      const context = requestContext(c.req.raw)
+      return { requestId: context.requestId, actor: context.actor! }
+    },
+    invalidate: (slug) => opts.invalidate?.(slug),
+  })
+
   registerPortalExport(app, {
+    backup: opts.portalBackup,
     provider,
     tenants,
     insights,
@@ -5672,6 +5692,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       name,
       searchPlaceholder,
       regionalDiscovery,
+      portalRestore,
       agentAsk,
       federation,
       siteFeedback: siteFeedbackSetting,
@@ -5683,6 +5704,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+      ...(portalRestore !== undefined ? { portalRestore } : {}),
       ...(agentAsk !== undefined ? { agentAsk } : {}),
       ...(federation !== undefined
         ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }

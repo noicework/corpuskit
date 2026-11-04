@@ -1,0 +1,223 @@
+# Portal backup and restore
+
+The local Deno server and the managed Worker's Durable Object share the portal export and
+restore routes. `GET /api/admin/t/:slug/export` downloads a bounded ZIP; `POST
+/api/admin/t/:slug/import` restores its portal-owned records into an existing, empty portal.
+Full backups and import are opt-in per portal: `portalRestore` is absent/false by default.
+Enable it with `PATCH /api/admin/tenants/<slug>` and `{"portalRestore": true}` (portal
+`behaviour.write`, or the hosting operator credential). Enable the destination as well as
+any source whose full records need backing up. With it off, import returns 404
+`portal_restore_disabled` and export keeps its inventory-only payload. Recovery never copies
+the source's opt-in over the destination's setting. No external export service is required.
+
+## Authority
+
+Export retains portal `audit.export` permission and also accepts the hosting operator
+credential. Import requires platform `portal.create` authority (platform administrators and
+owners), or the operator credential. Portal administrators and MCP keys cannot import.
+Present the operator credential in `Authorization: Operator <credential>` using the existing
+`OPERATOR_API_KEY` and `OPERATOR_ID` settings. Actor identity is recorded in both the normal
+privileged request audit and `portal.export.bundle` or `portal.import.bundle`.
+
+## What is restored
+
+| Record kind | Behaviour |
+|---|---|
+| Configuration and branding | Validated tenant appearance, layout, portal topics and labels, language, retrieval/extraction settings, prompts and disabled flag. Uploaded logos, images and fonts are embedded as base64 and restored. The destination keeps its hostname and aliases. |
+| Hosting lifecycle | Status and configured limits. In-flight reservations, ask admissions, pending deletions, activity and capacity ledgers are not replayed. |
+| Enrichments | Generated resource enrichments and cached suggested questions, with schema/resource identities. |
+| Research artefacts | Sessions, investigations and watches, retaining their signed or anonymous owner namespace. Proven legacy anonymous records are converted to the current owned format. Signing in does not adopt anonymous records. |
+| Evaluations | Definitions and retained results. An interrupted running evaluation becomes failed. Scheduling definitions remain in the bundle for review, but delegations are not activated: re-authorise schedules after recovery. |
+| Duplicate decisions | Review decisions and original review times. |
+| Answer records | Retained evidence records and their retention setting, including questions, citations and quality/timing metadata. Existing expiry rules still apply. |
+| Insights and routing | The retained usage/event log and routing decisions, rather than only the management summary. |
+| Other portal records | Source registry and cursors, link-review decisions, setup suggestions and the last knowledge-graph proposal. Restoring a source does not run its synchronisation during import. |
+| Reader feedback | Ratings, comments and portal-team messages only when export explicitly selected `?includeFeedback=true`. Existing retention applies. |
+| Audit history | Appended to destination history, never substituted for it. Copied events carry `restored: true`, `bundleId`, `originalEventId` and `restoredFromPortal`. Original actor, action, time and redacted details remain available. |
+
+The JSON response supplies `counts` per record kind, `alreadyImported`, and
+`knowledgeBoxRestored: false`, plus a `warnings` array (empty for a full version 1 backup).
+Collections count their contained records; enrichments count schema/resource pairs, not
+containing files. Audit counts exclude the new import receipt and
+normal request audit. Scheduling delegations count zero because they are not activated.
+
+## What is not restored
+
+**Knowledge-box content is never restored.** Documents, document bytes, extracted text,
+provider-managed labelsets/resource labels, indexes, agents and stored search configurations
+remain with the retrieval provider. `resources.json` and `labelsets.json` are inventories for
+reconciliation, not instructions that import sends to a provider. Portal-owned topics and
+labels in configuration and suggestions are restored. Import makes no provider write.
+
+Bindings, sealed credentials, environment settings, cookies, authentication sessions, MCP key
+material, member assignments, group mappings, hostname/domain attachments and deployment files
+are not restored. `mcp-keys.json` contains administrative inventory metadata only, never usable
+keys. Provision/reconnect bindings and grant access separately; verify the destination provider
+against the document inventory. Browser owners and directory user identifiers must still exist
+for restored private artefacts to be reachable. This does not grant their owners a portal role.
+
+This is the first portal-state restore slice. It does not rebuild an empty knowledge box or
+replay provider-managed taxonomy.
+
+### Compatibility with older exports
+
+Full backups declare `schemaVersion: 1` and `restoreVersion: 1`, include `portal-records.json`,
+per-kind restore counts and SHA-256 hashes for every payload. Import requires all of those;
+removing the version or any hash cannot downgrade a full backup to legacy validation.
+
+An older, version-less **schemaVersion 1 inventory bundle** is accepted only with `complete:
+true`, its full file inventory, correct byte lengths and the exporter's uncompressed UTF-8
+ZIP dialect. ZIP CRC-32 is checked; SHA-256 hashes, where supplied, must match. Unknown schema
+or restore versions are refused. A version-less bundle containing `portal-records.json` or
+restore counts is ambiguous and refused.
+
+Legacy import restores configuration, answer settings, lifecycle settings, routing decisions,
+portal audit CSV rows, and ratings/comments only if `includeFeedback: true` and `feedback.csv`
+are present. The legacy `evaluations.json` must be the explicit unavailable placeholder.
+Its routing/audit/feedback counts are checked against the manifest. CSV formula prefixes are
+undone only according to the exporter's quoting rule; audit rows are schema-validated and
+appended with restored provenance, exactly as full backups are.
+The warnings also disclose a legacy CSV ambiguity: a formula-protection apostrophe cannot be
+distinguished from a literal apostrophe in that position. Such text cannot be recovered exactly.
+Full backups use JSON records and do not have this ambiguity.
+
+The response's `warnings` lists what cannot be recovered: sessions, investigations, watches,
+answer records and retention settings, evaluations, duplicates, enrichments, suggestions,
+sources, link reviews, graph proposals, branding bytes, the raw usage log and portal-team
+messages. `insights.json` is a summary and cannot rebuild the log. Inventories never become
+provider writes, keys or access grants. Create a fresh full backup before relying on complete
+recovery. Repeating a legacy import also returns its warnings.
+
+## Daily backup procedure and RPO
+
+1. Enable `portalRestore: true` for the portal, then schedule a backup at least daily from
+   the platform origin with the operator credential.
+   Request `/api/admin/t/<slug>/export?includeFeedback=true` if the recovery policy includes
+   reader messages. Without that selection feedback is deliberately omitted.
+2. Require HTTP 200, a complete ZIP, `schemaVersion: 1`, `restoreVersion: 1`, and the expected
+   portal slug. Keep only successful complete bundles. A failed or rate-limited download is
+   not that day's backup; alert and retry it. Export admits two attempts per portal per minute.
+3. Store each completed ZIP in operator-controlled backup storage, restrict access and apply
+   the agreed retention period. It contains research questions and personal data. The portal
+   retains no downloaded copy and does not schedule or upload backups itself.
+4. Separately back up the retrieval provider and maintain a deployment/binding recovery
+   procedure. Periodically run the drill below and compare the retained records.
+
+With successful backups no more than 24 hours apart, the portal-record **RPO is at most 24
+hours**, measured from `manifest.startedAt` in the last successful complete bundle.
+Schedule and alert against that capture time; a missed backup extends the window. Stores and
+provider inventories are read during export rather than as a single
+cross-system snapshot; the bundle does not promise a transactionally consistent provider
+snapshot. Provider RPO must be specified separately.
+
+## Recovery drill
+
+1. Provision an empty destination portal and enable `portalRestore: true`, or reset its
+   portal-owned research records through a controlled maintenance procedure. Configuration, lifecycle settings, assignments, bindings
+   and destination audit history may already exist. Import refuses other occupied targets with
+   409 `portal_not_empty`; it is not a merge or overwrite tool. Deleting a portal retires its
+   slug, so provision a new destination rather than assuming a retired slug can be reused.
+2. Keep the destination isolated from users and source schedulers until verification completes.
+   Establish its binding to the retained/recovered provider separately.
+3. Send the ZIP bytes with `Content-Type: application/zip` to `POST
+   /api/admin/t/<slug>/import`. Do not wrap the ZIP in JSON or multipart data.
+4. If restoring another slug, append `?targetSlug=<destination-slug>` to explicitly acknowledge
+   the change. It must equal the route slug. Structured portal scope and portal-relative asset
+   links are rewritten; arbitrary research prose is not rewritten. Provider resource ids stay
+   unchanged.
+5. Require 200, `alreadyImported: false`, and compare the returned per-kind counts against
+   `manifest.json`'s `counts.restore`. Inspect configuration, branding, private artefacts,
+   evidence, evaluation definitions and restored audit markers. Repeating the exact same bundle
+   to that destination returns `alreadyImported: true` with zero changed counts.
+6. Check provider resource ids and inventory, restore access assignments, re-authorise evaluation
+   schedules and run an ordinary search/answer acceptance check before opening to readers.
+
+The importer checks the uncompressed UTF-8 ZIP dialect, central directory, CRC-32, manifest
+file inventory, byte lengths, SHA-256 hashes (mandatory for full backups), supported versions,
+portal scope and record
+shapes before writes. Unknown record kinds, duplicate identities, malformed bundles and slug
+mismatches are refused. The same 8 MiB export/import limit applies; compression and encrypted
+ZIPs are refused. Hashes detect corruption, not the identity of the ZIP's author: import still
+requires administrator/operator authority and a trusted backup source.
+
+## Atomicity, idempotency and retained state
+
+The Durable Object commits records, appended audit history, its import receipt and the local
+mutation audit in one synchronous SQLite transaction. An audit or storage failure rolls back
+that transaction. The Deno adapter uses one SQL transaction and synchronous atomic file
+replacements with a flushed write-ahead journal. An exception rolls back SQL and restores the
+original file bytes. After process interruption, startup checks the SQL receipt: committed
+files stay; uncommitted replacements are restored before requests are served. The temporary
+`DATA_DIR/portal-restore-journal.json` is removed after completion/recovery. Do not remove a
+pending journal or serve the data directory while recovery is incomplete.
+
+The destination-specific bundle digest is recorded in the existing audit log, with no separate
+receipt store or erased record kind. Idempotent acknowledgement lasts while that receipt is
+retained under `AUDIT_RETENTION_DAYS`; once it expires an occupied target is still refused.
+Normal request auditing occurs even for a repeated import. Restored data follows the existing
+retention and portal-erasure inventory. Downloaded backups follow the recipient's policy and
+remain outside deployment erasure. Keep disk snapshots consistent with the SQL database and
+any pending recovery journal.
+
+## Repeatable local recovery drill
+
+Run from the repository root:
+
+```sh
+deno task drill:restore
+```
+
+The script starts the real local HTTP application with `DoubleProvider`, an isolated temporary
+`DATA_DIR`/SQLite database and a unique loopback port. Deno's network permission is restricted
+to `127.0.0.1` and dependencies must already be cached. It requires no live-service credentials.
+It creates a made-up research portal, opts it in, seeds 25 sessions, 25 answer records, 100
+routing decisions, one evaluation set and one completed run, then:
+
+1. Exports a full version 1 backup over HTTP.
+2. Deletes the source and erases its records through the actual management routes. It checks
+   erasure counts and verifies the source records are gone. The original slug remains retired.
+3. Creates an empty destination under a new slug, opts it in, imports with `targetSlug`, and
+   checks returned counts against the backup.
+4. Re-exports the destination and compares SHA-256 checksums of all portable records after
+   structured slug remapping. It checks copied audit rows separately, including provenance,
+   and verifies that provider calls were limited to inventory reads.
+5. Prints elapsed milliseconds for each step, counts, matching checksums and a final PASS.
+   Temporary data and the server are removed on completion or failure. A mismatch exits nonzero.
+
+Checksums change between runs because sample ids and timestamps are new. They must match
+within a run. The script prints only counts, checksums and timings, never questions, answers,
+reader messages or credentials. Do not point this isolated drill at a hosted portal.
+
+## Measured restore time and RTO
+
+The local drill on 4 November 2026, Deno 2.9.6 on a shared development machine, reported:
+
+```text
+create and seed: 1004 ms
+export: 72 ms
+bundle: 84909 bytes
+delete and erase: 104 ms
+create destination: 55 ms
+restore: 1027 ms
+compare counts and checksums: 73 ms
+PASS, total: 2541 ms; local DATA_DIR and SQLite, DoubleProvider
+```
+
+Counts matched: 25 sessions, 25 answer records, 100 routing rows, one evaluation set, one
+completed evaluation run, configuration, lifecycle and two copied audit events. Record SHA-256
+`2ffaed8991bf3ccc97a353c4b5bf0aad888fdf98a8753876df8de6a3cccfc4e5` and audit SHA-256
+`3e70f078caf8aa28e809e7be81891cbad7d0bb352aa8918ae949c9fbcf6257d0` each matched.
+The check step includes re-exporting the recovered records.
+
+This measures portal-state recovery, including validation and persistence, with no live provider
+or hosted Cloudflare calls. It is not a production availability or outage RTO commitment.
+Operational recovery must also include provisioning, provider recovery/reconnection, access
+setup and acceptance checks. Those steps need a separate drill on the intended hosting platform.
+
+`e2e/portal-restore.test.ts` also verifies a larger local fixture, cross-runtime round trips
+with the Durable Object SQLite adapter, operator identity, idempotency, and the actual Deno
+server process restricted to loopback networking. The Worker operator integration test uses
+signed ingress and the Durable Object adapter with a local platform shim and doubled provider;
+it does not execute a hosted deployment. Unit tests cover authority and lifecycle boundaries,
+default-off behaviour, legacy compatibility, strict versions and hashes, size/compression/path
+checks, prohibited authority record kinds, audit rollback on both adapters and journal recovery.

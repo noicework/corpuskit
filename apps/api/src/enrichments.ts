@@ -47,6 +47,10 @@ export class EnrichmentStore {
   private cache = new Map<string, TenantEnrichments>()
   private readonly dataDir: string
 
+  static invalidate(store: EnrichmentStore): void {
+    store.cache.clear()
+  }
+
   /** Capture the in-memory half of a synchronous file/audit mutation for rollback. */
   static checkpoint(store: EnrichmentStore, slug: string): () => void {
     const before = structuredClone(store.cache.get(slug))

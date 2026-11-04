@@ -305,7 +305,7 @@ Read at `GET /api/admin/t/:slug/audit` (portal `audit.read`) or `GET /api/admin/
 recorded.
 
 The administrative portal bundle at `GET /api/admin/t/:slug/export` also requires portal
-`audit.export`. Its `portal.export.bundle` events record the explicit feedback selection.
+`audit.export`. It also accepts the hosting operator credential. Its `portal.export.bundle` events record the operator actor and explicit feedback selection. `POST /api/admin/t/:slug/import` requires `portalRestore: true` on the destination and platform `portal.create` authority or the operator credential; it appends restored history and a `portal.import.bundle` receipt atomically with portal state. See [restore](RESTORE.md) for the empty-target rule, exclusions and recovery procedure.
 See [the versioned bundle format](PORTAL-EXPORT.md) for included data and bounds.
 
 ## Break-glass

@@ -536,6 +536,8 @@ export const TenantConfigSchema = z.object({
    * to true, in its seed or through `PATCH /api/admin/tenants/:slug`.
    */
   regionalDiscovery: z.boolean().optional(),
+  /** Opt in to full portal-state backups and platform-authorised restore. Absent is off. */
+  portalRestore: z.boolean().optional(),
   /**
    * Whether the portal offers agent ask: a retrieval agent's answer streamed step by step
    * (docs/AGENT-ASK.md). Opt-in: only true offers it; absent or false and its route answers as

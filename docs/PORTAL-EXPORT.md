@@ -1,19 +1,23 @@
 # Portal export bundle, schema version 1
 
-An administrator can download one portal's inventory and operational context from
+An administrator or hosting operator can download one portal's inventory and operational context from
 `GET /api/admin/t/:slug/export`. The response is an uncompressed UTF-8 ZIP named
 `portal-<slug>-export.zip`, with `Cache-Control: private, no-store`.
 
 Sign in as that portal's administrator, then open the URL on the same deployment to download
 it. Use the local server's origin for a local drill. The same route and assembly code run
 inside the managed Worker's Durable Object. No external export service, job queue, email or
-new runtime setting is required. Automated drills use `DoubleProvider` and temporary stores,
+new runtime setting is required. The per-tenant `portalRestore` setting is absent/false by
+default: export then retains the inventory-only payload. With `portalRestore: true` and the
+runtime backup adapter, the manifest declares `restoreVersion: 1`, SHA-256 payload hashes,
+`counts.restore`, and includes `portal-records.json` and persisted evaluations. Set the flag
+through `PATCH /api/admin/tenants/<slug>` with portal `behaviour.write` or operator authority. Automated drills use `DoubleProvider` and temporary stores,
 with no requests to a live knowledge box.
 
 ## Authority and audit
 
 The declaration requires portal-scoped `audit.export`, whose minimum role is `portal-admin`.
-Platform administrators and owners also qualify. Reader, analyst and curator roles do not.
+Platform administrators and owners also qualify. The hosting operator credential is also allowed and is recorded as the audit actor. Reader, analyst and curator roles do not.
 MCP keys cannot use this management route, even with a stored `portal-admin` role.
 The portal is resolved exclusively from the URL. Existing suspension rules apply: a suspended
 portal requires platform authority; a read-only portal remains exportable.
@@ -34,15 +38,16 @@ questions, so handle downloaded bundles as administrative data.
 
 | File | Contents |
 |---|---|
-| `manifest.json` | `schemaVersion: 1`, portal slug, start/end UTC timestamps, `complete: true`, counts, feedback selection, opaque audit snapshot id and expiry, file inventory, limits and scope notes. Byte sizes describe each other file's UTF-8 payload, before ZIP headers. |
-| `configuration.json` | `tenant`: validated configuration including branding and branding asset links, layout, terminology/domain terms, topics, suggested questions, access mode, discovery, language, retrieval and extraction settings. `settings`: additional answer instructions, answer guardrails, image grounding, uncited-answer behaviour, disabled flag and hosting lifecycle/limits. Only fields supported by current schemas are exported. |
+| `manifest.json` | `schemaVersion: 1`, portal slug, start/end UTC timestamps, `complete: true`, counts, feedback selection, opaque audit snapshot id and expiry, file inventory, limits and scope notes. Byte sizes describe each other file's UTF-8 payload, before ZIP headers. Each payload has a SHA-256 hash; restore-enabled bundles declare `restoreVersion: 1`. |
+| `configuration.json` | `tenant`: validated configuration including branding and branding asset links, layout, terminology/domain terms, topics, suggested questions, access mode, discovery, language, retrieval and extraction settings. `settings`: additional answer instructions, answer guardrails, image grounding, uncited-answer behaviour, disabled flag and hosting lifecycle/limits. Only fields supported by current schemas are exported. Destination routing and the restore opt-in are preserved during import. |
 | `resources.json` | Array of `{resource, metadata, labels, created?, modified?, status?, portalUrl, files}`. `resource` is the typed summary with local merchandising applied; `metadata` is extra metadata after redaction; labels include user and computed resource classifications. Files have `fieldId`, optional `contentType`, and the portal's authenticated proxy `url`. |
 | `labelsets.json` | Labelset definitions, labels, cardinality and descriptions. |
 | `mcp-keys.json` | Only `id`, `label`, `role`, `createdAt`, `expiresAt`, `revokedAt` and `legacy`. Includes revoked/expired records. No usable key, hash, prefix, issuer or creator claims. |
 | `audit.csv` | Retained portal-scoped audit events at the watermark, newest first. Columns: `id,at,request_id,actor_kind,actor_id,actor_label,action,scope_kind,scope_slug,target_kind,target_id,outcome,detail_json`. Platform-scoped events are excluded. |
 | `insights.json` | Management's 90-day usage summary, excluding feedback: totals, quality averages, top ten questions, latest 30 gaps and latest 25 asks. This is a summary, not the whole raw ask log. |
 | `routing.json` | Retained routing decisions, newest first. Operational tuning records include question hashes and configuration choices; they are distinct from curated evaluation sets. |
-| `evaluations.json` | `{status: "unavailable", sets: [], results: [], note: ...}`. This version has no persisted curated evaluation-set or evaluation-result store. Both manifest counts are zero, with an explicit note. |
+| `evaluations.json` | Persisted evaluation definitions and retained runs when `portalRestore: true` and the runtime supplies its backup adapter; otherwise an explicit unavailable status. |
+| `portal-records.json` | Portable portal-owned state for restore, including retained usage, owned research artefacts, enrichments, uploaded branding, evaluation rows and audit history. Present with `restoreVersion: 1`. See [restore](RESTORE.md) for counts, exclusions and the procedure. |
 | `feedback.csv` | Only with the explicit option. Columns: `learningId,good,at,message`. Retained ratings and their comments, subject to the existing 90-day, 500-rating retention. |
 
 Resources are read fresh through `RetrievalProvider.exportResources`, page by page, including
@@ -50,11 +55,10 @@ drafts, failed ingests and documentation resources hidden from the reader catalo
 Missing export support returns 501 `provider_export_unavailable`; there is no incomplete
 catalogue fallback. Malformed or repeated provider pages fail the export.
 
-File and branding links served by the portal are deployment-relative and require normal
-access. Original document bytes, extracted full text, uploaded branding bytes, research
-sessions, investigations, watches, membership assignments and source scheduler state are
-outside this format. This is an inventory and review artefact, not an offline replica or
-restore/import format. Source names and origin URLs are in each resource summary; additional
+File links served by the portal are deployment-relative and require normal
+access. Original document bytes, extracted full text, membership assignments, bindings and usable keys are
+outside this format. Provider inventories remain review artefacts. Restore-enabled bundles also
+include portal-owned records and branding bytes as described in [restore](RESTORE.md). Source names and origin URLs are in each resource summary; additional
 source URLs remain in redacted metadata when present.
 
 CSV fields are quoted, quotes escaped, and cells that could be spreadsheet formulas prefixed
@@ -63,8 +67,8 @@ and ZIP CRC-32 values describe the redacted file contents.
 
 ## Credentials and consistency
 
-The exporter never reads bindings, environment variables, authentication cookies or session
-storage. Configuration uses the public tenant schema; key rows use an explicit projection;
+The exporter never reads bindings, environment variables, authentication cookies or authentication
+session storage. Saved research-trail sessions are domain records and are included in restore data. Configuration uses the public tenant schema; key rows use an explicit projection;
 provider file pointers become portal links. Credential-named metadata fields are removed
 recursively. Recognisable MCP keys, Bearer/Operator credentials, sealed binding values, JWTs
 and labelled credentials in text are redacted. URL user information, fragments and credential
@@ -104,3 +108,11 @@ There is no new export store or retention/erasure inventory entry. Audit query s
 their normal expiry and erasure behaviour. Export audit events follow `AUDIT_RETENTION_DAYS`
 and portal erasure. Downloaded copies are outside deployment erasure, as described in the
 hosting retention inventory; their recipients control retention.
+
+## Import compatibility
+
+See [restore](RESTORE.md) for importing both full backups and version-less schema 1 inventory
+bundles. Legacy recovery is partial and returns explicit warnings for omitted research records,
+branding bytes and raw usage data. It requires the old ZIP dialect, complete file inventory,
+byte lengths and matching CRCs; any SHA-256 hashes supplied are also verified. Full version 1
+backups always require hashes and portable record counts. Unsupported versions are refused.

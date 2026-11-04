@@ -161,12 +161,15 @@ export function assertCompleteHttpInventory(app: Hono, declarations = DECLARATIO
     ...AUDIT_ROUTE_CASES.map(([path, permission]) => ({ method: 'GET', path, permission })),
     // The binary bundle has its own role/lifecycle matrix in portal-export.test.ts.
     { method: 'GET', path: '/api/admin/t/:slug/export', permission: 'audit.export' },
+    { method: 'POST', path: '/api/admin/t/:slug/import', permission: 'portal.create' },
   ]
   const keys = rows.map((r) => `${r.method} ${r.path}`).sort()
   expect(new Set(keys).size).toBe(keys.length)
   expect(declarations.filter((d) => d.kind === 'http').map((d) => `${d.method} ${d.path}`).sort())
     .toEqual(keys)
   const operatorRoutes = new Set([
+    'GET /api/admin/t/:slug/export',
+    'POST /api/admin/t/:slug/import',
     'POST /api/admin/tenants',
     'PATCH /api/admin/tenants/:slug',
     'PUT /api/admin/t/:slug/configuration',

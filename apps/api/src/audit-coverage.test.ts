@@ -723,6 +723,7 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
         },
       }
       try {
+        if (declaration.path === 'restore.apply') new RbacState(database).migrate()
         const owned = localOwnedStores(directory, database, audit, env)
         const shared = {
           bindings: new BindingStore(env),
@@ -744,6 +745,7 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
           owned,
           shared,
           {
+            restore: { apply: owned.portalBackup.restore },
             erasure: {
               erase: (slug: string, work: () => unknown) => {
                 const transaction = Reflect.get(owned, 'erasureTransaction')
@@ -916,6 +918,20 @@ Deno.test('every declared local write on Deno appends exactly one local.mutation
           'tenants.patch': [slug, { searchPlaceholder: 'A new question' }],
           'tenants.patchBranding': [slug, { tagline: 'Updated portal' }],
           'tenants.erase': ['retired'],
+          'restore.apply': [
+            slug,
+            [{
+              kind: 'configuration',
+              key: '',
+              value: {
+                tenant: owned.tenants!.get(slug)!,
+                prompts: { ask: 'Restored instruction' },
+                disabled: false,
+              },
+            }],
+            'inventory-restore-receipt',
+            () => {},
+          ],
           'erasure.erase': [slug, () => 'erased'],
           'sessions.put': [slug, owner, {
             id: 's',

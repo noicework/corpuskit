@@ -254,6 +254,8 @@ export interface TenantPatch {
   assessmentHeading?: string
   /** Whether Explore shows the regional discovery band (opt-in). */
   regionalDiscovery?: boolean
+  /** Full portal-state backup and restore, off unless explicitly enabled. */
+  portalRestore?: boolean
   /** Whether the portal offers agent ask (opt-in). */
   agentAsk?: boolean
   /** Federation peers and participation (docs/AGENT-ASK.md). */
@@ -417,6 +419,17 @@ export class TenantStore {
     // Only the v2 format has aliases; in v1 an `aliases` key would be a portal's slug.
     if (Object.hasOwn(raw, 'custom')) this.aliasRecords = storedAliases(raw.aliases)
     this.committed = structuredClone(this.snapshot())
+  }
+
+  /** Refresh cached registry state after an atomic runtime restore. */
+  static reload(store: TenantStore): void {
+    const fresh = new TenantStore({ TENANTS_PATH: store.path })
+    store.custom = fresh.custom
+    store.overrides = fresh.overrides
+    store.disabled = fresh.disabled
+    store.retired = fresh.retired
+    store.aliasRecords = fresh.aliasRecords
+    store.committed = structuredClone(store.snapshot())
   }
 
   /** The portal's configuration, with its primary alias as the canonical hostname. */

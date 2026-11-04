@@ -241,6 +241,7 @@ export class PortalDurableObject extends DurableObject<Env> {
       audit: this.stores.audit,
       localMutations: this.stores.localMutations,
       erasureTransaction: this.stores.erasureTransaction,
+      portalBackup: this.stores.portalBackup,
       operatorDeleteAfterDays: operatorDeleteAfterDays(bindings.OPERATOR_DELETE_AFTER_DAYS),
       breakGlass: this.breakGlass,
       requestContext: (request) => this.contexts.get(request),

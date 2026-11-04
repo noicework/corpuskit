@@ -1,3 +1,5 @@
+import { durablePortalBackup } from './portal-backup.ts'
+import type { PortalBackupStore } from '../../api/src/portal-backup.ts'
 import { effectiveAskInsights, guardrailCounts } from '../../api/src/stores.ts'
 import { DuplicateReviewStore } from '../../api/src/duplicate-store.ts'
 import { AnswerRecordStore } from '../../api/src/answer-record-store.ts'
@@ -2350,6 +2352,7 @@ export class DurableRoutingLog implements RoutingLogApi {
 }
 
 export interface DurableStores extends RbacStores {
+  portalBackup: PortalBackupStore
   duplicates: DuplicateReviewStore
   evaluations: EvaluationStore
   lifecycle: PortalLifecycleStore
@@ -2381,6 +2384,7 @@ export function durableStores(
   env: Record<string, string | undefined>,
 ): DurableStores {
   return {
+    portalBackup: durablePortalBackup(state),
     duplicates: state.auditedStore('duplicates', new DuplicateReviewStore(state.rbacDatabase)),
     evaluations: state.auditedStore('evaluations', new EvaluationStore(state.rbacDatabase)),
     lifecycle: state.auditedStore('lifecycle', new PortalLifecycleStore(state)),
