@@ -21,6 +21,7 @@
     "hono/route": "jsr:@hono/hono@^4.6.0/route",
     "@std/testing/bdd": "jsr:@std/testing@^1/bdd",
     "@std/expect": "jsr:@std/expect@^1",
+    "@std/jsonc": "jsr:@std/jsonc@^1",
     "@astral/astral": "jsr:@astral/astral@^0.5.6",
     "react": "https://esm.sh/react@18.3.1",
     "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime",

@@ -2,6 +2,7 @@
 /// <reference path="../../../worker-configuration.d.ts" />
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { expect } from '@std/expect'
+import { parse as parseJsonc } from '@std/jsonc'
 import { DurableState, type DurableStores, DurableTenantStore } from './state.ts'
 import {
   PRINCIPAL_HEADER,
@@ -675,7 +676,7 @@ Deno.test('every deployment configuration reserves its routed hosts outside the 
   type Settings = { routes?: Route[]; vars?: Record<string, string> }
   let checked = 0
   for (const file of ['wrangler.jsonc', 'wrangler.demo.jsonc']) {
-    const config = JSON.parse(
+    const config = parseJsonc(
       Deno.readTextFileSync(new URL(`../../../${file}`, import.meta.url)),
     ) as Settings & { env?: Record<string, Settings> }
     // The top level and every named environment are separate deployments with their own vars.
@@ -707,12 +708,12 @@ Deno.test('every deployment configuration reserves its routed hosts outside the 
       expect(externalHostWarning(vars), label).toBeNull()
     }
   }
-  expect(checked).toBeGreaterThan(5)
+  expect(checked).toBe(4)
 })
 
 Deno.test('hosts that are not registered aliases keep exactly their behaviour', async () => {
   const configured = ['wrangler.jsonc', 'wrangler.demo.jsonc'].flatMap((file) =>
-    (JSON.parse(Deno.readTextFileSync(new URL(`../../../${file}`, import.meta.url))) as {
+    (parseJsonc(Deno.readTextFileSync(new URL(`../../../${file}`, import.meta.url))) as {
       routes?: { pattern: string; custom_domain?: boolean }[]
     }).routes?.filter((route) => route.custom_domain).map((route) => route.pattern) ?? []
   )
@@ -721,13 +722,12 @@ Deno.test('hosts that are not registered aliases keep exactly their behaviour', 
     ...new Set([
       ...configured,
       'demo.corpuskit.org',
-      'acmd.corpuskit.org',
       'corpuskit.account.workers.dev',
       'unlisted.example.net',
     ]),
   ]
   expect(hosts).toEqual(expect.arrayContaining(['corpuskit.org', 'www.corpuskit.org']))
-  expect(hosts.length).toBeGreaterThan(6)
+  expect(hosts).toHaveLength(6)
   const requests: [string, string][] = [
     ['GET', '/'],
     ['GET', '/?from=card'],

@@ -64,15 +64,16 @@ audited, and the confidence in it is stated rather than implied.
 
 ## Showcase
 
-Two portals, one codebase. Each is a fictional organisation provisioned from the small synthetic
-seed corpus in `content/seed`, so the whole product can be seen working before you point it at
-your own knowledge box.
+Two local sample portals, one codebase. Each is a fictional organisation provisioned from the
+small synthetic seed corpus in `content/seed`, so the whole product can be seen working before
+you point it at your own knowledge box.
 
 - **Southern Waters Research Institute** (`marine`) - a fisheries and aquaculture research portal.
 - **Dryland Cropping Research Alliance** (`grains`) - a grains research portal.
 
-A deployment serves them only when `SHOWCASE_PORTALS=marine,grains` is set, so your own
-deployment shows only the portals you create (see `docs/HOSTING.md`, "Showcase portals").
+For development, set `SHOWCASE_PORTALS=marine,grains` in `.env` to serve these local sample
+portals. Otherwise, a deployment shows only the portals you create (see `docs/HOSTING.md`,
+"Showcase portals").
 
 ## Prerequisites
 
@@ -115,9 +116,9 @@ cp .env.example .env
 # fill in ARAG_ZONE, ARAG_ACCOUNT, ARAG_NUA_KEY (and set ADMIN_PASSCODE with
 # ADMIN_BREAK_GLASS=true if you want the break-glass admin path locally)
 
-deno task provision   # create + seed the showcase knowledge boxes (idempotent);
+deno task provision   # create + seed the local sample knowledge boxes (idempotent);
                       # writes ARAG_KB_* bindings back into .env; set
-                      # SHOWCASE_PORTALS=marine,grains in .env to serve those portals
+                      # SHOWCASE_PORTALS=marine,grains in .env for development
 
 deno task dev         # builds the web bundle, then serves the API + SPA on :8787
 ```

@@ -31,8 +31,8 @@ Production is published at `https://corpuskit.org`. The Worker also keeps its ge
 
 All automated functional testing targets **`https://demo.corpuskit.org`, tenant `demo`**. This
 includes the release's search/cited-answer/refusal gate, demo rollback verification, and the
-three-hourly or manually dispatched `acceptance.yml` sweep. There is no production/OPAX persona
-smoke and no arbitrary tenant override in these workflows. The old `PERSONA_SMOKE_TENANTS` and
+three-hourly or manually dispatched `acceptance.yml` sweep. There is no production persona smoke
+and no arbitrary tenant override in these workflows. The old `PERSONA_SMOKE_TENANTS` and
 `ACCEPTANCE_TENANTS` repository variables are ignored; they do not redirect either workflow.
 The persona runner also rejects non-demo remote targets before making a request. Localhost
 test-double journeys remain available for development.
@@ -114,10 +114,12 @@ See [configurable platform domain](HOSTING.md#configurable-platform-domain).
 
 ## Portal custom domains
 
-The two seeded showcase portals and OPAX have explicit custom domains in `wrangler.jsonc`, which
-serves the showcase portals with `SHOWCASE_PORTALS=marine,grains`. Other portals are always
-created with a working relative `/t/<slug>` route first. If the optional Cloudflare domain
-credentials are configured, the admin create route then:
+The documentation site uses `corpuskit.org` and `www.corpuskit.org`; the documentation demo uses
+`demo.corpuskit.org`. The `grains.corpuskit.org` sample portal and `SHOWCASE_PORTALS=grains` are
+held for a follow-up PR after Friday 6 November. For local development, enable the sample portals
+with `SHOWCASE_PORTALS=marine,grains` in `.env`. Portals are always created with a working relative
+`/t/<slug>` route first. If the optional domain credentials are configured, the admin create route
+then:
 
 1. validates the generated slug as a public DNS label and rejects reserved infrastructure names;
 2. looks up the exact hostname with
