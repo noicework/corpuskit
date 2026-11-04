@@ -2,7 +2,7 @@ import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
 import { startTestServer } from './support/test-server.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
-import { captureBoundary } from './support/rbac-fixture.ts'
+import { captureBoundary, returnAfterAccessChange } from './support/rbac-fixture.ts'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
 
 async function completedAsk(page: Page) {
@@ -161,8 +161,8 @@ for (const removed of ['portal.watch', 'portal.export', 'portal.generate'] as co
           )
           return Response.json(value)
         }
-        dispatchEvent(new Event('focus'))
       }, { args: [removed] })
+      await returnAfterAccessChange(page)
       await page.waitForSelector('#ask-composer')
       await completedAsk(page)
       await sinks(page)

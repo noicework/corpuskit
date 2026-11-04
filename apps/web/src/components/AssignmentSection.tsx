@@ -133,7 +133,9 @@ function Section(
     enabled: access.can(permission, scope),
     retry: false,
   })
-  const supported = family !== 'groups' || rows.data?.capability === 'enabled'
+  // A read that fails, a refresh after a return included, never leaves the last list editable.
+  const current = rows.isError ? undefined : rows.data
+  const supported = family !== 'groups' || current?.capability === 'enabled'
   return (
     <section
       className='rp-card min-w-0 space-y-4 p-5 lg:p-6'
@@ -178,13 +180,13 @@ function Section(
           />
         </div>
       )}
-      {rows.data && (
+      {current && (
         <AssignmentEditor
           scope={scope}
           scopeName={name}
           family={family}
           roles={scope.kind === 'portal' ? PORTAL_ROLES : PLATFORM_ROLES}
-          items={rows.data.items}
+          items={current.items}
           canEdit={supported}
           onCreate={(input) => mutate(() => createAssignment(scope, family, input, options))}
           onChange={(id, role) => mutate(() => changeAssignment(scope, family, id, role, options))}

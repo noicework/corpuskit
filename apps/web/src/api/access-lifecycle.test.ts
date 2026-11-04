@@ -1,10 +1,5 @@
 import { expect } from '@std/expect'
-import {
-  AuthorityController,
-  FILE_PICKER_BLUR_MS,
-  FilePickerFocus,
-  registerAuthorityController,
-} from './access-lifecycle.ts'
+import { AuthorityController, registerAuthorityController } from './access-lifecycle.ts'
 import { sessionFixture } from './auth.test.ts'
 import { sessionAccess } from './break-glass.ts'
 import {
@@ -415,8 +410,8 @@ Deno.test('revalidation keeps an unchanged session, its generation and its in-fl
     })
   }
   try {
-    // A file picker returns focus to the window just before its input's change event: the
-    // upload is dispatched while the re-check is still pending, so authority must stay current.
+    // A return to the window: the page keeps working while the session is read again, so
+    // authority stays current and a request dispatched meanwhile belongs to it.
     const first = authority.revalidate('marine')
     const second = authority.revalidate('marine')
     expect(authority.status).toBe('ready')
@@ -583,27 +578,6 @@ Deno.test('a failed admin upload says what went wrong instead of a code or a bar
   }
 })
 
-Deno.test('only the focus a file picker hands back skips withdrawal, and only once', () => {
-  const focus = new FilePickerFocus()
-  // Choosing a file: the input is activated, its picker blurs the window, focus comes back.
-  focus.activated(1_000)
-  focus.blurred(1_020)
-  expect(focus.focused()).toBe('picker')
-  // The next return is an ordinary one.
-  focus.blurred(5_000)
-  expect(focus.focused()).toBe('return')
-  // A focus with no blur since activation (a picker that never took focus) is a return.
-  focus.activated(6_000)
-  expect(focus.focused()).toBe('return')
-  // An activation long before an unrelated blur never excuses the later return.
-  focus.activated(7_000)
-  focus.blurred(7_000 + FILE_PICKER_BLUR_MS + 1)
-  expect(focus.focused()).toBe('return')
-  // Without any activation every focus is a return.
-  focus.blurred(9_000)
-  expect(focus.focused()).toBe('return')
-})
-
 /** A fetch double that answers the session read and holds each admin request until told. */
 function routedFetch(session: () => Response | Promise<Response>) {
   const admin: { url: string; signal?: AbortSignal; resolve: (response: Response) => void }[] = []
@@ -648,7 +622,7 @@ Deno.test('an add in flight is held through an access check and published to the
     let settled = false
     upload.then(() => settled = true, () => settled = true)
     while (routed.admin.length === 0) await new Promise((resolve) => setTimeout(resolve, 0))
-    // An observed return: reads and the page are withdrawn, the write is not cut off.
+    // A withdrawal while access is checked: reads and the page end, the write is not cut off.
     routed.gateAuth()
     const check = authority.refresh('marine')
     expect(authority.status).toBe('loading')
@@ -741,7 +715,7 @@ Deno.test('a held answer that arrived mid-check never publishes when the check e
           add.then((value) => outcome = value, (error: Error) => outcome = error.name)
           while (routed.admin.length === 0) await new Promise((resolve) => setTimeout(resolve, 0))
           routed.gateAuth()
-          authority.invalidate('observed return', 'loading')
+          authority.invalidate('access check', 'loading')
           const check = end(authority).catch(() => {})
           // The answer is already here, waiting for the check.
           routed.admin[0]!.resolve(Response.json({ id: 'res-1' }))
@@ -752,6 +726,74 @@ Deno.test('a held answer that arrived mid-check never publishes when the check e
           await check
           await new Promise((resolve) => setTimeout(resolve, 10))
           expect(outcome, `${name}, ${kind}`).toBe('AbortError')
+        } finally {
+          unregister()
+        }
+      }
+    }
+  } finally {
+    globalThis.fetch = original
+    restore()
+  }
+})
+
+Deno.test('what arrives while a return is checked waits, and reaches only the same authority', async () => {
+  const original = globalThis.fetch
+  const restore = browserStorage()
+  const outcomes: [string, () => Response, boolean][] = [
+    ['the same authority', () => Response.json({ ...sessionFixture(), claimAgeSeconds: 42 }), true],
+    ['another person', () => Response.json(sessionFixture('marine', 'two')), false],
+    ['a failed check', () => new Response('unavailable', { status: 503 }), false],
+  ]
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 10))
+  const frame = (text: string) => new TextEncoder().encode(`data: ${JSON.stringify({ text })}\n\n`)
+  try {
+    for (const [name, answer, kept] of outcomes) {
+      for (const kind of ['read', 'add', 'stream'] as const) {
+        const label = `${name}, ${kind}`
+        const routed = routedFetch(answer)
+        globalThis.fetch = routed.fetch
+        const authority = new AuthorityController()
+        authority.setSession(sessionFixture(), 'marine')
+        const unregister = registerAuthorityController(authority)
+        try {
+          let events = 0
+          let body!: ReadableStreamDefaultController<Uint8Array>
+          const pending: Promise<unknown> = kind === 'read'
+            ? request('/api/t/marine/counters')
+            : kind === 'add'
+            ? uploadAdminFile('marine', sessionAccess, new File(['x'], 'a.pdf'))
+            : streamAsk('marine', { query: 'question' }, () => events++)
+          let outcome: unknown = 'pending'
+          pending.then((value) => outcome = value ?? 'done', () => outcome = 'dropped')
+          while (routed.admin.length === 0) await tick()
+          if (kind === 'stream') {
+            // The answer is already streaming when the person comes back.
+            routed.admin[0]!.resolve(
+              new Response(new ReadableStream({ start: (controller) => body = controller })),
+            )
+            body.enqueue(frame('before'))
+            while (events === 0) await tick()
+          }
+          routed.gateAuth()
+          const check = authority.revalidate('marine').catch(() => {})
+          // The page keeps its authority while the session is read again.
+          expect(authority.status, label).toBe('ready')
+          expect(routed.admin[0]!.signal?.aborted, label).toBe(false)
+          if (kind === 'stream') body.enqueue(frame('during'))
+          else routed.admin[0]!.resolve(Response.json({ id: 'res-1' }))
+          await tick()
+          // Arrived, but nothing reaches the page until the check answers.
+          expect(outcome, label).toBe('pending')
+          expect(events, label).toBe(kind === 'stream' ? 1 : 0)
+          routed.releaseAuth()
+          await check
+          if (kept && kind === 'stream') body.close()
+          await tick()
+          expect(outcome, label).toEqual(
+            kept ? kind === 'stream' ? 'done' : { id: 'res-1' } : 'dropped',
+          )
+          expect(events, label).toBe(kind === 'stream' ? kept ? 2 : 1 : 0)
         } finally {
           unregister()
         }

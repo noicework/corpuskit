@@ -1,7 +1,11 @@
 import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
 import { startTestServer } from './support/test-server.ts'
-import { assertCurrentBuild, captureBoundary } from './support/rbac-fixture.ts'
+import {
+  assertCurrentBuild,
+  captureBoundary,
+  returnAfterAccessChange,
+} from './support/rbac-fixture.ts'
 import { settle } from './support/settle.ts'
 
 const directory = '.planning/logs/04-13-01'
@@ -258,8 +262,8 @@ Deno.test('member and behaviour permissions independently gate groups and mode c
           ) => p !== removed)
           return Response.json(snapshot)
         }
-        dispatchEvent(new Event('focus'))
       }, { args: [removed] })
+      await returnAfterAccessChange(page)
       await page.waitForSelector('[data-access-panel]')
       if (removed === 'members.manage') {
         await page.waitForSelector('[data-access-mode]')

@@ -34,6 +34,25 @@ const dialogOpen = () =>
   document.querySelector('dialog[data-demo-tour]')?.hasAttribute('open') === true
 const dialogGone = () => document.querySelector('dialog[data-demo-tour]') === null
 
+/**
+ * Remount the page the way a failed access check does: the next session read fails, which takes
+ * the page away behind the access gate, and the next return reads the session again.
+ */
+async function remount(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const original = globalThis.fetch
+    globalThis.fetch = (input, init) => {
+      if (!String(input).startsWith('/auth/me')) return original(input, init)
+      globalThis.fetch = original
+      return Promise.resolve(new Response('unavailable', { status: 503 }))
+    }
+    globalThis.dispatchEvent(new Event('focus'))
+  })
+  await settle(page, () => document.querySelector('[data-access-state]') !== null, 'the gate')
+  await page.evaluate(() => globalThis.dispatchEvent(new Event('focus')))
+  await settle(page, () => document.querySelector('[data-access-state]') === null, 'the return')
+}
+
 /** The help menu's "Take the tour" row, which the tour must then open on the home page. */
 async function openFromHelpMenu(page: Page): Promise<void> {
   await page.waitForSelector(HELP_TRIGGER)
@@ -199,12 +218,26 @@ describe('the guided tour', () => {
         'the Graph scene',
       )
 
-      // The window regaining focus remounts the page; the tour comes back at the same step.
-      await page.evaluate(() => globalThis.dispatchEvent(new Event('focus')))
+      // The window regaining focus checks access in place: the tour stays open, untouched.
+      await page.evaluate(() => {
+        document.querySelector('dialog[data-demo-tour]')!.setAttribute('data-before-return', '')
+        globalThis.dispatchEvent(new Event('focus'))
+      })
+      await new Promise((resolve) => setTimeout(resolve, 600))
+      expect(
+        await page.evaluate(() =>
+          document.querySelector('dialog[data-demo-tour]')?.hasAttribute('data-before-return')
+        ),
+      ).toBe(true)
+      expect((await state()).status).toBe('Step 3 of 4: Visualise connections')
+
+      // A remount brings the tour back at the same step.
+      await remount(page)
       await settle(
         page,
         () =>
           document.querySelector('dialog[data-demo-tour]')?.hasAttribute('open') === true &&
+          !document.querySelector('[data-before-return]') &&
           document.querySelector('dialog[data-demo-tour] h2')?.textContent?.trim() ===
             'Visualise connections',
         'the tour coming back after a remount',
@@ -220,7 +253,7 @@ describe('the guided tour', () => {
         'focus returning',
       )
       // Closed, it stays closed through the next remount.
-      await page.evaluate(() => globalThis.dispatchEvent(new Event('focus')))
+      await remount(page)
       await new Promise((resolve) => setTimeout(resolve, 600))
       expect(await page.evaluate(dialogGone)).toBe(true)
     } finally {

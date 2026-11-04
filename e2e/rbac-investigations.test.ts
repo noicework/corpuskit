@@ -5,6 +5,7 @@ import {
   assertCurrentBuild,
   buildComponentFixture,
   captureBoundary,
+  returnAfterAccessChange,
   sourcePath,
 } from './support/rbac-fixture.ts'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
@@ -320,12 +321,23 @@ Deno.test('export helper checks before producer and browser sinks, aborts late w
     await page.evaluate(() => {
       void (globalThis as unknown as { startExport: () => Promise<void> }).startExport()
     })
+    // The file is finished while a return is being checked: it waits for the check, which finds
+    // another person, so nothing is saved.
+    const check = server.delayResponse('/auth/me?portal=marine')
     server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
     await page.evaluate(() => dispatchEvent(new Event('focus')))
-    await page.waitForSelector('[data-ready=ready]')
+    await check.entered
     await page.evaluate(() =>
       (globalThis as unknown as { finishExport: () => void }).finishExport()
     )
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 100)))
+    expect(
+      await page.evaluate(() =>
+        (globalThis as unknown as { exportState: () => { outcome: string } }).exportState()
+          .outcome
+      ),
+    ).toBe('')
+    check.release()
     await page.waitForFunction(() =>
       (globalThis as unknown as { exportState: () => { outcome: string } }).exportState()
         .outcome === 'blocked'
@@ -356,7 +368,7 @@ Deno.test('export helper checks before producer and browser sinks, aborts late w
     )
     expect((await state()).starts).toBe(1)
     server.setIdentity(fixtureSession({ oid: 'fixture-analyst' }))
-    await page.evaluate(() => dispatchEvent(new Event('focus')))
+    await returnAfterAccessChange(page)
     await page.waitForSelector('[data-ready=ready]')
     await page.evaluate(() => {
       void (globalThis as unknown as { startExport: () => Promise<void> }).startExport()

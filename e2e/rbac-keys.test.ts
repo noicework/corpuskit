@@ -5,6 +5,7 @@ import {
   assertCurrentBuild,
   buildComponentFixture,
   captureBoundary,
+  returnAfterAccessChange,
   sourcePath,
 } from './support/rbac-fixture.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
@@ -76,8 +77,8 @@ Deno.test('reader Tools supports public keyless MCP and exact permission links w
         snapshot.coarseAdminEligible = true
         return Response.json(snapshot)
       }
-      dispatchEvent(new Event('focus'))
     })
+    await returnAfterAccessChange(page)
     await page.waitForSelector('[data-tools-page]')
     expect(await page.$('[data-manage-keys-link]')).toBeNull()
     expect(await page.$('#extraction-lab-heading')).toBeNull()

@@ -153,10 +153,9 @@ Deno.test('switcher discards prior catalogues and checks the destination scope',
       server.setIdentity(fixtureSession({ oid: 'fixture-viewer' }))
       await page.evaluate(() => dispatchEvent(new Event('focus')))
       await delayed.entered
-      await page.waitForSelector('[data-access-state=loading]')
-      expect(await page.evaluate(() => document.body.innerText)).not.toContain(
-        'Grains private catalogue',
-      )
+      // A return checks access in place: the page stays as it was until the check answers, and
+      // the check's answer, another person, starts it again.
+      expect(await page.$('[data-access-state]')).toBeNull()
       const flipped = server.requests.length
       delayed.release()
       // The viewer holds a role on marine alone, so once their portal list arrives the switcher

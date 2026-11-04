@@ -2031,9 +2031,17 @@ label.rp-btn:has(input:focus-visible) {
   gap: 1rem;
 }
 
+/* The header stacks below sm, where a flex basis would become height (a 16rem gap under a
+   one-line heading), so the wrapping basis applies only once the header is a row. */
 .rp-section-head-text {
-  flex: 1 1 16rem;
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+@media (min-width: 640px) {
+  .rp-section-head-text {
+    flex-basis: 16rem;
+  }
 }
 
 .rp-section-title {

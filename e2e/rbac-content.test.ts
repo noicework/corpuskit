@@ -1,6 +1,6 @@
 import { expect } from '@std/expect'
 import { launch, type Page } from '@astral/astral'
-import { startTestServer as startServer } from './support/test-server.ts'
+import { startTestServer as startServer, type TestServer } from './support/test-server.ts'
 import { assertCurrentBuild, captureBoundary } from './support/rbac-fixture.ts'
 import { fixtureSession } from '../apps/api/src/rbac-integration-fixture.ts'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
@@ -653,7 +653,17 @@ async function pickFile(page: Page, name: string) {
   }, { args: [name] })
 }
 
-Deno.test('a file chosen through the native picker uploads while an ordinary return still withdraws access', async () => {
+/** Resolves once a session read after the first `before` has been sent and answered. */
+async function sessionChecked(server: Pick<TestServer, 'requests'>, before: number) {
+  const checks = () => server.requests.filter((r) => r.path === '/auth/me?portal=marine')
+  const deadline = Date.now() + 5000
+  while (checks().length <= before || checks().some((r) => r.status === undefined)) {
+    if (Date.now() > deadline) throw new Error('The return was not checked')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+  }
+}
+
+Deno.test('a file chosen through the native picker uploads, and every return keeps the panel', async () => {
   const browser = await launch()
   const { management, calls } = contentManagement()
   const server = startTestServer({ identity: { role: 'curator' }, management })
@@ -667,26 +677,28 @@ Deno.test('a file chosen through the native picker uploads while an ordinary ret
     await assertCurrentBuild(page)
     for (const name of ['first.txt', 'second.txt']) {
       await page.waitForSelector('input[type=file]')
+      await page.evaluate(() =>
+        document.querySelector('input[type=file]')!.setAttribute('data-before-return', '')
+      )
+      // The picker's return is checked against the server like any return, without withdrawing
+      // access: once that check has answered, the panel that chose the file is still mounted.
       const before = checks()
       await pickFile(page, name)
       await uploadShown(page, name)
-      // The picker's return is still checked against the server, without withdrawing access:
-      // once that check has answered, the panel that chose the file is still mounted.
-      const deadline = Date.now() + 5000
-      while (checks() <= before) {
-        if (Date.now() > deadline) throw new Error('The picker return was not checked')
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
+      await sessionChecked(server, before)
       await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)))
-      expect(await page.evaluate(() => !!document.querySelector('input[type=file]'))).toBe(true)
+      expect(await page.evaluate(() => !!document.querySelector('[data-before-return]'))).toBe(true)
       await uploadShown(page, name)
-      // A later ordinary return withdraws access until the session is read again, which
-      // remounts the page: the panel that chose the file is replaced.
-      await page.evaluate(() => {
-        document.querySelector('input[type=file]')!.setAttribute('data-before-return', '')
-        dispatchEvent(new Event('focus'))
-      })
-      await page.waitForFunction(() => !document.querySelector('[data-before-return]'))
+      // A later return is checked the same way, and the panel stays as the person left it.
+      const again = checks()
+      await page.evaluate(() => dispatchEvent(new Event('focus')))
+      await sessionChecked(server, again)
+      await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)))
+      expect(await page.evaluate(() => !!document.querySelector('[data-before-return]'))).toBe(true)
+      await uploadShown(page, name)
+      await page.evaluate(() =>
+        document.querySelector('[data-before-return]')!.removeAttribute('data-before-return')
+      )
     }
     expect(uploads()).toBe(2)
     expect(calls.filter((call) => call === 'uploadFile')).toHaveLength(2)
@@ -701,7 +713,7 @@ Deno.test('a file chosen through the native picker uploads while an ordinary ret
   }
 })
 
-Deno.test('a return gives focus back to the same control, and the gate heading only an outcome', async () => {
+Deno.test('a return leaves focus on the same control, and the gate heading takes it only for an outcome', async () => {
   const browser = await launch()
   const server = startTestServer({ identity: { role: 'analyst' } })
   server.setAccessMode('marine', 'restricted')
@@ -724,22 +736,27 @@ Deno.test('a return gives focus back to the same control, and the gate heading o
         root.setAttribute('data-focus-log', log ? `${log}|${entry}` : entry)
       })
     }, { args: [link] })
-    // The person comes back: access is withdrawn while the session is read again.
+    // The person comes back: the session is read again while the page stays as it was.
+    const before = server.requests.filter((r) => r.path === '/auth/me?portal=marine').length
     delay = server.delayResponse('/auth/me?portal=marine')
     await page.evaluate(() => {
       dispatchEvent(new Event('blur'))
       dispatchEvent(new Event('focus'))
     })
     await delay.entered
-    await page.waitForSelector('[data-access-state=loading]')
+    expect(await page.$('[data-access-state=loading]')).toBe(null)
     delay.release()
-    // The check confirms the same authority, so the remounted page's copy of the control has
-    // focus again. The gate's "Checking access..." heading never took it.
-    await page.waitForFunction((link: string) => {
-      const focused = document.activeElement
-      return focused?.matches(link) && !focused.hasAttribute('data-before-return')
-    }, { args: [link] })
-    expect(await focusLog()).toEqual(['A'])
+    await sessionChecked(server, before)
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 150)))
+    // The check confirms the same authority: the control the person left still has focus, and
+    // focus never moved, not even to the gate's "Checking access..." heading.
+    expect(
+      await page.evaluate((link: string) => {
+        const focused = document.activeElement
+        return !!focused?.matches(link) && focused.hasAttribute('data-before-return')
+      }, { args: [link] }),
+    ).toBe(true)
+    expect(await focusLog()).toBe(undefined)
 
     // A return that ends without access focuses the gate's heading, never the old place.
     server.setAssignment({ kind: 'portal', slug: 'marine' }, 'e2e-analyst', null)
@@ -783,14 +800,16 @@ Deno.test('an upload running when the person comes back finishes once and surviv
       input.dispatchEvent(new Event('change', { bubbles: true }))
     })
     await delay.entered
-    // The person switches away and back mid-upload: the page is withdrawn and access checked.
+    // The person switches away and back mid-upload: access is checked and the page stays.
+    const before = server.requests.filter((r) => r.path === '/auth/me?portal=marine').length
     await page.evaluate(() => {
       document.querySelector('input[type=file]')!.setAttribute('data-before-return', '')
       dispatchEvent(new Event('focus'))
     })
-    await page.waitForFunction(() => !document.querySelector('[data-before-return]'))
+    await sessionChecked(server, before)
+    expect(await page.$('[data-before-return]')).not.toBe(null)
     await page.waitForSelector('[data-upload-row][data-upload-status=uploading]')
-    // The write was never cut off, so it lands once and its row carries on in the new page.
+    // The write was never cut off, so it lands once and its row carries on.
     delay.release()
     await uploadShown(page, 'inflight.txt')
     expect(posts()).toHaveLength(1)

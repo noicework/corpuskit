@@ -48,6 +48,8 @@ export async function exportResearchFile(
   const unregister = controller.registerCleanup(clear)
   try {
     const file = await producer(request.signal)
+    // A file finished while a return is being checked waits for the check's answer.
+    await request.hold()
     request.assertCurrent()
     assert()
     if (!file.filename.trim() || file.parts.length === 0) throw new Error('Nothing to export.')
@@ -99,6 +101,7 @@ export async function printResearchHtml(
   })
   try {
     const html = await Promise.race([producer(request.signal), cancelled])
+    await request.hold()
     request.assertCurrent()
     assert()
     if (!html.trim()) throw new Error('Nothing to export.')
@@ -108,6 +111,7 @@ export async function printResearchHtml(
     win.document.write(html)
     win.document.close()
     await Promise.race([win.document.fonts.ready, cancelled])
+    await request.hold()
     request.assertCurrent()
     assert()
     if (!win || win.closed) return false

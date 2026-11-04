@@ -45,6 +45,19 @@ export async function buildComponentFixture({ entrySource }: { entrySource: stri
 
 export const sourcePath = (path: string) => `${Deno.cwd()}/${path}`
 
+/**
+ * Bring the person back to the window after their access changed, and wait for the page to start
+ * again under the new access. A return checks access in place, so the old page stays until the
+ * check answers; every element under `#root` is then replaced.
+ */
+export async function returnAfterAccessChange(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    document.querySelector('#root > *')!.setAttribute('data-before-return', '')
+    dispatchEvent(new Event('focus'))
+  })
+  await page.waitForFunction(() => !document.querySelector('[data-before-return]'))
+}
+
 export async function assertCurrentBuild(page: Page): Promise<void> {
   const expected = JSON.parse(await Deno.readTextFile('apps/web/dist/build.json'))
   const actual = await page.evaluate(async () =>

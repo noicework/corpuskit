@@ -5,6 +5,7 @@ import {
   assertCurrentBuild,
   buildComponentFixture,
   captureBoundary,
+  returnAfterAccessChange,
   sourcePath,
 } from './support/rbac-fixture.ts'
 import type { BuildAppOptions } from '../apps/api/src/app.ts'
@@ -82,9 +83,8 @@ async function reduceAsk(page: Page) {
       )
       return Response.json(value)
     }
-    dispatchEvent(new Event('focus'))
   })
-  await page.waitForFunction(() => !document.body.textContent?.includes('Checking access'))
+  await returnAfterAccessChange(page)
 }
 
 async function navigate(page: Page, path: string) {
