@@ -87,10 +87,6 @@ Deno.test('portalHref keeps local, preview and same-host navigation relative', (
   })).toBe('/t/grains')
   expect(portalHref('marine', {
     hostname: 'marine.corpuskit.org',
-    currentHostname: 'corpuskit.noice.net.au',
-  })).toBe('/t/marine')
-  expect(portalHref('marine', {
-    hostname: 'marine.corpuskit.org',
     currentHostname: 'marine.corpuskit.org',
   })).toBe('/t/marine')
 })

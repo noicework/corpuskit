@@ -1190,7 +1190,7 @@ export class DurableTenantStore implements TenantStoreApi {
   }
 
   /**
-   * Seed a portal a demo Worker provisions for itself (`initialiseDemo`, `initialiseAcmdDemo`).
+   * Seed a portal a demo Worker provisions for itself (`initialiseDemo`).
    * This is the one path that takes a retired slug again, so a demo portal removed by an
    * administrator comes back on the next start. A seeded slug with no portal record starts clean:
    * whatever a removed portal left stored under it is cleared first. The slug stays retired.

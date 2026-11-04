@@ -1,6 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { expect } from '@std/expect'
 import {
+  DEFAULT_PALETTES,
   DEFAULT_PORTAL_COLOURS,
   DEFAULT_RESEARCH_ENRICHMENT,
   type Enrichment,
@@ -34,7 +35,7 @@ import {
   ownedMutationCases,
   seedOwned,
 } from '../../api/src/owned-store-fixture.ts'
-import { ACMD_DEMO_TENANT, initialiseAcmdDemo } from './acmd-demo.ts'
+import { DEMO_TENANT } from './demo.ts'
 import { checkAliasRegistry } from '../../api/src/alias-store-fixture.ts'
 import { checkLateSourceCheckpoint } from '../../api/src/sync-checkpoint-fixture.ts'
 
@@ -714,30 +715,36 @@ Deno.test('Durable showcase portals keep the regional band on state stored befor
   }
 })
 
-Deno.test('Durable ACMD demo seeds unchanged and keeps its unlisted palette through the API', async () => {
+Deno.test('a stored sample portal keeps its unlisted palette through the API and a restart', async () => {
   const { stores, request, sql } = mutationFixture()
   try {
-    await initialiseAcmdDemo(stores.tenants, stores.bindings, 'demo')
-    expect(stores.tenants.get('acmd')).toEqual(ACMD_DEMO_TENANT)
-    expect(stores.tenants.get('acmd')?.branding.paletteId).toBe('acmd')
-    expect(showsRegionalDiscovery(stores.tenants.get('acmd')!)).toBe(false)
+    const paletteId = Object.values(DEFAULT_PALETTES).find((entry) => entry.listed === false)!.id
+    const sample = {
+      ...DEMO_TENANT,
+      slug: 'sample',
+      hostname: undefined,
+      branding: { ...DEMO_TENANT.branding, paletteId, shape: 'soft' as const },
+    }
+    stores.tenants.seed(sample)
+    expect(stores.tenants.get('sample')).toEqual(sample)
+    expect(showsRegionalDiscovery(stores.tenants.get('sample')!)).toBe(false)
 
-    const kept = await request('/api/admin/tenants/acmd', 'PATCH', {
-      paletteId: 'acmd',
+    const kept = await request('/api/admin/tenants/sample', 'PATCH', {
+      paletteId,
       shape: 'rounded',
     })
     expect(kept.status).toBe(200)
-    expect(stores.tenants.get('acmd')?.branding.paletteId).toBe('acmd')
-    expect(stores.tenants.get('acmd')?.branding.shape).toBe('rounded')
+    expect(stores.tenants.get('sample')?.branding.paletteId).toBe(paletteId)
+    expect(stores.tenants.get('sample')?.branding.shape).toBe('rounded')
 
-    const refused = await request('/api/admin/tenants/marine', 'PATCH', { paletteId: 'acmd' })
+    const refused = await request('/api/admin/tenants/marine', 'PATCH', { paletteId })
     expect(refused.status).toBe(400)
     expect((await refused.json()).error).toBe('palette_not_available')
     expect(stores.tenants.get('marine')?.branding.paletteId).toBe('fathom')
 
-    // A restart re-runs the seed, which leaves the edited portal alone.
-    await initialiseAcmdDemo(stores.tenants, stores.bindings, 'demo')
-    expect(stores.tenants.get('acmd')?.branding.shape).toBe('rounded')
+    const reloaded = new DurableTenantStore(new DurableState(sql, sql), 'corpuskit.org')
+    expect(reloaded.get('sample')?.branding.paletteId).toBe(paletteId)
+    expect(reloaded.get('sample')?.branding.shape).toBe('rounded')
   } finally {
     sql.database.close()
   }

@@ -4,7 +4,6 @@ import {
   type EnforcementFixture,
 } from '../../api/src/enforcement-fixture.ts'
 import { encodeStorageIdentifier } from '../../api/src/research-owner.ts'
-import { initialiseAcmdDemo } from './acmd-demo.ts'
 import { DEMO_TENANT, initialiseDemo } from './demo.ts'
 
 Deno.test('demo bootstrap only writes to a new demo instance', () => {
@@ -157,7 +156,6 @@ Deno.test('a demo portal seeded again after removal starts without the removed p
   })
   const initialisers = {
     demo: () => initialiseDemo(f.stores.tenants, 'demo'),
-    acmd: () => initialiseAcmdDemo(f.stores.tenants, f.stores.bindings, 'demo'),
   }
   try {
     await f.stores.bindings.initialize()
