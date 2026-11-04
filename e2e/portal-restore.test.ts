@@ -20,6 +20,34 @@ import { parseBackup, restoreCounts } from '../apps/api/src/portal-backup.ts'
 
 const operatorKey = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8'
 const headers = { authorization: `Operator ${operatorKey}` }
+Deno.test('local server imports an inventory-only bundle with partial recovery warnings', async () => {
+  const server = startTestServer({
+    apiOnly: true,
+    loginEnv: { OPERATOR_API_KEY: operatorKey, OPERATOR_ID: 'backup-automation' },
+  })
+  try {
+    server.tenants.patch('marine', { prompts: { ask: 'Use research evidence.' } })
+    server.tenants.patch('grains', { portalRestore: true })
+    const exported = await fetch(`${server.url}/api/admin/t/marine/export`, { headers })
+    expect(exported.status).toBe(200)
+    const bytes = new Uint8Array(await exported.arrayBuffer())
+    expect(readExportZip(bytes).has('portal-records.json')).toBe(false)
+    const restored = await fetch(`${server.url}/api/admin/t/grains/import?targetSlug=grains`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/zip' },
+      body: bytes,
+    })
+    expect(restored.status, await restored.clone().text()).toBe(200)
+    const result = await restored.json()
+    expect(result.warnings.join(' ')).toContain('partial recovery')
+    expect(result.counts).toMatchObject({ sessions: 0, answerRecords: 0, configuration: 1 })
+    expect(server.tenants.promptsFor('grains').ask).toBe('Use research evidence.')
+    expect(server.tenants.get('grains')!.portalRestore).toBe(true)
+  } finally {
+    await server.close()
+  }
+})
+
 Deno.test('local operator exports, resets and restores realistic portal records over HTTP', async () => {
   const server = startTestServer({
     apiOnly: true,
@@ -34,6 +62,9 @@ Deno.test('local operator exports, resets and restores realistic portal records 
   const answers = new AnswerRecordStore(new FileAnswerRecordState(server.directory))
   const evaluations = new EvaluationStore(database), duplicates = new DuplicateReviewStore(database)
   try {
+    for (const tenant of ['marine', 'grains']) {
+      server.tenants.patch(tenant, { portalRestore: true })
+    }
     server.tenants.patchBranding(slug, {
       organisation: 'Fisheries research',
       productName: 'Research discovery',
@@ -156,6 +187,7 @@ Deno.test('local operator exports, resets and restores realistic portal records 
     expect(server.providerCalls.filter((c) => c === 'exportResources')).toHaveLength(1)
     const managed = createEnforcementFixture()
     try {
+      managed.stores.tenants.patch('b', { portalRestore: true })
       const imported = await managed.requestAs(
         managed.sessionFor('platform-admin'),
         '/api/admin/t/b/import?targetSlug=b',
@@ -212,6 +244,7 @@ Deno.test('actual local Deno process restores a DoubleProvider bundle with loopb
   let bytes: Uint8Array<ArrayBuffer>
   const owner = { kind: 'anonymous' as const, clientId: 'process-restore-reader' }
   try {
+    fixture.stores.tenants.patch('public-a', { portalRestore: true })
     fixture.stores.sessions.put('public-a', owner, {
       id: 'process-session',
       title: 'Recovered research trail',
@@ -258,7 +291,9 @@ Deno.test('actual local Deno process restores a DoubleProvider bundle with loopb
     ARAG_NUA_KEY: '',
     ARAG_ACCOUNT: '',
   }
-  const target = new TenantStore(env).add({ name: 'Recovered research' })
+  const tenants = new TenantStore(env)
+  const target = tenants.add({ name: 'Recovered research' })
+  tenants.patch(target.slug, { portalRestore: true })
   const child = new Deno.Command(Deno.execPath(), {
     args: [
       'run',

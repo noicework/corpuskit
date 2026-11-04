@@ -235,9 +235,10 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
               }
             })(),
           )
+          const restoreEnabled = tenant.portalRestore === true && !!services.backup
           let evaluationSets: unknown[] = []
           let evaluationResults: unknown[] = []
-          if (services.backup) {
+          if (restoreEnabled && services.backup) {
             const records = services.backup.capture(slug, includeFeedback)
             records.push({
               kind: 'lifecycle',
@@ -300,12 +301,12 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
             await zip.add('portal-records.json', [JSON.stringify(backup) + '\n'])
             Object.assign(counts, { restore: restoreCounts(backup) })
           }
-          const evaluationNote = services.backup
+          const evaluationNote = restoreEnabled
             ? 'Persisted evaluation definitions and retained runs are included. Schedules require fresh authorisation after restore.'
-            : 'No persisted evaluation set or evaluation result store is available in this embedded application. Routing decisions are supplied separately in routing.json.'
+            : 'Full portal backup is disabled or unavailable. No persisted evaluation records are included. Routing decisions are supplied separately in routing.json.'
           await zip.add('evaluations.json', [
             json({
-              status: services.backup ? 'available' : 'unavailable',
+              status: restoreEnabled ? 'available' : 'unavailable',
               sets: evaluationSets,
               results: evaluationResults,
               note: evaluationNote,
@@ -313,7 +314,7 @@ export function registerPortalExport(app: Hono, services: ExportServices): void 
           ])
           await zip.add('manifest.json', [json({
             schemaVersion: 1,
-            ...(services.backup ? { restoreVersion: 1 } : {}),
+            ...(restoreEnabled ? { restoreVersion: 1 } : {}),
             portal: slug,
             startedAt,
             completedAt: new Date().toISOString(),

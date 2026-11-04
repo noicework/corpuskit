@@ -254,6 +254,8 @@ export interface TenantPatch {
   assessmentHeading?: string
   /** Whether Explore shows the regional discovery band (opt-in). */
   regionalDiscovery?: boolean
+  /** Full portal-state backup and restore, off unless explicitly enabled. */
+  portalRestore?: boolean
   /** Whether the portal offers agent ask (opt-in). */
   agentAsk?: boolean
   /** Federation peers and participation (docs/AGENT-ASK.md). */

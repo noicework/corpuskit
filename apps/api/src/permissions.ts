@@ -464,6 +464,7 @@ export const DECLARATIONS: readonly Declaration[] = Object.freeze([
         fields: [
           'searchPlaceholder',
           'regionalDiscovery',
+          'portalRestore',
           'agentAsk',
           'siteFeedback',
           'analyticsEnabled',

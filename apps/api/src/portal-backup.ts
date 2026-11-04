@@ -89,16 +89,21 @@ export function restoredTenantRegistry(
   const config = value as { tenant: Record<string, unknown>; prompts: unknown; disabled: boolean }
   const v2 = Object.hasOwn(registry, 'custom')
   const overrides = v2 && registry.overrides ? tenantRecord(registry.overrides) : {}
-  const previous = Object.hasOwn(overrides, slug) ? tenantRecord(overrides[slug]) : {}
+  const custom = v2 ? tenantRecord(registry.custom) : registry
+  const previous = {
+    ...(Object.hasOwn(custom, slug) ? tenantRecord(custom[slug]) : {}),
+    ...(Object.hasOwn(overrides, slug) ? tenantRecord(overrides[slug]) : {}),
+  }
   return {
     ...(v2 ? registry : {}),
-    custom: v2 ? tenantRecord(registry.custom) : registry,
+    custom,
     overrides: {
       ...overrides,
       [slug]: {
         ...config.tenant,
         slug: undefined,
         hostname: previous.hostname,
+        portalRestore: previous.portalRestore,
         prompts: config.prompts,
       },
     },
@@ -371,7 +376,8 @@ export function remapBackup(backup: PortalBackup, target: string): PortalBackup 
         return target
       }
       if (
-        value.startsWith(`/api/t/${backup.portal}/`) || value.startsWith(`/t/${backup.portal}/`)
+        /^(?:.*Url|url|href)$/.test(field) &&
+        (value.startsWith(`/api/t/${backup.portal}/`) || value.startsWith(`/t/${backup.portal}/`))
       ) return value.replace(`/${backup.portal}/`, `/${target}/`)
       return value
     }
@@ -393,6 +399,10 @@ export function remapBackup(backup: PortalBackup, target: string): PortalBackup 
         }
         : visit(r.value),
     })),
-    audit: backup.audit.map((e) => ({ ...e, scope_slug: target })),
+    audit: backup.audit.map((e) => ({
+      ...e,
+      scope_slug: target,
+      target_id: e.target_kind === 'portal' && e.target_id === backup.portal ? target : e.target_id,
+    })),
   }
 }

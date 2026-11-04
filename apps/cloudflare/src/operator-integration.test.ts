@@ -1266,6 +1266,7 @@ Deno.test('Durable Object warns once without the value when a present operator k
 Deno.test('Worker operator exports and restores portal state through signed ingress without provider writes', async () => {
   const f = await fixture()
   try {
+    f.stores.tenants.patch('marine', { portalRestore: true })
     const owner = { kind: 'anonymous' as const, clientId: 'restore-reader' }
     f.stores.tenants.patchBranding('marine', { organisation: 'Fisheries research' })
     for (let i = 0; i < 100; i++) {

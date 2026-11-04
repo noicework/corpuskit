@@ -7,7 +7,11 @@ An administrator or hosting operator can download one portal's inventory and ope
 Sign in as that portal's administrator, then open the URL on the same deployment to download
 it. Use the local server's origin for a local drill. The same route and assembly code run
 inside the managed Worker's Durable Object. No external export service, job queue, email or
-new runtime setting is required. Automated drills use `DoubleProvider` and temporary stores,
+new runtime setting is required. The per-tenant `portalRestore` setting is absent/false by
+default: export then retains the inventory-only payload. With `portalRestore: true` and the
+runtime backup adapter, the manifest declares `restoreVersion: 1`, SHA-256 payload hashes,
+`counts.restore`, and includes `portal-records.json` and persisted evaluations. Set the flag
+through `PATCH /api/admin/tenants/<slug>` with portal `behaviour.write` or operator authority. Automated drills use `DoubleProvider` and temporary stores,
 with no requests to a live knowledge box.
 
 ## Authority and audit
@@ -35,14 +39,14 @@ questions, so handle downloaded bundles as administrative data.
 | File | Contents |
 |---|---|
 | `manifest.json` | `schemaVersion: 1`, portal slug, start/end UTC timestamps, `complete: true`, counts, feedback selection, opaque audit snapshot id and expiry, file inventory, limits and scope notes. Byte sizes describe each other file's UTF-8 payload, before ZIP headers. Each payload has a SHA-256 hash; restore-enabled bundles declare `restoreVersion: 1`. |
-| `configuration.json` | `tenant`: validated configuration including branding and branding asset links, layout, terminology/domain terms, topics, suggested questions, access mode, discovery, language, retrieval and extraction settings. `settings`: additional answer instructions, answer guardrails, image grounding, uncited-answer behaviour, disabled flag and hosting lifecycle/limits. Only fields supported by current schemas are exported. |
+| `configuration.json` | `tenant`: validated configuration including branding and branding asset links, layout, terminology/domain terms, topics, suggested questions, access mode, discovery, language, retrieval and extraction settings. `settings`: additional answer instructions, answer guardrails, image grounding, uncited-answer behaviour, disabled flag and hosting lifecycle/limits. Only fields supported by current schemas are exported. Destination routing and the restore opt-in are preserved during import. |
 | `resources.json` | Array of `{resource, metadata, labels, created?, modified?, status?, portalUrl, files}`. `resource` is the typed summary with local merchandising applied; `metadata` is extra metadata after redaction; labels include user and computed resource classifications. Files have `fieldId`, optional `contentType`, and the portal's authenticated proxy `url`. |
 | `labelsets.json` | Labelset definitions, labels, cardinality and descriptions. |
 | `mcp-keys.json` | Only `id`, `label`, `role`, `createdAt`, `expiresAt`, `revokedAt` and `legacy`. Includes revoked/expired records. No usable key, hash, prefix, issuer or creator claims. |
 | `audit.csv` | Retained portal-scoped audit events at the watermark, newest first. Columns: `id,at,request_id,actor_kind,actor_id,actor_label,action,scope_kind,scope_slug,target_kind,target_id,outcome,detail_json`. Platform-scoped events are excluded. |
 | `insights.json` | Management's 90-day usage summary, excluding feedback: totals, quality averages, top ten questions, latest 30 gaps and latest 25 asks. This is a summary, not the whole raw ask log. |
 | `routing.json` | Retained routing decisions, newest first. Operational tuning records include question hashes and configuration choices; they are distinct from curated evaluation sets. |
-| `evaluations.json` | Persisted evaluation definitions and retained runs when the runtime supplies its backup adapter; otherwise an explicit unavailable status. |
+| `evaluations.json` | Persisted evaluation definitions and retained runs when `portalRestore: true` and the runtime supplies its backup adapter; otherwise an explicit unavailable status. |
 | `portal-records.json` | Portable portal-owned state for restore, including retained usage, owned research artefacts, enrichments, uploaded branding, evaluation rows and audit history. Present with `restoreVersion: 1`. See [restore](RESTORE.md) for counts, exclusions and the procedure. |
 | `feedback.csv` | Only with the explicit option. Columns: `learningId,good,at,message`. Retained ratings and their comments, subject to the existing 90-day, 500-rating retention. |
 
@@ -104,3 +108,11 @@ There is no new export store or retention/erasure inventory entry. Audit query s
 their normal expiry and erasure behaviour. Export audit events follow `AUDIT_RETENTION_DAYS`
 and portal erasure. Downloaded copies are outside deployment erasure, as described in the
 hosting retention inventory; their recipients control retention.
+
+## Import compatibility
+
+See [restore](RESTORE.md) for importing both full backups and version-less schema 1 inventory
+bundles. Legacy recovery is partial and returns explicit warnings for omitted research records,
+branding bytes and raw usage data. It requires the old ZIP dialect, complete file inventory,
+byte lengths and matching CRCs; any SHA-256 hashes supplied are also verified. Full version 1
+backups always require hashes and portable record counts. Unsupported versions are refused.

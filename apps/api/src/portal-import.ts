@@ -14,13 +14,14 @@ import {
 } from './portal-backup.ts'
 import { crcTable, sha256 } from './portal-export-zip.ts'
 import { PORTAL_EXPORT_MAX_BYTES } from './portal-export.ts'
+import { legacyBackup } from './portal-import-legacy.ts'
 
 export const PORTAL_IMPORT_PATH = '/api/admin/t/:slug/import'
 
 /** Accept only the bounded, store-only UTF-8 ZIP dialect the portal exporter writes. */
 export async function validateImportZip(
   bytes: Uint8Array<ArrayBuffer>,
-): Promise<{ backup: ReturnType<typeof parseBackup>; digest: string }> {
+): Promise<{ backup: ReturnType<typeof parseBackup>; digest: string; warnings: string[] }> {
   const invalid = () => new ImportError('invalid_import_bundle')
   if (bytes.length > PORTAL_EXPORT_MAX_BYTES) throw new ImportError('portal_import_too_large', 413)
   if (bytes.length < 22) throw invalid()
@@ -79,12 +80,18 @@ export async function validateImportZip(
   ) throw invalid()
   const manifest = z.object({
     schemaVersion: z.literal(1),
-    restoreVersion: z.literal(1),
+    restoreVersion: z.literal(1).optional(),
     portal: z.string(),
     complete: z.literal(true),
-    counts: z.object({ restore: z.record(z.number().int().nonnegative()) }),
+    includeFeedback: z.boolean(),
+    counts: z.object({ restore: z.record(z.number().int().nonnegative()).optional() })
+      .passthrough(),
     files: z.array(
-      z.object({ path: z.string(), bytes: z.number().optional(), sha256: z.string().optional() }),
+      z.object({
+        path: z.string(),
+        bytes: z.number().int().nonnegative().optional(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+      }),
     ),
   }).parse(JSON.parse(files.get('manifest.json')?.text ?? 'null'))
   if (
@@ -95,7 +102,10 @@ export async function validateImportZip(
     const file = files.get(entry.path)
     if (
       !file ||
-      (entry.path !== 'manifest.json' && (file.bytes !== entry.bytes || file.hash !== entry.sha256))
+      (entry.path !== 'manifest.json' &&
+        (file.bytes !== entry.bytes ||
+          (manifest.restoreVersion === 1 || entry.sha256 !== undefined) &&
+            file.hash !== entry.sha256))
     ) throw invalid()
   }
   const allowed = new Set([
@@ -113,9 +123,35 @@ export async function validateImportZip(
   ])
   if ([...files.keys()].some((path) => !allowed.has(path))) throw invalid()
   if (
-    ['configuration.json', 'resources.json', 'labelsets.json', 'audit.csv', 'portal-records.json']
+    [
+      'configuration.json',
+      'resources.json',
+      'labelsets.json',
+      'audit.csv',
+      'routing.json',
+      'evaluations.json',
+      'insights.json',
+      'mcp-keys.json',
+      ...(manifest.includeFeedback ? ['feedback.csv'] : []),
+    ]
       .some((path) => !files.has(path))
   ) throw invalid()
+  if (!manifest.includeFeedback && files.has('feedback.csv')) throw invalid()
+  const digest = await sha256(bytes.slice().buffer)
+  if (manifest.restoreVersion === undefined) {
+    // An unversioned portable backup is ambiguous. Only the old inventory format is supported.
+    if (files.has('portal-records.json') || manifest.counts.restore) throw invalid()
+    try {
+      return {
+        ...legacyBackup(files, manifest.portal, manifest.includeFeedback, manifest.counts),
+        digest,
+      }
+    } catch (error) {
+      if (error instanceof ImportError) throw error
+      throw invalid()
+    }
+  }
+  if (!files.has('portal-records.json') || !manifest.counts.restore) throw invalid()
   let backup: ReturnType<typeof parseBackup>
   try {
     backup = parseBackup(JSON.parse(files.get('portal-records.json')?.text ?? 'null'))
@@ -123,12 +159,17 @@ export async function validateImportZip(
     throw invalid()
   }
   const counts = restoreCounts(backup)
+  const expectedCounts = manifest.counts.restore
   if (
-    Object.keys(manifest.counts.restore).sort().join() !== Object.keys(counts).sort().join() ||
-    Object.entries(counts).some(([kind, count]) => manifest.counts.restore[kind] !== count)
+    Object.keys(expectedCounts).sort().join() !== Object.keys(counts).sort().join() ||
+    Object.entries(counts).some(([kind, count]) => expectedCounts[kind] !== count)
   ) throw invalid()
   if (backup.portal !== manifest.portal) throw invalid()
-  return { backup, digest: await sha256(bytes.slice().buffer) }
+  if (
+    !manifest.includeFeedback &&
+    backup.records.some((row) => row.kind === 'feedback' || row.kind === 'siteFeedback')
+  ) throw invalid()
+  return { backup, digest, warnings: [] }
 }
 
 interface Services {
@@ -143,7 +184,9 @@ export function registerPortalImport(app: Hono, services: Services): void {
   app.post(declaredRoute('POST', PORTAL_IMPORT_PATH), async (c) => {
     c.header('Cache-Control', 'private, no-store')
     const slug = c.req.param('slug')!
-    if (!services.tenants.get(slug)) return c.json({ error: 'unknown_tenant' }, 404)
+    const tenant = services.tenants.get(slug)
+    if (!tenant) return c.json({ error: 'unknown_tenant' }, 404)
+    if (tenant.portalRestore !== true) return c.json({ error: 'portal_restore_disabled' }, 404)
     if (!services.store) return c.json({ error: 'portal_restore_unavailable' }, 501)
     const params = new URL(c.req.url).searchParams
     if (
@@ -220,6 +263,7 @@ export function registerPortalImport(app: Hono, services: Services): void {
           alreadyImported: true,
           counts: Object.fromEntries(Object.keys(counts).map((k) => [k, 0])),
           knowledgeBoxRestored: false,
+          warnings: validated.warnings,
         })
       }
       // Refuse merging research state into an occupied target. Audit and provisioning configuration are allowed.
@@ -255,6 +299,7 @@ export function registerPortalImport(app: Hono, services: Services): void {
         alreadyImported: false,
         counts,
         knowledgeBoxRestored: false,
+        warnings: validated.warnings,
         note:
           'Knowledge box content and provider-managed taxonomy are not restored. Keep or reconnect the retrieval provider separately.',
       })

@@ -914,6 +914,7 @@ const renameTenantSchema = z.object({
   searchPlaceholder: z.string().min(3).max(120).optional(),
   /** Whether Explore shows the regional discovery band (opt-in; see TenantConfigSchema). */
   regionalDiscovery: z.boolean().optional(),
+  portalRestore: z.boolean().optional(),
   /** Whether the portal offers agent ask (opt-in; see TenantConfigSchema). */
   agentAsk: z.boolean().optional(),
   /** Federation peers and participation, merged over the portal's current settings. */
@@ -934,6 +935,7 @@ const renameTenantSchema = z.object({
 const TENANT_BEHAVIOUR_FIELDS: ReadonlySet<string> = new Set([
   'searchPlaceholder',
   'regionalDiscovery',
+  'portalRestore',
   'agentAsk',
   'siteFeedback',
   'analyticsEnabled',
@@ -5690,6 +5692,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
       name,
       searchPlaceholder,
       regionalDiscovery,
+      portalRestore,
       agentAsk,
       federation,
       siteFeedback: siteFeedbackSetting,
@@ -5701,6 +5704,7 @@ export function buildApp(opts: BuildAppOptions): Hono {
     const behaviour: TenantPatch = {
       ...(searchPlaceholder ? { searchPlaceholder } : {}),
       ...(regionalDiscovery !== undefined ? { regionalDiscovery } : {}),
+      ...(portalRestore !== undefined ? { portalRestore } : {}),
       ...(agentAsk !== undefined ? { agentAsk } : {}),
       ...(federation !== undefined
         ? { federation: { ...config.federation, ...federation } as TenantConfig['federation'] }

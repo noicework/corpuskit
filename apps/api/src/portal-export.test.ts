@@ -235,7 +235,7 @@ Deno.test('bundle allowlists key metadata and resources and excludes feedback un
       files: [{ fieldId: 'file', url: '/api/t/a/resources/res-1/file/file' }],
     })
     expect(JSON.parse(files.get('evaluations.json')!)).toMatchObject({
-      status: 'available',
+      status: 'unavailable',
       sets: [],
       results: [],
     })
