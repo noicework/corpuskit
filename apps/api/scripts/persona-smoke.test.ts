@@ -9,10 +9,13 @@ Deno.test('persona smoke selects the real demo corpus journey', () => {
 })
 
 Deno.test('persona smoke refuses empty and unknown selections instead of a false 0/0 pass', () => {
-  for (const selection of ['', ' , ', 'typo', 'opax,typo']) {
+  for (const selection of ['', ' , ', 'typo', 'demo,typo']) {
     expect(() => selectedJourneys(selection)).toThrow()
   }
-  expect(selectedJourneys(' opax, demo ').map((journey) => journey.slug)).toEqual(['opax', 'demo'])
+  expect(selectedJourneys(' marine, demo ').map((journey) => journey.slug)).toEqual([
+    'marine',
+    'demo',
+  ])
 })
 
 Deno.test('remote persona smoke defaults to and only accepts the dedicated demo corpus', () => {
@@ -21,15 +24,15 @@ Deno.test('remote persona smoke defaults to and only accepts the dedicated demo 
   expect(smokeTarget('https://demo.corpuskit.org/', 'demo').base).toBe('https://demo.corpuskit.org')
   for (
     const [base, tenants] of [
-      ['https://corpuskit.org', 'opax'],
+      ['https://corpuskit.org', 'marine'],
       ['https://corpuskit.org', 'demo'],
-      ['https://demo.corpuskit.org', 'opax'],
-      ['https://demo.corpuskit.org', 'demo,opax'],
+      ['https://demo.corpuskit.org', 'marine'],
+      ['https://demo.corpuskit.org', 'demo,marine'],
       ['https://demo.corpuskit.org.evil.example', 'demo'],
       ['http://demo.corpuskit.org', 'demo'],
-      ['https://demo.corpuskit.org/t/opax', 'demo'],
+      ['https://demo.corpuskit.org/t/marine', 'demo'],
       ['https://user@demo.corpuskit.org', 'demo'],
-      ['https://demo.corpuskit.org?tenant=opax', 'demo'],
+      ['https://demo.corpuskit.org?tenant=marine', 'demo'],
       ['', 'demo'],
     ]
   ) expect(() => smokeTarget(base, tenants)).toThrow()

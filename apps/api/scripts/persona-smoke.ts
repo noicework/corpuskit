@@ -58,12 +58,6 @@ const ALL_TENANTS: TenantJourney[] = [
     goodAsk: 'What are the best rotation strategies for managing herbicide-resistant ryegrass?',
     outOfCorpusAsk: OUT_OF_CORPUS_ASK,
   },
-  {
-    slug: 'opax',
-    searchTerm: 'parliament',
-    goodAsk: 'What was said in parliament about native bird hunting?',
-    outOfCorpusAsk: OUT_OF_CORPUS_ASK,
-  },
 ]
 
 // Keep the local fixture journeys available, but remote functional tests are
