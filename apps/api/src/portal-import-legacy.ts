@@ -26,7 +26,7 @@ function csv(text: string): string[][] {
           offset++
         } else break
       }
-      // Undo only the exporter’s formula neutralisation, including an existing leading apostrophe.
+      // Legacy CSV cannot distinguish a formula prefix from a literal apostrophe. Warn on import.
       row.push(/^'[\p{Cc}\p{Cf}]|^'[\s\p{Cc}\p{Cf}]*[=+@-]/u.test(cell) ? cell.slice(1) : cell)
       if (text[offset] === ',') offset++
       else if (text.slice(offset, offset + 2) === '\r\n') {
@@ -115,6 +115,7 @@ export function legacyBackup(
       'Legacy schemaVersion 1 inventory bundle: partial recovery only. SHA-256 hashes were optional; ZIP CRC and manifest byte lengths were checked.',
       'Sessions, investigations, watches, answer records and retention settings, evaluation definitions and runs, duplicate decisions, enrichments, suggestions, sources, link reviews, graph proposals and uploaded branding bytes were not exported and cannot be restored.',
       'The insights summary cannot reconstruct the retained usage log. Reader feedback is restored only when explicitly included; portal-team messages were not exported.',
+      'Legacy CSV formula-protection apostrophes are removed when they match the exporter rule. A literal leading apostrophe in the same position cannot be distinguished or recovered exactly.',
       'Knowledge box content, bindings, credentials, keys, members and domains are never restored. Reconnect and verify them separately.',
     ],
   }
